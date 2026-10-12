@@ -12,8 +12,8 @@ from tools.precommit_checks import compiler_environment
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-P4_SRC = REPO_ROOT / "ESP32-P4/ServoBoardMain/src"
-SDK_SRC = REPO_ROOT / "ESP32-P4/ServoBoardMain/src/hal/servo/FTServo_Arduino/src"
+P4_SRC = REPO_ROOT / "ESP32-P4/src"
+SDK_SRC = REPO_ROOT / "ESP32-P4/src/hal/servo/FTServo_Arduino/src"
 
 
 ARDUINO_STUB = r'''

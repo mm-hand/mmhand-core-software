@@ -12,7 +12,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SCHEMA = PROJECT_ROOT / "desktop/resources/config/upper_protocol_schema.json"
-DEFAULT_CPP = PROJECT_ROOT / "ESP32-P4/ServoBoardMain/src/generated/UpperProtocol.generated.h"
+DEFAULT_CPP = PROJECT_ROOT / "ESP32-P4/src/generated/UpperProtocol.generated.h"
 DEFAULT_PYTHON = PROJECT_ROOT / "desktop/core/generated_upper_protocol.py"
 
 # 协议说明最终会生成到 C++ 与 Python 源码中，因此要求至少包含一个中文字符；

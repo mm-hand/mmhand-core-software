@@ -57,7 +57,7 @@ def test_firmware_only_safety_catalog_preserves_desktop(
 def test_closure_rejects_resurrected_retired_runtime_mapping(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = tmp_path / "ESP32-P4/ServoBoardMain/src"
+    source = tmp_path / "ESP32-P4/src"
     (source / "generated").mkdir(parents=True)
     (source / "safety").mkdir()
     (source / "generated/SafetyRuleCatalog.generated.h").write_text(

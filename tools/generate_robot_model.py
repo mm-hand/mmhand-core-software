@@ -28,12 +28,12 @@ DEFAULT_SOURCE = ROOT / "desktop/resources/config/robot_model_source.json"
 DEFAULT_MAPPING = ROOT / "desktop/resources/config/urdf_joint_mapping.json"
 DEFAULT_FINGERPRINT = ROOT / "desktop/resources/config/product_fingerprint.json"
 DEFAULT_P4_LIMITS = (
-    ROOT / "ESP32-P4/ServoBoardMain/src/generated/UrdfJointLimits.generated.h"
+    ROOT / "ESP32-P4/src/generated/UrdfJointLimits.generated.h"
 )
 DEFAULT_P4_FINGERPRINT = (
-    ROOT / "ESP32-P4/ServoBoardMain/src/generated/ProductFingerprint.generated.h"
+    ROOT / "ESP32-P4/src/generated/ProductFingerprint.generated.h"
 )
-DEFAULT_P4_BINDINGS = ROOT / "ESP32-P4/ServoBoardMain/src/generated/HardwareBindings.generated.h"
+DEFAULT_P4_BINDINGS = ROOT / "ESP32-P4/src/generated/HardwareBindings.generated.h"
 EXPECTED_JOINT_COUNT = 21
 
 
@@ -222,7 +222,7 @@ def render_p4_limits(manifest: dict, limits: list[tuple[int, float, float]]) -> 
 
 #include <Arduino.h>
 
-#include "../runtime/SystemRuntimeContext.h"
+#include "../system/SystemRuntimeContext.h"
 
 struct UrdfJointLimitDeg {{
     float minDeg;
@@ -290,8 +290,8 @@ def render_p4_bindings(manifest: dict) -> str:
 
 def build_fingerprint(manifest: dict, limits: list[tuple[int, float, float]],
                       urdf_path: Path, source_commit: str) -> dict:
-    p4_root = ROOT / "ESP32-P4/ServoBoardMain"
-    source_files = [p4_root / "ServoBoardMain.ino"]
+    p4_root = ROOT / "ESP32-P4"
+    source_files = [p4_root / "ESP32-P4.ino"]
     source_files.extend(
         path for path in (p4_root / "src").rglob("*")
         if path.is_file() and path.suffix.lower() in (".c", ".cpp", ".h")

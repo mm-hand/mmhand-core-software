@@ -53,7 +53,7 @@ def test_missing_stale_failed_and_pending_are_not_ready():
 
 def test_warning_contract_matches_firmware():
     root = Path(__file__).resolve().parents[3]
-    text = (root / 'ESP32-P4/ServoBoardMain/src/safety/policies/CalibrationSafetyPolicy.h').read_text(encoding='utf-8')
+    text = (root / 'ESP32-P4/src/safety/policies/CalibrationSafetyPolicy.h').read_text(encoding='utf-8')
     for name, value in [('AutoMinAssembly', 350), ('AutoMaxShortfall', 300), ('UrdfManualSpan', 360)]:
         assert f'kCalibration{name}WarnCounts = {value};' in text
     assert 'autoMinOffsetCounts >= kCalibrationAutoMinAssemblyWarnCounts' in text

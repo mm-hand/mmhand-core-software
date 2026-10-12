@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (
     ROOT
     / "ESP32-P4"
-    / "ServoBoardMain"
+
     / "src"
     / "config"
     / "safety"
@@ -30,7 +30,7 @@ OUTPUT = ROOT / "desktop" / "resources" / "config" / "p4_safety_rules.json"
 FIRMWARE_HEADER = (
     ROOT
     / "ESP32-P4"
-    / "ServoBoardMain"
+
     / "src"
     / "generated"
     / "SafetyRuleCatalog.generated.h"
@@ -38,7 +38,7 @@ FIRMWARE_HEADER = (
 FIRMWARE_INDEX_JSON = (
     ROOT
     / "ESP32-P4"
-    / "ServoBoardMain"
+
     / "src"
     / "generated"
     / "SafetyRuleIndex.generated.json"
@@ -163,9 +163,9 @@ GROUP_BINDINGS: dict[str, RuleBinding] = {
         "ruleForSystemFaultBit"),
     "CAW": binding(
         "safety/policies/CalibrationSafetyPolicy.h", "calibrationAssemblyWarningReasonForMetrics",
-        "modules/calibration/CalibrationRuntimeStore.cpp", "calibrationAssemblyWarningReasonForMetrics",
-        "modules/calibration/CalibrationRuntimeStore.cpp", "reportSafetyRuleEvent",
-        "modules/calibration/CalibrationRuntimeStore.cpp", "CALIB_WARN_NONE",
+        "system/calibration/CalibrationRuntimeStore.cpp", "calibrationAssemblyWarningReasonForMetrics",
+        "system/calibration/CalibrationRuntimeStore.cpp", "reportSafetyRuleEvent",
+        "system/calibration/CalibrationRuntimeStore.cpp", "CALIB_WARN_NONE",
         "ruleForCalibrationWarningBit"),
     "COM": binding(
         "safety/policies/CommunicationSafetyPolicy.cpp", "communicationLengthValid",
@@ -229,19 +229,19 @@ RULE_BINDING_OVERRIDES: dict[str, RuleBinding] = {
         "safety/SafetyEventStore.cpp", "s_overflowEvidenceRecorded"),
     "RuntimeQueueCreateFailed": binding(
         "safety/policies/RuntimeSafetyPolicy.cpp", "runtimeResourceCreationRule",
-        "app/SystemAssembly.cpp", "RuntimeResourceKind::Queue",
-        "app/SystemAssembly.cpp", "recordAssemblyFailure",
-        "app/SystemAssembly.cpp", "queuesCreated"),
+        "system/SystemAssembly.cpp", "RuntimeResourceKind::Queue",
+        "system/SystemAssembly.cpp", "recordAssemblyFailure",
+        "system/SystemAssembly.cpp", "queuesCreated"),
     "RuntimeMutexCreateFailed": binding(
         "safety/policies/RuntimeSafetyPolicy.cpp", "runtimeResourceCreationRule",
-        "app/SystemAssembly.cpp", "RuntimeResourceKind::Mutex",
-        "app/SystemAssembly.cpp", "recordAssemblyFailure",
-        "app/SystemAssembly.cpp", "commandStateMutex"),
+        "system/SystemAssembly.cpp", "RuntimeResourceKind::Mutex",
+        "system/SystemAssembly.cpp", "recordAssemblyFailure",
+        "system/SystemAssembly.cpp", "commandStateMutex"),
     "RuntimeTaskCreateFailed": binding(
         "safety/policies/RuntimeSafetyPolicy.cpp", "runtimeResourceCreationRule",
-        "app/SystemAssembly.cpp", "RuntimeResourceKind::Task",
-        "app/SystemAssembly.cpp", "recordAssemblyFailure",
-        "app/SystemAssembly.cpp", "tasksCreated"),
+        "system/SystemAssembly.cpp", "RuntimeResourceKind::Task",
+        "system/SystemAssembly.cpp", "recordAssemblyFailure",
+        "system/SystemAssembly.cpp", "tasksCreated"),
     "RuntimeTaskStackLow": binding(
         "safety/policies/RuntimeSafetyPolicy.cpp", "evaluateRuntimeStack",
         "tasks/runtime_monitor/RuntimeMonitorService.cpp", "evaluateRuntimeStack",
@@ -420,7 +420,7 @@ def render_firmware_index_json() -> str:
                 "registry_function": "业务拒绝原因映射到 SafetyRuleId 的函数；空字符串表示 Policy 直接返回规则 ID。"
             },
             "reference_fields": {
-                "file": "相对于 ESP32-P4/ServoBoardMain/src 的源码路径。",
+                "file": "相对于 ESP32-P4/src 的源码路径。",
                 "symbol": "检查器在对应源码中核验的函数名、枚举值或关键符号。"
             },
             "code_prefixes": {

@@ -4,7 +4,7 @@
 
 .DESCRIPTION
 本脚本是提交前快速门禁，只执行文本与生成文件检查，不运行 Arduino/ESP-IDF 编译，不访问硬件。
-依赖方向：config/data/generated -> platform/hal -> modules/safety/runtime -> tasks -> app。
+依赖方向：config/data/generated -> hal/safety/system -> tasks；system 内 SystemAssembly/AppBootstrap 为组合根，可编排 tasks。
 #>
 [CmdletBinding()]
 param(
@@ -13,10 +13,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$sourceRoot = Join-Path $repoRoot "ESP32-P4\ServoBoardMain\src"
+$sourceRoot = Join-Path $repoRoot "ESP32-P4\src"
 $driverHeaderPath = Join-Path $sourceRoot "hal\servo\FeetechServoDriver.h"
 $servoServicePath = Join-Path $sourceRoot "tasks\servo_bus\ServoBusService.cpp"
-$systemContextPath = Join-Path $sourceRoot "runtime\SystemRuntimeContext.h"
+$systemContextPath = Join-Path $sourceRoot "system\SystemRuntimeContext.h"
 $productFingerprintJsonPath = Join-Path $repoRoot "desktop\resources\config\product_fingerprint.json"
 $productFingerprintHeaderPath = Join-Path $sourceRoot "generated\ProductFingerprint.generated.h"
 $failures = New-Object "System.Collections.Generic.List[string]"
@@ -43,8 +43,7 @@ $sourceFiles = Get-ChildItem -LiteralPath $sourceRoot -Recurse -File |
 
 # R0：顶层目录是架构契约；历史功能型目录不得回流。
 $allowedTopLevel = @(
-    "app", "config", "data", "generated", "hal", "modules",
-    "platform", "runtime", "safety", "tasks"
+    "config", "data", "generated", "hal", "safety", "system", "tasks"
 )
 $actualTopLevel = Get-ChildItem -LiteralPath $sourceRoot -Directory |
     Where-Object {
@@ -58,7 +57,7 @@ foreach ($name in $actualTopLevel) {
 }
 foreach ($legacy in @("core", "domain", "hardware", "shared", "actuator",
                        "calibration", "communication", "control", "persistence",
-                       "recovery")) {
+                       "recovery", "app", "modules", "platform", "runtime")) {
     if (Test-Path -LiteralPath (Join-Path $sourceRoot $legacy)) {
         Add-Failure "Legacy source directory still exists: $legacy"
     }
@@ -77,35 +76,46 @@ foreach ($file in $sourceFiles) {
 $dataRoot = Join-Path $sourceRoot "data"
 $dataFiles = $sourceFiles | Where-Object { $_.FullName -like "$dataRoot*" }
 Find-ForbiddenInclude $dataFiles `
-    '^\s*#include.*(Arduino|FreeRTOS|freertos/|\.\./(hal|modules|platform|safety|system|tasks)/)' `
+    '^\s*#include.*(Arduino|FreeRTOS|freertos/|\.\./(hal|safety|system|tasks)/)' `
     "data layer depends upward"
 
-# R3：HAL 只封装物理外设，不得依赖 modules/safety/tasks/system 业务状态。
+# R3：HAL 只封装物理外设，不得依赖 safety/system/tasks 业务状态。
+# 豁免 system/log（日志横切）与 system/rtos（FreeRTOS 适配头）。
 $halRoot = Join-Path $sourceRoot "hal"
 $halFiles = $sourceFiles | Where-Object { $_.FullName -like "$halRoot*" }
 Find-ForbiddenInclude $halFiles `
-    '^\s*#include.*\.\./\.\./(modules|safety|tasks|system)/' `
+    '^\s*#include.*\.\./\.\./((?!system/(log|rtos)/)(safety|system|tasks))/' `
     "HAL depends on business layer"
 
-# R4：platform 只提供 RTOS/时钟适配，不得反向依赖硬件或业务模块。
-$platformRoot = Join-Path $sourceRoot "platform"
-$platformFiles = $sourceFiles | Where-Object { $_.FullName -like "$platformRoot*" }
-$platformCoreFiles = $platformFiles | Where-Object {
-    $_.FullName -notlike "$(Join-Path $platformRoot 'log')*"
+# R4：系统层基础设施只提供 RTOS/时钟/日志/通道/端口适配，不得反向依赖硬件或业务模块。
+# 基础设施按子目录白名单界定；system 根部的组合根（SystemAssembly/AppBootstrap）、
+# 命令网关、标定支持与度量适配不属于基础设施，由 R5 与专用规则约束。
+$systemRoot = Join-Path $sourceRoot "system"
+$systemFiles = $sourceFiles | Where-Object { $_.FullName -like "$systemRoot*" }
+$systemInfraFiles = @()
+foreach ($dir in @("identity", "rtos", "time", "channels", "ports", "adapters")) {
+    $systemInfraFiles += $systemFiles | Where-Object {
+        $_.FullName -like "$(Join-Path $systemRoot $dir)*"
+    }
 }
-Find-ForbiddenInclude $platformCoreFiles `
-    '^\s*#include.*\.\./\.\./(hal|modules|safety|tasks|system)/' `
-    "platform depends on hardware/business layer"
-# 日志与二进制协议共用同一物理串口，platform/log 仅允许依赖 serial HAL。
-$platformLogFiles = $platformFiles | Where-Object {
-    $_.FullName -like "$(Join-Path $platformRoot 'log')*"
+$systemInfraFiles += $systemFiles | Where-Object {
+    $_.Name -in @("TaskRuntimeWindow.h", "TaskRuntimeWindow.cpp",
+                  "ServiceCyclePolicy.h", "ServiceCyclePolicy.cpp",
+                  "SystemRuntimeContext.h")
 }
-Find-ForbiddenInclude $platformLogFiles `
+Find-ForbiddenInclude $systemInfraFiles `
+    '^\s*#include.*\.\./(hal|safety|tasks)/' `
+    "system infra depends on hardware/business layer"
+# 日志与二进制协议共用同一物理串口，system/log 仅允许依赖 serial HAL。
+$systemLogFiles = $systemFiles | Where-Object {
+    $_.FullName -like "$(Join-Path $systemRoot 'log')*"
+}
+Find-ForbiddenInclude $systemLogFiles `
     '^\s*#include.*\.\./\.\./hal/(?!serial/)' `
-    "platform/log depends on non-serial HAL"
+    "system/log depends on non-serial HAL"
 
 # FreeRTOS 原生头只有适配头可以直接包含，防止 task.h/FreeRTOS.h 顺序再次漂移。
-$freeRtosAdapterPath = Join-Path $sourceRoot "platform\rtos\FreeRtosKernel.h"
+$freeRtosAdapterPath = Join-Path $sourceRoot "system\rtos\FreeRtosKernel.h"
 $directFreeRtosIncludes = $sourceFiles |
     Where-Object { $_.FullName -ne $freeRtosAdapterPath } |
     Select-String -Encoding UTF8 -Pattern '^\s*#include\s*[<"]freertos/'
@@ -121,21 +131,31 @@ foreach ($match in $legacyPlatformNamespace) {
                  $match.Path, $match.LineNumber)
 }
 
-# R5：modules 与 safety 不得包含 task 实现；跨层事件使用 runtime 稳定端口。
-$modulesRoot = Join-Path $sourceRoot "modules"
+# R5：safety 与 system 不得包含 task 实现；跨层事件使用 system 稳定端口。
+# 例外：SystemAssembly/AppBootstrap 是组合根，允许编排任务头；TaskFactory 是唯一任务生命周期宿主。
 $safetyRoot = Join-Path $sourceRoot "safety"
-$moduleSafetyFiles = $sourceFiles | Where-Object {
-    $_.FullName -like "$modulesRoot*" -or $_.FullName -like "$safetyRoot*"
+$regulatedFiles = $sourceFiles | Where-Object {
+    ($_.FullName -like "$safetyRoot*" -or $_.FullName -like "$systemRoot*") -and
+    $_.Name -notlike "SystemAssembly.*" -and
+    $_.Name -notlike "AppBootstrap.*" -and
+    $_.Name -notlike "TaskFactory.*"
 }
-Find-ForbiddenInclude $moduleSafetyFiles `
+Find-ForbiddenInclude $regulatedFiles `
     '^\s*#include.*tasks/' `
-    "modules/safety depends on tasks"
-Find-ForbiddenInclude $moduleSafetyFiles `
+    "safety/system depends on tasks"
+Find-ForbiddenInclude $regulatedFiles `
     '\b(p4::platform::rtos::createTask|xTaskCreate|vTaskDelete)\b' `
-    "modules/safety owns RTOS task lifecycle"
-Find-ForbiddenInclude $moduleSafetyFiles `
+    "safety/system owns RTOS task lifecycle"
+# 时钟适配（system/time、system/rtos）与度量采集器（TaskRuntimeMetrics）允许包装延时；
+# 其余 safety/system 一律使用任务注入的时间。
+$timedFiles = $regulatedFiles | Where-Object {
+    $_.FullName -notlike "$(Join-Path $systemRoot 'time')*" -and
+    $_.FullName -notlike "$(Join-Path $systemRoot 'rtos')*" -and
+    $_.Name -notlike "TaskRuntimeMetrics.*"
+}
+Find-ForbiddenInclude $timedFiles `
     '\b(millis|vTaskDelay|vTaskDelayUntil|xTaskGetTickCount)\s*\(' `
-    "modules/safety bypasses task-provided scheduling time"
+    "safety/system bypasses task-provided scheduling time"
 
 # R6：所有 FreeRTOS Task 仅做薄入口，禁止重新塞入业务 switch/循环。
 $taskRoot = Join-Path $sourceRoot "tasks"
@@ -173,12 +193,12 @@ foreach ($entry in $taskPackages.GetEnumerator()) {
 # R6.2：服务必须使用 init/step 与纯值快照；历史永久循环入口不得回流。
 $serviceContractFiles = @(
     "data\ServiceSnapshots.h",
-    "runtime\ports\ServiceOutputPort.h",
-    "runtime\ports\SystemEventPort.h",
-    "runtime\adapters\ServiceContextAdapter.h",
-    "runtime\adapters\ServiceContextAdapter.cpp",
-    "modules\runtime\ServiceCyclePolicy.h",
-    "modules\runtime\ServiceCyclePolicy.cpp"
+    "system\ports\ServiceOutputPort.h",
+    "system\ports\SystemEventPort.h",
+    "system\adapters\ServiceContextAdapter.h",
+    "system\adapters\ServiceContextAdapter.cpp",
+    "system\ServiceCyclePolicy.h",
+    "system\ServiceCyclePolicy.cpp"
 )
 foreach ($relativePath in $serviceContractFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot $relativePath))) {
@@ -187,8 +207,8 @@ foreach ($relativePath in $serviceContractFiles) {
 }
 $serviceBoundaryFiles = @(
     Join-Path $sourceRoot "data\ServiceSnapshots.h"
-    Join-Path $sourceRoot "runtime\ports\ServiceOutputPort.h"
-    Join-Path $sourceRoot "runtime\ports\SystemEventPort.h"
+    Join-Path $sourceRoot "system\ports\ServiceOutputPort.h"
+    Join-Path $sourceRoot "system\ports\SystemEventPort.h"
 )
 Find-ForbiddenInclude $serviceBoundaryFiles `
     '\b(TaskSharedData_t|QueueHandle_t|SemaphoreHandle_t|TaskHandle_t)\b' `

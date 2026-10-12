@@ -65,7 +65,6 @@ def test_generated_p4_urdf_limits_are_current_and_crc_matches():
     header = (
         root
         / "ESP32-P4"
-        / "ServoBoardMain"
         / "src"
         / "generated"
         / "UrdfJointLimits.generated.h"

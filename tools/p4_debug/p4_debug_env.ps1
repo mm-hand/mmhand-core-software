@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 
 # Build through the ASCII-only junction so GDB can resolve source paths.
 $script:P4DebugWorkspace = "C:\Users\g8765\mmhand-debug"
-$script:P4SketchPath = Join-Path $script:P4DebugWorkspace "ESP32-P4\ServoBoardMain"
+$script:P4SketchPath = Join-Path $script:P4DebugWorkspace "ESP32-P4"
 $script:P4BuildPath = Join-Path $script:P4DebugWorkspace ".debug\p4"
 
 # Arduino CLI bundled with the local Arduino IDE 2.3.8 installation.
@@ -34,8 +34,8 @@ $script:P4Fqbn = (
     "ChipVariant=prev3"
 )
 
-$script:P4ElfPath = Join-Path $script:P4BuildPath "ServoBoardMain.ino.elf"
-$script:P4BinPath = Join-Path $script:P4BuildPath "ServoBoardMain.ino.bin"
+$script:P4ElfPath = Join-Path $script:P4BuildPath "ESP32-P4.ino.elf"
+$script:P4BinPath = Join-Path $script:P4BuildPath "ESP32-P4.ino.bin"
 
 function Assert-PathExists {
     param(

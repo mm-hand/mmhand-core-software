@@ -10,7 +10,7 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-P4_SRC = REPO_ROOT / "ESP32-P4/ServoBoardMain/src"
+P4_SRC = REPO_ROOT / "ESP32-P4/src"
 
 
 def test_position_pair_preserves_wire_frames_and_atomic_capacity(tmp_path: Path) -> None:

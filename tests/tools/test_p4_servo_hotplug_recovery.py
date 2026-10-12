@@ -12,7 +12,7 @@ from tools.precommit_checks import compiler_environment
 
 
 ROOT = Path(__file__).resolve().parents[2]
-P4_SRC = ROOT / "ESP32-P4/ServoBoardMain/src"
+P4_SRC = ROOT / "ESP32-P4/src"
 
 
 NATIVE_SOURCE = r'''

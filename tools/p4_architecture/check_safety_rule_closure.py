@@ -79,7 +79,7 @@ def generated_entry_ok(rule: dict, contract, entry: dict | None) -> bool:
 def audit(repo_root: Path) -> dict[str, object]:
     """逐条验证生成索引、Policy、业务调用、事件入口和恢复入口。"""
 
-    source_root = repo_root / "ESP32-P4" / "ServoBoardMain" / "src"
+    source_root = repo_root / "ESP32-P4" / "src"
     catalog_header = read(source_root / "generated" / "SafetyRuleCatalog.generated.h")
     generated_items = (
         json.loads(read(FIRMWARE_INDEX_JSON)).get("rules", [])

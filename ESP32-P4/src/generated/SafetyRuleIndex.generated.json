@@ -1,0 +1,2092 @@
+{
+  "schema_version": 1,
+  "description": "P4 安全规则调用索引；由生成器维护，仅供离线审计",
+  "_format_help": {
+    "notice": "标准 JSON 不支持 // 或 /* */ 注释；本对象是可被解析器安全忽略的格式说明。",
+    "generation": "本文件由 tools/generate_p4_safety_catalog.py 自动生成，禁止手工编辑。",
+    "rule_fields": {
+      "name": "C++ SafetyRuleId 枚举名称，用于源码内稳定引用规则。",
+      "rule_id": "规则的稳定整数编号；协议、日志和上位机按此编号关联。",
+      "code": "面向人员的规则编码；前缀表示规则所属模块，例如 ACT、CTL、SYS。",
+      "active": "是否仍存在固件运行调用链；false 表示仅保留历史日志编号。",
+      "retired": "旧固件自动标定规则已退役，不再存在 policy/caller/event/recovery 绑定。",
+      "policy": "规则判断实现位置；file 是源码路径，symbol 是判断函数或关键符号。",
+      "caller": "调用 Policy 的业务入口，说明该规则在哪条运行链路中真正执行。",
+      "event": "规则触发后提交诊断事件或故障证据的位置。",
+      "recovery": "规则解除、恢复或重新准入的代码入口。",
+      "registry_function": "业务拒绝原因映射到 SafetyRuleId 的函数；空字符串表示 Policy 直接返回规则 ID。"
+    },
+    "reference_fields": {
+      "file": "相对于 ESP32-P4/src 的源码路径。",
+      "symbol": "检查器在对应源码中核验的函数名、枚举值或关键符号。"
+    },
+    "code_prefixes": {
+      "ACT": "舵机执行、路由与目标边界规则。",
+      "CTL": "PID、碰撞、过载和闭环控制规则。",
+      "SYS": "系统状态机、E-STOP、运动所有权和租约规则。",
+      "CAL": "自动标定流程及标定结果规则。",
+      "RCV": "Rope Init、多圈、热插拔和恢复规则。",
+      "COM": "CAN、串口、协议和数据完整性规则。",
+      "RUN": "任务、队列、周期、栈和运行时资源规则。",
+      "WRN": "不阻断控制的诊断警告。"
+    }
+  },
+  "rules": [
+    {
+      "name": "ActuatorInvalidCommand",
+      "rule_id": 1001,
+      "code": "ACT-1001",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "evaluateCommand"
+      },
+      "caller": {
+        "file": "tasks/servo_bus/ServoBusService.cpp",
+        "symbol": "p4::actuator::evaluateCommand"
+      },
+      "event": {
+        "file": "safety/SafetyEventReporter.cpp",
+        "symbol": "reportServoSafetyDecision"
+      },
+      "recovery": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "ServoRejectReason::None"
+      },
+      "registry_function": "ruleForServoRejectReason"
+    },
+    {
+      "name": "ActuatorRouteUnknown",
+      "rule_id": 1002,
+      "code": "ACT-1002",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "evaluateCommand"
+      },
+      "caller": {
+        "file": "tasks/servo_bus/ServoBusService.cpp",
+        "symbol": "p4::actuator::evaluateCommand"
+      },
+      "event": {
+        "file": "safety/SafetyEventReporter.cpp",
+        "symbol": "reportServoSafetyDecision"
+      },
+      "recovery": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "ServoRejectReason::None"
+      },
+      "registry_function": "ruleForServoRejectReason"
+    },
+    {
+      "name": "ActuatorRouteConflict",
+      "rule_id": 1003,
+      "code": "ACT-1003",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "evaluateCommand"
+      },
+      "caller": {
+        "file": "tasks/servo_bus/ServoBusService.cpp",
+        "symbol": "p4::actuator::evaluateCommand"
+      },
+      "event": {
+        "file": "safety/SafetyEventReporter.cpp",
+        "symbol": "reportServoSafetyDecision"
+      },
+      "recovery": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "ServoRejectReason::None"
+      },
+      "registry_function": "ruleForServoRejectReason"
+    },
+    {
+      "name": "ActuatorBusOverCapacity",
+      "rule_id": 1004,
+      "code": "ACT-1004",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "evaluateCommand"
+      },
+      "caller": {
+        "file": "tasks/servo_bus/ServoBusService.cpp",
+        "symbol": "p4::actuator::evaluateCommand"
+      },
+      "event": {
+        "file": "safety/SafetyEventReporter.cpp",
+        "symbol": "reportServoSafetyDecision"
+      },
+      "recovery": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "ServoRejectReason::None"
+      },
+      "registry_function": "ruleForServoRejectReason"
+    },
+    {
+      "name": "ActuatorEmergencyStop",
+      "rule_id": 1005,
+      "code": "ACT-1005",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "evaluateCommand"
+      },
+      "caller": {
+        "file": "tasks/servo_bus/ServoBusService.cpp",
+        "symbol": "p4::actuator::evaluateCommand"
+      },
+      "event": {
+        "file": "safety/SafetyEventReporter.cpp",
+        "symbol": "reportServoSafetyDecision"
+      },
+      "recovery": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "ServoRejectReason::None"
+      },
+      "registry_function": "ruleForServoRejectReason"
+    },
+    {
+      "name": "ActuatorInvalidOwner",
+      "rule_id": 1006,
+      "code": "ACT-1006",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "evaluateCommand"
+      },
+      "caller": {
+        "file": "tasks/servo_bus/ServoBusService.cpp",
+        "symbol": "p4::actuator::evaluateCommand"
+      },
+      "event": {
+        "file": "safety/SafetyEventReporter.cpp",
+        "symbol": "reportServoSafetyDecision"
+      },
+      "recovery": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "ServoRejectReason::None"
+      },
+      "registry_function": "ruleForServoRejectReason"
+    },
+    {
+      "name": "ActuatorInvalidState",
+      "rule_id": 1007,
+      "code": "ACT-1007",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "evaluateCommand"
+      },
+      "caller": {
+        "file": "tasks/servo_bus/ServoBusService.cpp",
+        "symbol": "p4::actuator::evaluateCommand"
+      },
+      "event": {
+        "file": "safety/SafetyEventReporter.cpp",
+        "symbol": "reportServoSafetyDecision"
+      },
+      "recovery": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "ServoRejectReason::None"
+      },
+      "registry_function": "ruleForServoRejectReason"
+    },
+    {
+      "name": "ActuatorOffline",
+      "rule_id": 1008,
+      "code": "ACT-1008",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "evaluateCommand"
+      },
+      "caller": {
+        "file": "tasks/servo_bus/ServoBusService.cpp",
+        "symbol": "p4::actuator::evaluateCommand"
+      },
+      "event": {
+        "file": "safety/SafetyEventReporter.cpp",
+        "symbol": "reportServoSafetyDecision"
+      },
+      "recovery": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "ServoRejectReason::None"
+      },
+      "registry_function": "ruleForServoRejectReason"
+    },
+    {
+      "name": "ActuatorMultiTurnUnknown",
+      "rule_id": 1009,
+      "code": "ACT-1009",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "evaluateCommand"
+      },
+      "caller": {
+        "file": "tasks/servo_bus/ServoBusService.cpp",
+        "symbol": "p4::actuator::evaluateCommand"
+      },
+      "event": {
+        "file": "safety/SafetyEventReporter.cpp",
+        "symbol": "reportServoSafetyDecision"
+      },
+      "recovery": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "ServoRejectReason::None"
+      },
+      "registry_function": "ruleForServoRejectReason"
+    },
+    {
+      "name": "ActuatorStaleTarget",
+      "rule_id": 1010,
+      "code": "ACT-1010",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "evaluateCommand"
+      },
+      "caller": {
+        "file": "tasks/servo_bus/ServoBusService.cpp",
+        "symbol": "p4::actuator::evaluateCommand"
+      },
+      "event": {
+        "file": "safety/SafetyEventReporter.cpp",
+        "symbol": "reportServoSafetyDecision"
+      },
+      "recovery": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "ServoRejectReason::None"
+      },
+      "registry_function": "ruleForServoRejectReason"
+    },
+    {
+      "name": "ActuatorLogicalRange",
+      "rule_id": 1011,
+      "code": "ACT-1011",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "evaluateCommand"
+      },
+      "caller": {
+        "file": "tasks/servo_bus/ServoBusService.cpp",
+        "symbol": "p4::actuator::evaluateCommand"
+      },
+      "event": {
+        "file": "safety/SafetyEventReporter.cpp",
+        "symbol": "reportServoSafetyDecision"
+      },
+      "recovery": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "ServoRejectReason::None"
+      },
+      "registry_function": "ruleForServoRejectReason"
+    },
+    {
+      "name": "ActuatorHardwareRange",
+      "rule_id": 1012,
+      "code": "ACT-1012",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "evaluateCommand"
+      },
+      "caller": {
+        "file": "tasks/servo_bus/ServoBusService.cpp",
+        "symbol": "p4::actuator::evaluateCommand"
+      },
+      "event": {
+        "file": "safety/SafetyEventReporter.cpp",
+        "symbol": "reportServoSafetyDecision"
+      },
+      "recovery": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "ServoRejectReason::None"
+      },
+      "registry_function": "ruleForServoRejectReason"
+    },
+    {
+      "name": "ActuatorTurnOverflow",
+      "rule_id": 1013,
+      "code": "ACT-1013",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "evaluateCommand"
+      },
+      "caller": {
+        "file": "tasks/servo_bus/ServoBusService.cpp",
+        "symbol": "p4::actuator::evaluateCommand"
+      },
+      "event": {
+        "file": "safety/SafetyEventReporter.cpp",
+        "symbol": "reportServoSafetyDecision"
+      },
+      "recovery": {
+        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
+        "symbol": "ServoRejectReason::None"
+      },
+      "registry_function": "ruleForServoRejectReason"
+    },
+    {
+      "name": "ControlCanFeedbackInvalid",
+      "rule_id": 2001,
+      "code": "CTL-2001",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/ControlInputSafetyPolicy.cpp",
+        "symbol": "evaluateControlSafety"
+      },
+      "caller": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "evaluateControlSafety"
+      },
+      "event": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "clearRecoveredControlRule"
+      },
+      "registry_function": ""
+    },
+    {
+      "name": "ControlJointIndexInvalid",
+      "rule_id": 2002,
+      "code": "CTL-2002",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/ControlInputSafetyPolicy.cpp",
+        "symbol": "evaluateControlSafety"
+      },
+      "caller": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "evaluateControlSafety"
+      },
+      "event": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "clearRecoveredControlRule"
+      },
+      "registry_function": ""
+    },
+    {
+      "name": "ControlEncoderFault",
+      "rule_id": 2003,
+      "code": "CTL-2003",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/ControlInputSafetyPolicy.cpp",
+        "symbol": "evaluateControlSafety"
+      },
+      "caller": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "evaluateControlSafety"
+      },
+      "event": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "clearRecoveredControlRule"
+      },
+      "registry_function": ""
+    },
+    {
+      "name": "ControlMappedAngleInvalid",
+      "rule_id": 2004,
+      "code": "CTL-2004",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/ControlInputSafetyPolicy.cpp",
+        "symbol": "evaluateControlSafety"
+      },
+      "caller": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "evaluateControlSafety"
+      },
+      "event": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "clearRecoveredControlRule"
+      },
+      "registry_function": ""
+    },
+    {
+      "name": "ControlCollisionHold",
+      "rule_id": 2005,
+      "code": "CTL-2005",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/CollisionSafetyPolicy.cpp",
+        "symbol": "FeedbackCollisionGuard::update"
+      },
+      "caller": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "g_feedbackCollisionGuard.update"
+      },
+      "event": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "ControlCollisionHold"
+      },
+      "recovery": {
+        "file": "safety/policies/CollisionSafetyPolicy.cpp",
+        "symbol": "holdReleased = true"
+      },
+      "registry_function": ""
+    },
+    {
+      "name": "ControlLutBoundaryClamp",
+      "rule_id": 2006,
+      "code": "CTL-2006",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/ControlBoundarySafetyPolicy.cpp",
+        "symbol": "clampAbsToBoundary"
+      },
+      "caller": {
+        "file": "tasks/motion_control/DualTendonControl.cpp",
+        "symbol": "clampAbsToBoundary"
+      },
+      "event": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "ControlLutBoundaryClamp"
+      },
+      "recovery": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "lutClampEventLatchedBitmap"
+      },
+      "registry_function": ""
+    },
+    {
+      "name": "ControlJointTargetClamp",
+      "rule_id": 2007,
+      "code": "CTL-2007",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/ControlBoundarySafetyPolicy.cpp",
+        "symbol": "clampFloatToBoundary"
+      },
+      "caller": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "clampJointTargetDeg"
+      },
+      "event": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "ControlJointTargetClamp"
+      },
+      "recovery": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "targetClampEventLatchedBitmap"
+      },
+      "registry_function": ""
+    },
+    {
+      "name": "ControlUpperWorkspaceWarning",
+      "rule_id": 2008,
+      "code": "CTL-2008",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/ControlBoundarySafetyPolicy.cpp",
+        "symbol": "evaluateUpperWorkspaceWarning"
+      },
+      "caller": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "evaluateUpperWorkspaceWarning"
+      },
+      "event": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "ControlUpperWorkspaceWarning"
+      },
+      "recovery": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "upperWorkspaceWarningBitmap"
+      },
+      "registry_function": ""
+    },
+    {
+      "name": "ControlHotplugHold",
+      "rule_id": 2009,
+      "code": "CTL-2009",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/ControlBoundarySafetyPolicy.cpp",
+        "symbol": "shouldEnterHotplugHold"
+      },
+      "caller": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "shouldEnterHotplugHold"
+      },
+      "event": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "ControlHotplugHold"
+      },
+      "recovery": {
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "hotplugHoldMotor"
+      },
+      "registry_function": ""
+    },
+    {
+      "name": "SystemHostLeaseExpired",
+      "rule_id": 3001,
+      "code": "SYS-3001",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/HostLeaseSafetyPolicy.cpp",
+        "symbol": "isHostControlLeaseFresh"
+      },
+      "caller": {
+        "file": "tasks/system_state/HostLeaseSupervisor.cpp",
+        "symbol": "isHostControlLeaseFresh"
+      },
+      "event": {
+        "file": "tasks/system_state/HostLeaseSupervisor.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/HostLeaseSupervisor.cpp",
+        "symbol": "resetHostControlLeaseRuntime"
+      },
+      "registry_function": ""
+    },
+    {
+      "name": "SystemStartStateRejected",
+      "rule_id": 3002,
+      "code": "SYS-3002",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/StateAdmissionPolicy.cpp",
+        "symbol": "canAcceptStart"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "canAcceptStart"
+      },
+      "event": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "SYSTEM_EVENT_RESET"
+      },
+      "registry_function": ""
+    },
+    {
+      "name": "SystemDirectStateRejected",
+      "rule_id": 3003,
+      "code": "SYS-3003",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/StateAdmissionPolicy.cpp",
+        "symbol": "canAcceptStart"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "canAcceptStart"
+      },
+      "event": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "SYSTEM_EVENT_RESET"
+      },
+      "registry_function": ""
+    },
+    {
+      "name": "SystemFeedbackStateRejected",
+      "rule_id": 3004,
+      "code": "SYS-3004",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/StateAdmissionPolicy.cpp",
+        "symbol": "canAcceptStart"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "canAcceptStart"
+      },
+      "event": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "SYSTEM_EVENT_RESET"
+      },
+      "registry_function": ""
+    },
+    {
+      "name": "SystemCalibrationStateRejected",
+      "rule_id": 3005,
+      "code": "SYS-3005",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "DirectStateRejected",
+      "rule_id": 3101,
+      "code": "DIR-3101",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemReadinessPolicy.cpp",
+        "symbol": "directMotorMaskReady"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "directMotorMaskReady"
+      },
+      "event": {
+        "file": "tasks/system_state/DirectCommandCoordinator.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/DirectCommandCoordinator.cpp",
+        "symbol": "DIRECT_REJECT_NONE"
+      },
+      "registry_function": "ruleForDirectRejectReason"
+    },
+    {
+      "name": "DirectHardwareRejected",
+      "rule_id": 3102,
+      "code": "DIR-3102",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemReadinessPolicy.cpp",
+        "symbol": "directMotorMaskReady"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "directMotorMaskReady"
+      },
+      "event": {
+        "file": "tasks/system_state/DirectCommandCoordinator.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/DirectCommandCoordinator.cpp",
+        "symbol": "DIRECT_REJECT_NONE"
+      },
+      "registry_function": "ruleForDirectRejectReason"
+    },
+    {
+      "name": "DirectMultiTurnRejected",
+      "rule_id": 3103,
+      "code": "DIR-3103",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemReadinessPolicy.cpp",
+        "symbol": "directMotorMaskReady"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "directMotorMaskReady"
+      },
+      "event": {
+        "file": "tasks/system_state/DirectCommandCoordinator.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/DirectCommandCoordinator.cpp",
+        "symbol": "DIRECT_REJECT_NONE"
+      },
+      "registry_function": "ruleForDirectRejectReason"
+    },
+    {
+      "name": "DirectEventQueueRejected",
+      "rule_id": 3104,
+      "code": "DIR-3104",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemReadinessPolicy.cpp",
+        "symbol": "directMotorMaskReady"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "directMotorMaskReady"
+      },
+      "event": {
+        "file": "tasks/system_state/DirectCommandCoordinator.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/DirectCommandCoordinator.cpp",
+        "symbol": "DIRECT_REJECT_NONE"
+      },
+      "registry_function": "ruleForDirectRejectReason"
+    },
+    {
+      "name": "DirectStaleRejected",
+      "rule_id": 3105,
+      "code": "DIR-3105",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemReadinessPolicy.cpp",
+        "symbol": "directMotorMaskReady"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "directMotorMaskReady"
+      },
+      "event": {
+        "file": "tasks/system_state/DirectCommandCoordinator.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/DirectCommandCoordinator.cpp",
+        "symbol": "DIRECT_REJECT_NONE"
+      },
+      "registry_function": "ruleForDirectRejectReason"
+    },
+    {
+      "name": "DirectFaultRejected",
+      "rule_id": 3106,
+      "code": "DIR-3106",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemReadinessPolicy.cpp",
+        "symbol": "directMotorMaskReady"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "directMotorMaskReady"
+      },
+      "event": {
+        "file": "tasks/system_state/DirectCommandCoordinator.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/DirectCommandCoordinator.cpp",
+        "symbol": "DIRECT_REJECT_NONE"
+      },
+      "registry_function": "ruleForDirectRejectReason"
+    },
+    {
+      "name": "FeedbackManualMissing",
+      "rule_id": 3201,
+      "code": "FBK-3201",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemReadinessPolicy.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "event": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "FEEDBACK_REJECT_NONE"
+      },
+      "registry_function": "ruleForFeedbackRejectReason"
+    },
+    {
+      "name": "FeedbackStateRejected",
+      "rule_id": 3202,
+      "code": "FBK-3202",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemReadinessPolicy.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "event": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "FEEDBACK_REJECT_NONE"
+      },
+      "registry_function": "ruleForFeedbackRejectReason"
+    },
+    {
+      "name": "FeedbackWorkspaceRejected",
+      "rule_id": 3203,
+      "code": "FBK-3203",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemReadinessPolicy.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "event": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "FEEDBACK_REJECT_NONE"
+      },
+      "registry_function": "ruleForFeedbackRejectReason"
+    },
+    {
+      "name": "FeedbackMultiTurnRejected",
+      "rule_id": 3204,
+      "code": "FBK-3204",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemReadinessPolicy.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "event": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "FEEDBACK_REJECT_NONE"
+      },
+      "registry_function": "ruleForFeedbackRejectReason"
+    },
+    {
+      "name": "FeedbackAbsLimitRejected",
+      "rule_id": 3205,
+      "code": "FBK-3205",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemReadinessPolicy.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "event": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "FEEDBACK_REJECT_NONE"
+      },
+      "registry_function": "ruleForFeedbackRejectReason"
+    },
+    {
+      "name": "FeedbackModeSwitchRejected",
+      "rule_id": 3206,
+      "code": "FBK-3206",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemReadinessPolicy.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "event": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "FEEDBACK_REJECT_NONE"
+      },
+      "registry_function": "ruleForFeedbackRejectReason"
+    },
+    {
+      "name": "FeedbackEventQueueRejected",
+      "rule_id": 3207,
+      "code": "FBK-3207",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemReadinessPolicy.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "event": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "FEEDBACK_REJECT_NONE"
+      },
+      "registry_function": "ruleForFeedbackRejectReason"
+    },
+    {
+      "name": "ReadyCanGate",
+      "rule_id": 3301,
+      "code": "RDY-3301",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemReadinessPolicy.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "event": {
+        "file": "tasks/system_state/FeedbackReadyDiagnostics.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "SYSTEM_EVENT_REEVALUATE_READY"
+      },
+      "registry_function": "ruleForFeedbackReadyRejectReason"
+    },
+    {
+      "name": "ReadyMultiTurnGate",
+      "rule_id": 3302,
+      "code": "RDY-3302",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemReadinessPolicy.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "event": {
+        "file": "tasks/system_state/FeedbackReadyDiagnostics.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "SYSTEM_EVENT_REEVALUATE_READY"
+      },
+      "registry_function": "ruleForFeedbackReadyRejectReason"
+    },
+    {
+      "name": "ReadyEmptyScope",
+      "rule_id": 3303,
+      "code": "RDY-3303",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemReadinessPolicy.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "event": {
+        "file": "tasks/system_state/FeedbackReadyDiagnostics.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "SYSTEM_EVENT_REEVALUATE_READY"
+      },
+      "registry_function": "ruleForFeedbackReadyRejectReason"
+    },
+    {
+      "name": "ReadyMappedUnavailable",
+      "rule_id": 3304,
+      "code": "RDY-3304",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemReadinessPolicy.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "event": {
+        "file": "tasks/system_state/FeedbackReadyDiagnostics.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "SYSTEM_EVENT_REEVALUATE_READY"
+      },
+      "registry_function": "ruleForFeedbackReadyRejectReason"
+    },
+    {
+      "name": "ReadyCalibrationMissing",
+      "rule_id": 3305,
+      "code": "RDY-3305",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemReadinessPolicy.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "event": {
+        "file": "tasks/system_state/FeedbackReadyDiagnostics.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "SYSTEM_EVENT_REEVALUATE_READY"
+      },
+      "registry_function": "ruleForFeedbackReadyRejectReason"
+    },
+    {
+      "name": "ReadyMappedInvalid",
+      "rule_id": 3306,
+      "code": "RDY-3306",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemReadinessPolicy.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "event": {
+        "file": "tasks/system_state/FeedbackReadyDiagnostics.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "SYSTEM_EVENT_REEVALUATE_READY"
+      },
+      "registry_function": "ruleForFeedbackReadyRejectReason"
+    },
+    {
+      "name": "ReadyBelowWorkspace",
+      "rule_id": 3307,
+      "code": "RDY-3307",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemReadinessPolicy.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "event": {
+        "file": "tasks/system_state/FeedbackReadyDiagnostics.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "SYSTEM_EVENT_REEVALUATE_READY"
+      },
+      "registry_function": "ruleForFeedbackReadyRejectReason"
+    },
+    {
+      "name": "ReadyCalibrationMismatch",
+      "rule_id": 3308,
+      "code": "RDY-3308",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemReadinessPolicy.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "event": {
+        "file": "tasks/system_state/FeedbackReadyDiagnostics.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "SYSTEM_EVENT_REEVALUATE_READY"
+      },
+      "registry_function": "ruleForFeedbackReadyRejectReason"
+    },
+    {
+      "name": "ReadyEncoderCanFault",
+      "rule_id": 3309,
+      "code": "RDY-3309",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemReadinessPolicy.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "event": {
+        "file": "tasks/system_state/FeedbackReadyDiagnostics.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "SYSTEM_EVENT_REEVALUATE_READY"
+      },
+      "registry_function": "ruleForFeedbackReadyRejectReason"
+    },
+    {
+      "name": "ReadySystemFault",
+      "rule_id": 3310,
+      "code": "RDY-3310",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemReadinessPolicy.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "event": {
+        "file": "tasks/system_state/FeedbackReadyDiagnostics.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "SYSTEM_EVENT_REEVALUATE_READY"
+      },
+      "registry_function": "ruleForFeedbackReadyRejectReason"
+    },
+    {
+      "name": "ReadyTurnOverflow",
+      "rule_id": 3311,
+      "code": "RDY-3311",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemReadinessPolicy.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "evaluateFeedbackReadiness"
+      },
+      "event": {
+        "file": "tasks/system_state/FeedbackReadyDiagnostics.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "SYSTEM_EVENT_REEVALUATE_READY"
+      },
+      "registry_function": "ruleForFeedbackReadyRejectReason"
+    },
+    {
+      "name": "RopeInitTimeout",
+      "rule_id": 3401,
+      "code": "ROP-3401",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/RopeInitSafetyPolicy.cpp",
+        "symbol": "evaluateRopeInitSession"
+      },
+      "caller": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "evaluateRopeInitSession"
+      },
+      "event": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "ROPE_INIT_REASON_NONE"
+      },
+      "registry_function": "ruleForRopeInitReason"
+    },
+    {
+      "name": "RopeInitFeedbackStale",
+      "rule_id": 3402,
+      "code": "ROP-3402",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/RopeInitSafetyPolicy.cpp",
+        "symbol": "evaluateRopeInitSession"
+      },
+      "caller": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "evaluateRopeInitSession"
+      },
+      "event": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "ROPE_INIT_REASON_NONE"
+      },
+      "registry_function": "ruleForRopeInitReason"
+    },
+    {
+      "name": "RopeInitServoOffline",
+      "rule_id": 3403,
+      "code": "ROP-3403",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/RopeInitSafetyPolicy.cpp",
+        "symbol": "evaluateRopeInitSession"
+      },
+      "caller": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "evaluateRopeInitSession"
+      },
+      "event": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "ROPE_INIT_REASON_NONE"
+      },
+      "registry_function": "ruleForRopeInitReason"
+    },
+    {
+      "name": "RopeInitMultiTurnUnknown",
+      "rule_id": 3404,
+      "code": "ROP-3404",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/RopeInitSafetyPolicy.cpp",
+        "symbol": "evaluateRopeInitSession"
+      },
+      "caller": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "evaluateRopeInitSession"
+      },
+      "event": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "ROPE_INIT_REASON_NONE"
+      },
+      "registry_function": "ruleForRopeInitReason"
+    },
+    {
+      "name": "RopeInitManualRequired",
+      "rule_id": 3405,
+      "code": "ROP-3405",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/RopeInitSafetyPolicy.cpp",
+        "symbol": "evaluateRopeInitSession"
+      },
+      "caller": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "evaluateRopeInitSession"
+      },
+      "event": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "ROPE_INIT_REASON_NONE"
+      },
+      "registry_function": "ruleForRopeInitReason"
+    },
+    {
+      "name": "RopeInitAutoRequired",
+      "rule_id": 3406,
+      "code": "ROP-3406",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/RopeInitSafetyPolicy.cpp",
+        "symbol": "evaluateRopeInitSession"
+      },
+      "caller": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "evaluateRopeInitSession"
+      },
+      "event": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "ROPE_INIT_REASON_NONE"
+      },
+      "registry_function": "ruleForRopeInitReason"
+    },
+    {
+      "name": "RopeInitTargetPublishFailed",
+      "rule_id": 3407,
+      "code": "ROP-3407",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/RopeInitSafetyPolicy.cpp",
+        "symbol": "evaluateRopeInitSession"
+      },
+      "caller": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "evaluateRopeInitSession"
+      },
+      "event": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "ROPE_INIT_REASON_NONE"
+      },
+      "registry_function": "ruleForRopeInitReason"
+    },
+    {
+      "name": "RopeInitSystemFault",
+      "rule_id": 3408,
+      "code": "ROP-3408",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/RopeInitSafetyPolicy.cpp",
+        "symbol": "evaluateRopeInitSession"
+      },
+      "caller": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "evaluateRopeInitSession"
+      },
+      "event": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "ROPE_INIT_REASON_NONE"
+      },
+      "registry_function": "ruleForRopeInitReason"
+    },
+    {
+      "name": "RopeInitCancelled",
+      "rule_id": 3409,
+      "code": "ROP-3409",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/RopeInitSafetyPolicy.cpp",
+        "symbol": "evaluateRopeInitSession"
+      },
+      "caller": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "evaluateRopeInitSession"
+      },
+      "event": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/RopeInitController.cpp",
+        "symbol": "ROPE_INIT_REASON_NONE"
+      },
+      "registry_function": "ruleForRopeInitReason"
+    },
+    {
+      "name": "FaultCanOffline",
+      "rule_id": 3501,
+      "code": "FLT-3501",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemFaultPolicy.cpp",
+        "symbol": "collectSystemFaults"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemStateCoordinator.cpp",
+        "symbol": "collectSystemFaults"
+      },
+      "event": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "SYSTEM_EVENT_RESET"
+      },
+      "registry_function": "ruleForSystemFaultBit"
+    },
+    {
+      "name": "FaultOverload",
+      "rule_id": 3502,
+      "code": "FLT-3502",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemFaultPolicy.cpp",
+        "symbol": "collectSystemFaults"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemStateCoordinator.cpp",
+        "symbol": "collectSystemFaults"
+      },
+      "event": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "SYSTEM_EVENT_RESET"
+      },
+      "registry_function": "ruleForSystemFaultBit"
+    },
+    {
+      "name": "FaultServoOffline",
+      "rule_id": 3503,
+      "code": "FLT-3503",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemFaultPolicy.cpp",
+        "symbol": "collectSystemFaults"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemStateCoordinator.cpp",
+        "symbol": "collectSystemFaults"
+      },
+      "event": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "SYSTEM_EVENT_RESET"
+      },
+      "registry_function": "ruleForSystemFaultBit"
+    },
+    {
+      "name": "FaultCalibration",
+      "rule_id": 3504,
+      "code": "FLT-3504",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "FaultMultiTurnUnknown",
+      "rule_id": 3505,
+      "code": "FLT-3505",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/SystemFaultPolicy.cpp",
+        "symbol": "collectSystemFaults"
+      },
+      "caller": {
+        "file": "tasks/system_state/SystemStateCoordinator.cpp",
+        "symbol": "collectSystemFaults"
+      },
+      "event": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/system_state/SystemEventDispatcher.cpp",
+        "symbol": "SYSTEM_EVENT_RESET"
+      },
+      "registry_function": "ruleForSystemFaultBit"
+    },
+    {
+      "name": "CalibrationActiveScopeEmpty",
+      "rule_id": 4001,
+      "code": "CAL-4001",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "CalibrationEncoderError",
+      "rule_id": 4005,
+      "code": "CAL-4005",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "CalibrationServoOffline",
+      "rule_id": 4006,
+      "code": "CAL-4006",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "CalibrationOverload",
+      "rule_id": 4008,
+      "code": "CAL-4008",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "CalibrationZeroCrossInvalid",
+      "rule_id": 4013,
+      "code": "CAL-4013",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "CalibrationWrapTooLarge",
+      "rule_id": 4014,
+      "code": "CAL-4014",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "CalibrationAbsLimitInvalid",
+      "rule_id": 4015,
+      "code": "CAL-4015",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "CalibrationTargetPublishFailed",
+      "rule_id": 4016,
+      "code": "CAL-4016",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "CalibrationFeedbackLost",
+      "rule_id": 4017,
+      "code": "CAL-4017",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "CalibrationTaskStartFailed",
+      "rule_id": 4018,
+      "code": "CAL-4018",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "CalibrationControlLost",
+      "rule_id": 4020,
+      "code": "CAL-4020",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "CalibrationHoldTargetFailed",
+      "rule_id": 4021,
+      "code": "CAL-4021",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "CalibrationJointListInvalid",
+      "rule_id": 4022,
+      "code": "CAL-4022",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "CalibrationDuplicateJoint",
+      "rule_id": 4023,
+      "code": "CAL-4023",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "CalibrationWorkspacePrepFailed",
+      "rule_id": 4024,
+      "code": "CAL-4024",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "CalibrationJointStepFailed",
+      "rule_id": 4025,
+      "code": "CAL-4025",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "CalibrationServoRecoveryTimeout",
+      "rule_id": 4026,
+      "code": "CAL-4026",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "CalibrationReleaseOverTwoTurns",
+      "rule_id": 4027,
+      "code": "CAL-4027",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "CalibrationMotorMappingInvalid",
+      "rule_id": 4028,
+      "code": "CAL-4028",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "CalibrationResultSpanInvalid",
+      "rule_id": 4029,
+      "code": "CAL-4029",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "CalibrationResultBuildFailed",
+      "rule_id": 4030,
+      "code": "CAL-4030",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "CalibrationResultCommitFailed",
+      "rule_id": 4031,
+      "code": "CAL-4031",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "CalibrationMultiTurnTrustFailed",
+      "rule_id": 4032,
+      "code": "CAL-4032",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "CalibrationDualExchangeStalled",
+      "rule_id": 4034,
+      "code": "CAL-4034",
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
+    },
+    {
+      "name": "CalibrationWarnAutoMinOffset",
+      "rule_id": 4101,
+      "code": "CAW-4101",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/CalibrationSafetyPolicy.h",
+        "symbol": "calibrationAssemblyWarningReasonForMetrics"
+      },
+      "caller": {
+        "file": "system/calibration/CalibrationRuntimeStore.cpp",
+        "symbol": "calibrationAssemblyWarningReasonForMetrics"
+      },
+      "event": {
+        "file": "system/calibration/CalibrationRuntimeStore.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "system/calibration/CalibrationRuntimeStore.cpp",
+        "symbol": "CALIB_WARN_NONE"
+      },
+      "registry_function": "ruleForCalibrationWarningBit"
+    },
+    {
+      "name": "CalibrationWarnAutoMaxShortfall",
+      "rule_id": 4102,
+      "code": "CAW-4102",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/CalibrationSafetyPolicy.h",
+        "symbol": "calibrationAssemblyWarningReasonForMetrics"
+      },
+      "caller": {
+        "file": "system/calibration/CalibrationRuntimeStore.cpp",
+        "symbol": "calibrationAssemblyWarningReasonForMetrics"
+      },
+      "event": {
+        "file": "system/calibration/CalibrationRuntimeStore.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "system/calibration/CalibrationRuntimeStore.cpp",
+        "symbol": "CALIB_WARN_NONE"
+      },
+      "registry_function": "ruleForCalibrationWarningBit"
+    },
+    {
+      "name": "CalibrationWarnSpanMismatch",
+      "rule_id": 4103,
+      "code": "CAW-4103",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/CalibrationSafetyPolicy.h",
+        "symbol": "calibrationAssemblyWarningReasonForMetrics"
+      },
+      "caller": {
+        "file": "system/calibration/CalibrationRuntimeStore.cpp",
+        "symbol": "calibrationAssemblyWarningReasonForMetrics"
+      },
+      "event": {
+        "file": "system/calibration/CalibrationRuntimeStore.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "system/calibration/CalibrationRuntimeStore.cpp",
+        "symbol": "CALIB_WARN_NONE"
+      },
+      "registry_function": "ruleForCalibrationWarningBit"
+    },
+    {
+      "name": "CommunicationCanInitFailed",
+      "rule_id": 6001,
+      "code": "COM-6001",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/CommunicationSafetyPolicy.cpp",
+        "symbol": "communicationCanInitializationRule"
+      },
+      "caller": {
+        "file": "tasks/s3_can_rx/S3CanRxService.cpp",
+        "symbol": "communicationCanInitializationRule"
+      },
+      "event": {
+        "file": "tasks/s3_can_rx/S3CanRxService.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/s3_can_rx/S3CanRxService.cpp",
+        "symbol": "canInitialized"
+      },
+      "registry_function": ""
+    },
+    {
+      "name": "CommunicationCanFrameInvalid",
+      "rule_id": 6002,
+      "code": "COM-6002",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/CommunicationSafetyPolicy.cpp",
+        "symbol": "communicationLengthValid"
+      },
+      "caller": {
+        "file": "tasks/s3_can_rx/S3CanRxService.cpp",
+        "symbol": "communicationLengthValid"
+      },
+      "event": {
+        "file": "tasks/s3_can_rx/S3CanRxService.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/s3_can_rx/EncoderHealthMonitor.cpp",
+        "symbol": "updateEncoderHealthFromSnapshot"
+      },
+      "registry_function": ""
+    },
+    {
+      "name": "CommunicationEncoderSnapshotInvalid",
+      "rule_id": 6003,
+      "code": "COM-6003",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/CommunicationSafetyPolicy.cpp",
+        "symbol": "communicationLengthValid"
+      },
+      "caller": {
+        "file": "tasks/s3_can_rx/S3CanRxService.cpp",
+        "symbol": "communicationLengthValid"
+      },
+      "event": {
+        "file": "tasks/s3_can_rx/S3CanRxService.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/s3_can_rx/EncoderHealthMonitor.cpp",
+        "symbol": "updateEncoderHealthFromSnapshot"
+      },
+      "registry_function": ""
+    },
+    {
+      "name": "CommunicationTactileSnapshotInvalid",
+      "rule_id": 6004,
+      "code": "COM-6004",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/CommunicationSafetyPolicy.cpp",
+        "symbol": "communicationLengthValid"
+      },
+      "caller": {
+        "file": "tasks/s3_can_rx/S3CanRxService.cpp",
+        "symbol": "communicationLengthValid"
+      },
+      "event": {
+        "file": "tasks/s3_can_rx/S3CanRxService.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/s3_can_rx/EncoderHealthMonitor.cpp",
+        "symbol": "updateEncoderHealthFromSnapshot"
+      },
+      "registry_function": ""
+    },
+    {
+      "name": "CommunicationUpperFrameRejected",
+      "rule_id": 6005,
+      "code": "COM-6005",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/CommunicationSafetyPolicy.cpp",
+        "symbol": "communicationEventMayReport"
+      },
+      "caller": {
+        "file": "tasks/host_comm/HostCommService.cpp",
+        "symbol": "communicationEventMayReport"
+      },
+      "event": {
+        "file": "tasks/host_comm/HostCommService.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/host_comm/HostFrameReader.cpp",
+        "symbol": "return true"
+      },
+      "registry_function": ""
+    },
+    {
+      "name": "RuntimeSafetyEventCacheOverflow",
+      "rule_id": 8001,
+      "code": "RUN-8001",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/RuntimeSafetyPolicy.cpp",
+        "symbol": "runtimeEventCacheWillOverflow"
+      },
+      "caller": {
+        "file": "safety/SafetyEventStore.cpp",
+        "symbol": "runtimeEventCacheWillOverflow"
+      },
+      "event": {
+        "file": "safety/SafetyEventStore.cpp",
+        "symbol": "RuntimeSafetyEventCacheOverflow"
+      },
+      "recovery": {
+        "file": "safety/SafetyEventStore.cpp",
+        "symbol": "s_overflowEvidenceRecorded"
+      },
+      "registry_function": ""
+    },
+    {
+      "name": "RuntimeQueueCreateFailed",
+      "rule_id": 8002,
+      "code": "RUN-8002",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/RuntimeSafetyPolicy.cpp",
+        "symbol": "runtimeResourceCreationRule"
+      },
+      "caller": {
+        "file": "system/SystemAssembly.cpp",
+        "symbol": "RuntimeResourceKind::Queue"
+      },
+      "event": {
+        "file": "system/SystemAssembly.cpp",
+        "symbol": "recordAssemblyFailure"
+      },
+      "recovery": {
+        "file": "system/SystemAssembly.cpp",
+        "symbol": "queuesCreated"
+      },
+      "registry_function": ""
+    },
+    {
+      "name": "RuntimeMutexCreateFailed",
+      "rule_id": 8003,
+      "code": "RUN-8003",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/RuntimeSafetyPolicy.cpp",
+        "symbol": "runtimeResourceCreationRule"
+      },
+      "caller": {
+        "file": "system/SystemAssembly.cpp",
+        "symbol": "RuntimeResourceKind::Mutex"
+      },
+      "event": {
+        "file": "system/SystemAssembly.cpp",
+        "symbol": "recordAssemblyFailure"
+      },
+      "recovery": {
+        "file": "system/SystemAssembly.cpp",
+        "symbol": "commandStateMutex"
+      },
+      "registry_function": ""
+    },
+    {
+      "name": "RuntimeTaskCreateFailed",
+      "rule_id": 8004,
+      "code": "RUN-8004",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/RuntimeSafetyPolicy.cpp",
+        "symbol": "runtimeResourceCreationRule"
+      },
+      "caller": {
+        "file": "system/SystemAssembly.cpp",
+        "symbol": "RuntimeResourceKind::Task"
+      },
+      "event": {
+        "file": "system/SystemAssembly.cpp",
+        "symbol": "recordAssemblyFailure"
+      },
+      "recovery": {
+        "file": "system/SystemAssembly.cpp",
+        "symbol": "tasksCreated"
+      },
+      "registry_function": ""
+    },
+    {
+      "name": "RuntimeTaskPeriodOverrun",
+      "rule_id": 8005,
+      "code": "RUN-8005",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/RuntimeSafetyPolicy.cpp",
+        "symbol": "evaluateRuntimeOverrun"
+      },
+      "caller": {
+        "file": "tasks/runtime_monitor/RuntimeMonitorService.cpp",
+        "symbol": "evaluateRuntimeOverrun"
+      },
+      "event": {
+        "file": "tasks/runtime_monitor/RuntimeMonitorService.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/runtime_monitor/RuntimeMonitorService.cpp",
+        "symbol": "overrunEventLatched"
+      },
+      "registry_function": ""
+    },
+    {
+      "name": "RuntimeTaskStackLow",
+      "rule_id": 8006,
+      "code": "RUN-8006",
+      "active": true,
+      "retired": false,
+      "policy": {
+        "file": "safety/policies/RuntimeSafetyPolicy.cpp",
+        "symbol": "evaluateRuntimeStack"
+      },
+      "caller": {
+        "file": "tasks/runtime_monitor/RuntimeMonitorService.cpp",
+        "symbol": "evaluateRuntimeStack"
+      },
+      "event": {
+        "file": "tasks/runtime_monitor/RuntimeMonitorService.cpp",
+        "symbol": "RuntimeTaskStackLow"
+      },
+      "recovery": {
+        "file": "tasks/runtime_monitor/RuntimeMonitorService.cpp",
+        "symbol": "stackEventLatched"
+      },
+      "registry_function": ""
+    }
+  ]
+}

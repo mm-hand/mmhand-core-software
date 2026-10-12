@@ -11,7 +11,7 @@ import pytest
 from tools.precommit_checks import compiler_environment
 
 
-P4_SRC = Path(__file__).resolve().parents[2] / "ESP32-P4/ServoBoardMain/src"
+P4_SRC = Path(__file__).resolve().parents[2] / "ESP32-P4/src"
 
 
 NATIVE_SOURCE = r'''

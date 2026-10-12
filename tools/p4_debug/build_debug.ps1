@@ -34,8 +34,8 @@ Assert-PathExists -Path $P4ElfPath -Description "Debug ELF"
 Assert-PathExists -Path $P4BinPath -Description "Debug application binary"
 
 $elfHash = (Get-FileHash -LiteralPath $P4ElfPath -Algorithm SHA256).Hash
-$hashFile = Join-Path $P4BuildPath "ServoBoardMain.ino.elf.sha256.txt"
-"$elfHash  ServoBoardMain.ino.elf" | Set-Content -LiteralPath $hashFile -Encoding ascii
+$hashFile = Join-Path $P4BuildPath "ESP32-P4.ino.elf.sha256.txt"
+"$elfHash  ESP32-P4.ino.elf" | Set-Content -LiteralPath $hashFile -Encoding ascii
 
 Write-Host "Arduino debug build completed." -ForegroundColor Green
 Write-Host "ELF   : $P4ElfPath"

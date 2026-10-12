@@ -11,7 +11,7 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-P4_SRC = REPO_ROOT / "ESP32-P4" / "ServoBoardMain" / "src"
+P4_SRC = REPO_ROOT / "ESP32-P4" / "src"
 
 
 def test_host_control_lease_policy_covers_every_servo_motion_state(tmp_path: Path) -> None:

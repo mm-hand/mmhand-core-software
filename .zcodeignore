@@ -22,7 +22,7 @@ desktop/resources/config/device_state/
 ESP32-P4ID/
 
 # Local firmware experiments and waveform captures
-ESP32-P4/ServoBoardMain/debug.log
+ESP32-P4/debug.log
 ESP32-S3/System/build/
 ESP32-P4Test/
 ESP32-P4Test2/
