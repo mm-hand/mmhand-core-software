@@ -12,7 +12,7 @@
 #include <string.h>
 
 #include "ServoValue.h"
-#include <SMS_STS.h>
+#include "FTServo_Arduino/src/SMS_STS.h"
 #include "../../config/safety/ServoPositionRange.h"
 #include "../../config/BoardConfig.h"
 #include "../../config/ServoConfig.h"

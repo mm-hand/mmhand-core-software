@@ -36,8 +36,10 @@ function Find-ForbiddenInclude($files, [string]$pattern, [string]$label) {
     }
 }
 
+# 内嵌第三方 SDK（hal/servo/FTServo_Arduino）不参与本项目分层规则，仅保留 R8 的文件名级豁免。
 $sourceFiles = Get-ChildItem -LiteralPath $sourceRoot -Recurse -File |
-    Where-Object { $_.Extension -in @(".c", ".cpp", ".h") }
+    Where-Object { $_.Extension -in @(".c", ".cpp", ".h") -and
+                   $_.FullName -notlike "*FTServo_Arduino*" }
 
 # R0：顶层目录是架构契约；历史功能型目录不得回流。
 $allowedTopLevel = @(
@@ -281,9 +283,11 @@ if (-not $contextBody.Success) {
 }
 
 # R8：飞特、Host 串口和 TWAI 只能通过各自 HAL 唯一入口。
+# 内嵌 SDK 源码树（hal/servo/FTServo_Arduino）本身豁免，业务侧仍只允许 FeetechServoDriver。
 $sdkViolations = & rg -n `
     "SMS_STS|SyncWritePosEx|WritePosEx|EnableTorque|\bFeedBack\s*\(|\bReadPos\s*\(" `
     $sourceRoot -g "*.h" -g "*.cpp" -g "*.c" `
+    -g "!**/FTServo_Arduino/**" `
     -g "!**/FeetechServoDriver.h" -g "!**/FeetechServoDriver.cpp"
 if ($LASTEXITCODE -gt 1) {
     Add-Failure "Failed to scan Feetech SDK access."

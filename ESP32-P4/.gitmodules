@@ -1,3 +1,0 @@
-[submodule "libraries/FTServo_Arduino"]
-	path = libraries/FTServo_Arduino
-	url = https://github.com/ftservo/FTServo_Arduino

@@ -9,7 +9,7 @@
                 "tools/watch_strip_utf8_bom.py",
                 "main",
                 "ServoBoardMain",
-                "libraries/FTServo_Arduino/src"
+                "ServoBoardMain/src/hal/servo/FTServo_Arduino/src"
             ],
             "isBackground": true,
             "runOptions": {
@@ -29,7 +29,7 @@
                 "tools/strip_utf8_bom.py",
                 "main",
                 "ServoBoardMain",
-                "libraries/FTServo_Arduino/src"
+                "ServoBoardMain/src/hal/servo/FTServo_Arduino/src"
             ],
             "problemMatcher": []
         }
