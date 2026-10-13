@@ -23,6 +23,12 @@ Manual flow: `tools/debug/build_debug.ps1` → `upload_debug.ps1 -Port COMx` →
 `start_openocd.ps1` (keep running) → GDB: `target remote :3333`. S3 differs
 only by `-Target s3` (xtensa GDB + `board/esp32s3-builtin.cfg`).
 
+Multiple boards: `upload_debug.ps1` records each target's USB-Serial-JTAG
+serial to `.debug/<target>/`; `gdb_batch.py` and `start_openocd.ps1` pin that
+adapter with OpenOCD `adapter serial`, so OpenOCD attaches the right board.
+S3 breakpoints are always hardware (`hbreak`): Xtensa has no software
+breakpoints in flash, and only two comparators exist.
+
 Iron rules — violations wedge the chip or the connection:
 
 1. Always `delete` breakpoints before `detach`/reset. P4/S3 hardware

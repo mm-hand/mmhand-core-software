@@ -36,12 +36,18 @@ TARGETS = {
         "gdb_leaf": "bin/riscv32-esp-elf-gdb.exe",
         "gdb_root": "riscv32-esp-elf-gdb",
         "elf": ".debug/p4/ESP32-P4.ino.elf",
+        "hw_breakpoints": False,
     },
     "s3": {
         "board_cfg": "board/esp32s3-builtin.cfg",
         "gdb_leaf": "bin/xtensa-esp32s3-elf-gdb.exe",
         "gdb_root": "xtensa-esp-elf-gdb",
         "elf": ".debug/s3/ESP32-S3.ino.elf",
+        # Xtensa flash runs at 0x42xxxxxx; with the memory map disabled GDB
+        # treats it as writable RAM, tries a software breakpoint on continue
+        # and aborts with "Cannot access memory". IBREAK comparators must be
+        # requested explicitly (ESP32-S3 has two; a third --break fails).
+        "hw_breakpoints": True,
     },
 }
 
@@ -76,11 +82,19 @@ def openocd_is_running() -> bool:
     return "openocd.exe" in out.lower()
 
 
-def spawn_openocd(openocd_exe: Path, scripts: Path, board_cfg: str, port: int, timeout: float) -> subprocess.Popen:
+def spawn_openocd(openocd_exe: Path, scripts: Path, board_cfg: str, port: int, timeout: float,
+                  adapter_serial: str = "") -> subprocess.Popen:
     cmd = [
         str(openocd_exe), "-s", str(scripts), "-f", board_cfg,
-        # OpenOCD otherwise probes the flash map on every GDB connect and
-        # rejects the connection outright when that probe fails.
+    ]
+    if adapter_serial:
+        # Every ESP32 USB-Serial-JTAG board shares one VID/PID; without this
+        # pin OpenOCD may attach a different board and fail with
+        # "Unsupported DTM version: -1".
+        cmd += ["-c", f"adapter serial {adapter_serial}"]
+    # OpenOCD otherwise probes the flash map on every GDB connect and
+    # rejects the connection outright when that probe fails.
+    cmd += [
         "-c", "gdb_memory_map disable",
     ]
     print(f"[gdb_batch] starting OpenOCD: {' '.join(cmd)}", flush=True)
@@ -111,14 +125,15 @@ def sha256_of(path: Path) -> str:
     return h.hexdigest().upper()
 
 
-def build_gdb_command_list(args: argparse.Namespace) -> list[str]:
+def build_gdb_command_list(args: argparse.Namespace, hardware_breakpoints: bool) -> list[str]:
     cmds = [
         "set pagination off",
         "set confirm off",
         "set print pretty on",
         f"target remote :{args.port}",
     ]
-    cmds += [f"break {b}" for b in args.breakpoint]
+    verb = "hbreak" if hardware_breakpoints else "break"
+    cmds += [f"{verb} {b}" for b in args.breakpoint]
     if args.breakpoint:
         cmds.append("continue")
     if args.threads:
@@ -223,17 +238,25 @@ def main() -> int:
         print("[gdb_batch] WARNING: no flashed-firmware marker (upload_debug.ps1 has not "
               "run for this build); the ELF may not match the chip.", flush=True)
 
+    serial_marker = elf.with_name(elf.name + ".jtag_serial")
+    jtag_serial = serial_marker.read_text().strip() if serial_marker.is_file() else ""
+    if not jtag_serial:
+        print("[gdb_batch] WARNING: no .jtag_serial marker; with more than one ESP32 board "
+              "connected OpenOCD may attach the wrong one. Re-run upload_debug.ps1 to record it.",
+              flush=True)
+
     spawned = None
     try:
         if openocd_is_running():
             print("[gdb_batch] reusing already-running OpenOCD", flush=True)
         else:
-            spawned = spawn_openocd(openocd_exe, scripts, target["board_cfg"], args.port, timeout=30.0)
+            spawned = spawn_openocd(openocd_exe, scripts, target["board_cfg"], args.port,
+                                    timeout=30.0, adapter_serial=jtag_serial)
             if args.keep_openocd:
                 print(f"[gdb_batch] OpenOCD (pid {spawned.pid}) stays running for follow-up use.", flush=True)
 
         print(f"[gdb_batch] GDB session: {gdb_exe.name}  elf={elf}", flush=True)
-        ok, output = run_gdb(gdb_exe, elf, build_gdb_command_list(args), args.timeout)
+        ok, output = run_gdb(gdb_exe, elf, build_gdb_command_list(args, bool(target["hw_breakpoints"])), args.timeout)
         print(output)
         if not ok and "timed out" in output:
             rescue_after_timeout(gdb_exe, args.port)
