@@ -25,3 +25,5 @@ jobs:
           arduino-cli core install esp32:esp32@3.3.10 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
       - name: Compile P4 without uploading
         run: arduino-cli compile --fqbn esp32:esp32:esp32p4:ChipVariant=prev3 ESP32-P4
+      - name: Compile S3 without uploading
+        run: arduino-cli compile --fqbn esp32:esp32:esp32s3 ESP32-S3

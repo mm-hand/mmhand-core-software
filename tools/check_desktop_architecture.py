@@ -16,9 +16,7 @@ DESKTOP_ROOT = PROJECT_ROOT / "desktop"
 TARGET_TOP_LEVEL_FILES = {
     "__init__.py",
     "__main__.py",
-    "main.py",
     "paths.py",
-    "serial_log_filter.py",
 }
 TARGET_PACKAGES = (
     "app",
@@ -56,19 +54,11 @@ DEPENDENCY_RULES = (
     ),
     DependencyRule(
         "desktop/replay/",
-        ("desktop.ui", "desktop.app", "desktop.ros2", "desktop.recording"),
-    ),
-    DependencyRule(
-        "desktop/recording/",
-        ("desktop.ui", "desktop.app"),
+        ("desktop.ui", "desktop.app", "desktop.ros2"),
     ),
     DependencyRule(
         "desktop/ros2/",
         ("desktop.ui", "desktop.app"),
-    ),
-    DependencyRule(
-        "desktop/teleop/",
-        ("desktop.ui", "desktop.app", "desktop.replay", "desktop.recording"),
     ),
     DependencyRule(
         "desktop/ui/",
@@ -80,10 +70,6 @@ DEPENDENCY_RULES = (
     ),
 )
 
-# example_teleop 是人工示例入口，需要组装 UI；正式 teleop 模块仍受反向依赖门禁约束。
-DEPENDENCY_EXCEPTIONS = {
-    ("desktop/teleop/example_teleop.py", "desktop.ui"),
-}
 QT_IMPORT_PREFIXES = ("PySide", "PyQt", "pyqtgraph")
 
 
@@ -159,8 +145,6 @@ def collect_failures(root: Path = PROJECT_ROOT) -> list[str]:
             for imported in imports:
                 for forbidden in rule.forbidden_imports:
                     if not _matches_prefix(imported, forbidden):
-                        continue
-                    if (normalized, forbidden) in DEPENDENCY_EXCEPTIONS:
                         continue
                     failures.append(f"{relative} 禁止依赖 {imported}")
 

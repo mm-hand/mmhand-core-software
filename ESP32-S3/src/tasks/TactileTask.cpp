@@ -1,5 +1,6 @@
 #include "TactileTask.h"
 #include "../config/Config.h"
+#include "../hal/Crc16.h"
 #include "../hal/HalTactile.h"
 #include "../hal/HalTWAI.h"
 #include "../system/FirmwareLog.h"
@@ -76,22 +77,6 @@ void writeFilteredSummaryAxes(uint8_t* dst, const uint8_t* src) {
     dst[0] = src[0];
     dst[1] = src[1];
     dst[2] = src[2];
-}
-
-/** @brief 计算串口全量触觉包使用的CRC16-CCITT，初值0xFFFF、多项式0x1021。 */
-uint16_t crc16Ccitt(const uint8_t* data, size_t len) {
-    uint16_t crc = 0xFFFF;
-    for (size_t i = 0; i < len; i++) {
-        crc ^= (uint16_t)data[i] << 8;
-        for (uint8_t bit = 0; bit < 8; bit++) {
-            if (crc & 0x8000) {
-                crc = (uint16_t)((crc << 1) ^ 0x1021);
-            } else {
-                crc = (uint16_t)(crc << 1);
-            }
-        }
-    }
-    return crc;
 }
 
 /** @brief 按“5组×3模块×3轴”顺序展平45字节触觉摘要。 */

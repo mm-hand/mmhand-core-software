@@ -1,4 +1,5 @@
 #include "HalTWAI.h"
+#include "Crc16.h"
 #include <cstring>
 
 // 全局唯一TWAI对象，任务层直接调用。
@@ -39,21 +40,6 @@ void writeFilteredTactileSummary(uint8_t* dst, const uint8_t* src) {
     dst[2] = src[2];
 }
 
-/** @brief CRC16-CCITT逐位算法，初值0xFFFF、多项式0x1021。 */
-uint16_t crc16Ccitt(const uint8_t* data, size_t len) {
-    uint16_t crc = 0xFFFF;
-    for (size_t i = 0; i < len; i++) {
-        crc ^= (uint16_t)data[i] << 8;
-        for (uint8_t bit = 0; bit < 8; bit++) {
-            if (crc & 0x8000) {
-                crc = (uint16_t)((crc << 1) ^ 0x1021);
-            } else {
-                crc = (uint16_t)(crc << 1);
-            }
-        }
-    }
-    return crc;
-}
 } // namespace
 
 // 编译期检查CAN ID范围、分帧数量和标准帧DLC，防止改规模后静默越界。
