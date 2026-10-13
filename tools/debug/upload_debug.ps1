@@ -1,0 +1,35 @@
+[CmdletBinding()]
+param(
+    [ValidateSet("p4", "s3")]
+    [string]$Target = "p4",
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern("^COM[0-9]+$")]
+    [string]$Port
+)
+
+. (Join-Path $PSScriptRoot "debug_env.ps1") -Target $Target
+Assert-DebugEnvironment
+Assert-PathExists -Path $ElfPath -Description "Debug ELF"
+Assert-PathExists -Path $BinPath -Description "Debug application binary"
+
+Write-Host "Uploading the matching $SketchName debug firmware to $Port..." -ForegroundColor Cyan
+Write-Host "EraseFlash remains disabled; calibration and multi-turn recovery are restored from desktop JSON."
+
+& $ArduinoCli upload `
+    --port $Port `
+    --fqbn $Fqbn `
+    --input-dir $BuildPath `
+    $SketchPath
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Arduino debug upload failed with exit code $LASTEXITCODE"
+}
+
+# Record which ELF went onto the chip so gdb_batch.py can warn when the ELF
+# it would load no longer matches the flashed firmware.
+$elfHash = (Get-FileHash -LiteralPath $ElfPath -Algorithm SHA256).Hash
+$flashedMarker = Join-Path $BuildPath "$ElfName.flashed.sha256"
+"$elfHash  $ElfName" | Set-Content -LiteralPath $flashedMarker -Encoding ascii
+
+Write-Host "Arduino debug firmware upload completed." -ForegroundColor Green
+Write-Host "The ELF used by GDB is: $ElfPath"
