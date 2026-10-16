@@ -73,15 +73,21 @@ void Task_CanBus(void *pvParameters) {
         }
 
         const uint32_t nowMs = millis();
-        // DEBUG级统计每10秒归零；默认INFO等级下不会实际输出。
+        // 低频链路诊断：USB可正常采集时也能区分CAN未安装、bus-off和发送失败。
         if ((uint32_t)(nowMs - lastCanDiagPrintMs) >= 10000) {
-            FW_LOG_DEBUG_PRINTF("[S3 CAN DBG] encQueue=%lu encTxOk=%lu encTxFail=%lu busRecover=%lu firstRaw=%u err0=%u\r\n",
-                                (unsigned long)encQueueRxCount,
-                                (unsigned long)encTxOkFrames,
-                                (unsigned long)encTxFailFrames,
-                                (unsigned long)busRecoverCount,
-                                (unsigned)txData.rawAngles[0],
-                                (unsigned)txData.errorFlags[0]);
+            twai_status_info_t status = {};
+            const bool haveStatus = twai_get_status_info(&status) == ESP_OK;
+            FW_LOG_PRINTF(FW_LOG_LEVEL_INFO,
+                "[S3 CAN] state=%d encQueue=%lu txOk=%lu txFail=%lu recover=%lu busErr=%lu txErr=%lu rxErr=%lu pending=%lu\r\n",
+                haveStatus ? int(status.state) : -1,
+                (unsigned long)encQueueRxCount,
+                (unsigned long)encTxOkFrames,
+                (unsigned long)encTxFailFrames,
+                (unsigned long)busRecoverCount,
+                haveStatus ? (unsigned long)status.bus_error_count : 0UL,
+                haveStatus ? (unsigned long)status.tx_error_counter : 0UL,
+                haveStatus ? (unsigned long)status.rx_error_counter : 0UL,
+                haveStatus ? (unsigned long)status.msgs_to_tx : 0UL);
             encQueueRxCount = 0;
             encTxOkFrames = 0;
             encTxFailFrames = 0;

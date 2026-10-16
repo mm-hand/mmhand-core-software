@@ -137,7 +137,11 @@ def test_recorded_teleop_csv_can_restore_every_sent_output_frame(tmp_path) -> No
             "teleop_input",
             {
                 "host_time": 1_700_000_000.0 + index * 0.05,
-                "source": "ROS2:/raw_ik_target",
+                "source": "ROS2:/mmhand/joint_angle_deg",
+                "source_kind": "ros2_external",
+                "frame_kind": "continuous",
+                "replayable": 1,
+                "stream_id": "ros2-degree-stream",
                 "valid": 1,
                 "active_joint_mask": "0x001FFFFF",
                 "command_joint_mask": "0x001FFFFF",

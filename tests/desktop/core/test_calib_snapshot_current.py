@@ -88,7 +88,7 @@ def test_joint_calibration_current_protocol_round_trip():
     assert frame[2] == CMD_CALIB_LOAD_JOINT
     assert frame[-1] == PROTOCOL_TAIL
 
-    parsed = parse_joint_calib_snapshot_packet(frame[3:-1])
+    parsed = parse_joint_calib_snapshot_packet(frame[3:-1] + bytes(13))
     assert parsed is not None
     assert parsed["joint"] == result["joint"]
     assert parsed["mappingVersion"] == mapping_version
@@ -101,7 +101,7 @@ def test_joint_calibration_current_protocol_round_trip():
     assert parsed["currentMinDeg"] == 0.0
     assert parsed["currentMaxDeg"] == 63.0
     assert parsed["hasManualScaledV4Fields"] is True
-    assert parsed["hasAssemblyWarningFields"] is False
+    assert parsed["hasAssemblyWarningFields"] is True
     assert parsed["tendonLutValid"] is True
     assert parsed["tendonLutCount"] == 3
     assert parsed["tendonLutMotor"] == [5, 6]
@@ -133,7 +133,7 @@ def test_joint_calibration_preserves_large_logical_abs():
     }
 
     frame = build_calib_load_joint_cmd(result)
-    parsed = parse_joint_calib_snapshot_packet(frame[3:-1])
+    parsed = parse_joint_calib_snapshot_packet(frame[3:-1] + bytes(13))
 
     assert parsed is not None
     assert parsed["startServoAbs"] == 40000
@@ -241,13 +241,15 @@ def test_joint_calibration_snapshot_parses_p4_timestamped_uplink():
     payload.extend(struct.pack(">BhhHHHH", 0, 0, 0, 4353, 4500, 4459, 147))
     payload.extend(struct.pack(">I", 0x1234ABCD))
 
-    parsed = parse_joint_calib_snapshot_packet(bytes(payload))
+    from desktop.core.protocol import split_p4_timestamp, PACKET_TYPE_JOINT_CALIB_SNAPSHOT
+    body, timestamp = split_p4_timestamp(PACKET_TYPE_JOINT_CALIB_SNAPSHOT, bytes(payload))
+    parsed = parse_joint_calib_snapshot_packet(body)
 
     assert len(payload) == 206
     assert parsed is not None
     assert parsed["joint"] == 14
     assert parsed["hasAssemblyWarningFields"] is True
-    assert parsed["deviceTimestampMs"] == 0x1234ABCD
+    assert timestamp == 0x1234ABCD
 
 
 def test_direction_negative_snapshot_requires_physical_raw_endpoints():

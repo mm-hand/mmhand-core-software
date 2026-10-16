@@ -95,6 +95,44 @@ in the ignored local cache.
 
 ## 2. Write explanations
 
+### Mandatory installation and usage content
+
+Both languages' **installation / usage** section must explain the actual wiring
+and Arduino configuration from committed source packets. Cover P4 **and** S3:
+
+- GPIO: P4 host USB D−/D+, CAN TX/RX and all four servo UART RX/TX pairs from
+  `ESP32-P4/src/config/BoardConfig.h`; S3 encoder/tactile SPI, selector and CAN
+  pins from `ESP32-S3/src/config/Config.h`. Never infer wiring from an old README.
+- Which Type-C connector to use: the expansion-board **USB Serial/JTAG**
+  connector for P4 runtime communication and debug; the Waveshare **CH343**
+  connector is only a migration/recovery upload path. Cite the board adapter
+  source and `tools/debug/debug_env.ps1`.
+- Arduino IDE labels and exact FQBN options, including `USBMode=hwcdc`,
+  `CDCOnBoot=cdc`, `UploadMode=default`, `JTAGAdapter=builtin`. Derive each
+  board's options separately; a missing option must be marked unverified.
+- Debug compile and upload commands for both targets, matching BIN/ELF hashes,
+  USB adapter serial selection, and breakpoint commands from
+  `build_debug.ps1`, `upload_debug.ps1`, `start_openocd.ps1`, `gdb_batch.py`.
+  Explain hardware breakpoints on S3, deleting breakpoints before detach,
+  `gdb_memory_map disable`, and lease expiry while halted. Resuming execution
+  never authorizes automatic motor motion.
+- Current GUI navigation, the single `/mmhand/joint_angle_deg` ROS2 input
+  (`Float32MultiArray`, exactly J00–J20 in degrees), and control parameter JSON
+  location/default restoration and whole-revision P4 synchronization.
+- PaXini maintenance: direct S3 USB, scan all five finger buses, per-sensor
+  New ID 0/1/2 mapping to device IDs 1/2/3, known model independent of ID,
+  readback and power-cycle persistence, and inability to distinguish duplicate
+  IDs on one motor or tactile bus. A full three-address tactile bus cannot
+  perform a cyclic swap without first freeing a reachable address.
+
+These are mandatory explanation topics, not permission to treat this prose as
+runtime evidence. Add their committed code to `command_sources` and source
+packets. Missing evidence, a stale bundle, or omitted required content must
+block validation/publication; never fill gaps with guessed pins or commands.
+Do not publish generated README/HTML from this uncommitted refactor. Prepare
+against the selected committed revision, annotate its packets, then validate
+and publish using the workflow below.
+
 For each packet, write exactly one UTF-8 JSON file at its `annotation_path`
 (normally `docs/ai/annotations/<graph_id>.json`). These files are generated
 artifacts to keep with the guide. Copy `schema_version`, `instruction_version`,

@@ -3,11 +3,10 @@
 
 AI-agent entry point for breakpoint debugging: starts OpenOCD if it is not
 running, runs a single GDB batch session, and ALWAYS finishes with
-`delete` + `detach` so the chip is never left with armed hardware
-breakpoints. On the ESP32-P4 the hardware breakpoint triggers survive soft
-resets; a stale trigger wedges the chip into a WDT reset loop that only an
-esptool download-mode reset can clear. This script therefore offers no way
-to reset or detach with breakpoints armed.
+`delete` + `detach`, followed by direct OpenOCD cleanup and verification of
+all hardware core states. P4 orphaned triggers are cleared and read back
+before resume. No automatic device reset is performed, including on GDB
+timeout. The complete OpenOCD output is retained under .debug/.
 
 Examples:
   python tools/debug/gdb_batch.py --target p4 \
@@ -28,6 +27,9 @@ import os
 import subprocess
 import sys
 import time
+import queue
+import threading
+import socket
 from pathlib import Path
 
 TARGETS = {
@@ -36,7 +38,7 @@ TARGETS = {
         "gdb_leaf": "bin/riscv32-esp-elf-gdb.exe",
         "gdb_root": "riscv32-esp-elf-gdb",
         "elf": ".debug/p4/ESP32-P4.ino.elf",
-        "hw_breakpoints": False,
+        "hw_breakpoints": True,
     },
     "s3": {
         "board_cfg": "board/esp32s3-builtin.cfg",
@@ -82,10 +84,32 @@ def openocd_is_running() -> bool:
     return "openocd.exe" in out.lower()
 
 
+def drain_openocd_output(proc: subprocess.Popen, log_path: Path) -> queue.Queue:
+    """Keep draining after startup: a full Windows pipe blocks the GDB server."""
+    lines = queue.Queue(maxsize=256)
+
+    def read():
+        with log_path.open('w', encoding='utf-8') as log:
+            for line in proc.stdout:
+                log.write(line)
+                log.flush()
+                try:
+                    lines.put_nowait(line)
+                except queue.Full:
+                    # Startup observations are bounded; the complete log is on disk.
+                    pass
+
+    threading.Thread(target=read, name='openocd-output', daemon=True).start()
+    return lines
+
+
 def spawn_openocd(openocd_exe: Path, scripts: Path, board_cfg: str, port: int, timeout: float,
                   adapter_serial: str = "") -> subprocess.Popen:
     cmd = [
-        str(openocd_exe), "-s", str(scripts), "-f", board_cfg,
+        str(openocd_exe), "-s", str(scripts),
+        # Live attach must not run the vendor flash-access reset-halt hook.
+        # Flashing belongs to arduino-cli; all debug breakpoints are hardware.
+        "-c", "set ESP_FLASH_SIZE 0", "-f", board_cfg,
     ]
     if adapter_serial:
         # Every ESP32 USB-Serial-JTAG board shares one VID/PID; without this
@@ -96,19 +120,27 @@ def spawn_openocd(openocd_exe: Path, scripts: Path, board_cfg: str, port: int, t
     # rejects the connection outright when that probe fails.
     cmd += [
         "-c", "gdb_memory_map disable",
+        "-f", str(repo_root() / 'tools/debug/esp_debug_cleanup.tcl'),
     ]
     print(f"[gdb_batch] starting OpenOCD: {' '.join(cmd)}", flush=True)
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, errors="replace",
     )
+    log_path = repo_root() / '.debug' / f'openocd-{time.time_ns()}.log'
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = drain_openocd_output(proc, log_path)
+    print(f'[gdb_batch] OpenOCD log: {log_path}', flush=True)
     deadline = time.monotonic() + timeout
     marker = f"Listening on port {port} for gdb connections"
     printed: list[str] = []
     while time.monotonic() < deadline:
-        line = proc.stdout.readline()  # type: ignore[union-attr]
-        if not line:  # EOF: OpenOCD exited (device missing or wedged)
-            break
+        try:
+            line = lines.get(timeout=min(0.1, max(0.001, deadline - time.monotonic())))
+        except queue.Empty:
+            if proc.poll() is not None:
+                break
+            continue
         printed.append(line.rstrip())
         if marker in line:
             return proc
@@ -123,6 +155,19 @@ def sha256_of(path: Path) -> str:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest().upper()
+
+
+def validate_flashed_elf(elf: Path) -> str:
+    marker = elf.with_name(elf.name + '.flashed.sha256')
+    if not marker.is_file() or not marker.read_text().split():
+        raise ValueError('No flashed-firmware marker; upload this matched build before debugging')
+    if marker.read_text().split()[0] != sha256_of(elf):
+        raise ValueError('ELF differs from the last uploaded firmware; re-flash before debugging')
+    serial_marker = elf.with_name(elf.name + '.jtag_serial')
+    serial = serial_marker.read_text().strip() if serial_marker.is_file() else ''
+    if not serial:
+        raise ValueError('No USB-JTAG identity recorded; use upload_debug.ps1 before debugging')
+    return serial
 
 
 def build_gdb_command_list(args: argparse.Namespace, hardware_breakpoints: bool) -> list[str]:
@@ -156,39 +201,70 @@ def build_gdb_command_list(args: argparse.Namespace, hardware_breakpoints: bool)
     return cmds
 
 
+def bounded_gdb(argv: list[str], timeout: float) -> subprocess.CompletedProcess:
+    # The Windows launcher spawns a second GDB process. Killing only the
+    # launcher leaves its child holding stdout open, so subprocess.run's
+    # timeout cleanup can wait forever and never reach breakpoint rescue.
+    process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True, errors='replace')
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if os.name == 'nt':
+            subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        else:
+            process.kill()
+        process.communicate(timeout=10)
+        raise
+    return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+
+
 def run_gdb(gdb_exe: Path, elf: Path, cmds: list[str], timeout: float) -> tuple[bool, str]:
     argv = [str(gdb_exe), "-q", str(elf), "--batch"]
     for c in cmds:
         argv += ["-ex", c]
     try:
-        done = subprocess.run(
-            argv, capture_output=True, text=True,
-            errors="replace", timeout=timeout,
-        )
+        done = bounded_gdb(argv, timeout)
         output = done.stdout + done.stderr
         return done.returncode == 0, output
-    except subprocess.TimeoutExpired:
-        return False, f"[gdb_batch] GDB session timed out after {timeout}s (breakpoint never hit?)"
+    except subprocess.TimeoutExpired as exc:
+        def decode(value):
+            return value.decode(errors='replace') if isinstance(value, bytes) else (value or '')
+        partial = decode(exc.output) + decode(exc.stderr)
+        return False, partial + f"\n[gdb_batch] GDB session timed out after {timeout}s (breakpoint never hit?)"
 
 
-def rescue_after_timeout(gdb_exe: Path, port: int) -> None:
-    """A killed GDB leaves the target halted with HW breakpoints armed.
+def openocd_rpc(command: str, port: int = 6666) -> str:
+    """OpenOCD Tcl RPC terminates each request/reply with SUB (0x1a)."""
+    with socket.create_connection(('127.0.0.1', port), timeout=5) as connection:
+        connection.settimeout(10)
+        connection.sendall(command.encode('utf-8') + b'\x1a')
+        reply = bytearray()
+        while b'\x1a' not in reply:
+            chunk = connection.recv(4096)
+            if not chunk:
+                raise RuntimeError('OpenOCD closed the cleanup connection')
+            reply.extend(chunk)
+            if len(reply) > 1024 * 1024:
+                raise RuntimeError('OpenOCD cleanup reply exceeded limit')
+        return reply.split(b'\x1a')[0].decode('utf-8', errors='replace')
 
-    Run a fresh cleanup session: remove breakpoints, detach (resumes cores).
-    """
-    rescue_cmds = ["set confirm off", f"target remote :{port}", "delete", "detach"]
-    argv = [str(gdb_exe), "-q", "--batch"]
-    for c in rescue_cmds:
-        argv += ["-ex", c]
-    try:
-        done = subprocess.run(argv, capture_output=True, text=True, errors="replace", timeout=30)
-        print(done.stdout + done.stderr)
-    except subprocess.TimeoutExpired:
-        print(
-            "[gdb_batch] RESCUE FAILED: chip may still hold a stale breakpoint.\n"
-            "Recover with: esptool -p COMx chip-id   (full system reset via download mode)",
-            file=sys.stderr,
-        )
+
+def verify_target_resumed(rpc=openocd_rpc) -> str:
+    # GDB 'detached' is not evidence that SMP cores resumed. Delete EVERY
+    # trigger first (including those orphaned by a killed GDB), then resume
+    # halted cores and verify hardware state before shutting OpenOCD down.
+    result = rpc('mmhand_debug_release; '
+                 'set mm_targets [target names]; '
+                 'sleep 50; set mm_states {}; '
+                 'foreach t $mm_targets { $t arp_poll; '
+                 'lappend mm_states "$t=[$t curstate]" }; '
+                 'join $mm_states ","')
+    states = result.strip().split(',')
+    if not states or not all('=' in s and s.rsplit('=', 1)[1] == 'running' for s in states):
+        raise RuntimeError(f'Hardware resume not confirmed: {result}')
+    return result
 
 
 def main() -> int:
@@ -228,30 +304,32 @@ def main() -> int:
         sys.exit("[gdb_batch] OpenOCD/GDB not found under the esp32 Arduino core tools.")
     scripts = openocd_exe.parent.parent / "share" / "openocd" / "scripts"
 
-    marker = elf.with_name(elf.name + ".flashed.sha256")
-    if marker.is_file():
-        flashed = marker.read_text().split()[0]
-        if flashed != sha256_of(elf):
-            print("[gdb_batch] WARNING: ELF differs from the last uploaded firmware; "
-                  "rebuild + re-upload before trusting the debug session.", flush=True)
-    else:
-        print("[gdb_batch] WARNING: no flashed-firmware marker (upload_debug.ps1 has not "
-              "run for this build); the ELF may not match the chip.", flush=True)
-
-    serial_marker = elf.with_name(elf.name + ".jtag_serial")
-    jtag_serial = serial_marker.read_text().strip() if serial_marker.is_file() else ""
-    if not jtag_serial:
-        print("[gdb_batch] WARNING: no .jtag_serial marker; with more than one ESP32 board "
-              "connected OpenOCD may attach the wrong one. Re-run upload_debug.ps1 to record it.",
-              flush=True)
+    try:
+        jtag_serial = validate_flashed_elf(elf)
+    except ValueError as exc:
+        sys.exit(f'[gdb_batch] {exc}')
 
     spawned = None
+    owns_debug_session = False
+    result = 1
     try:
         if openocd_is_running():
+            expected = 'esp32p4' if args.target == 'p4' else 'esp32s3'
+            observed = openocd_rpc('target names').split()
+            if not observed or any(not name.startswith(expected + '.') for name in observed):
+                sys.exit('[gdb_batch] Existing OpenOCD targets do not match the requested board')
+            if openocd_rpc('set _FLASH_SIZE').strip() != '0':
+                sys.exit('[gdb_batch] Existing OpenOCD allows flash-attach resets; restart with start_openocd.ps1')
+            if openocd_rpc('adapter serial').strip() != jtag_serial:
+                sys.exit('[gdb_batch] Existing OpenOCD adapter identity does not match the flashed board')
+            if 'mmhand_debug_release' not in openocd_rpc('info procs mmhand_debug_release'):
+                sys.exit('[gdb_batch] Existing OpenOCD lacks the verified cleanup hook; restart with start_openocd.ps1')
+            owns_debug_session = True
             print("[gdb_batch] reusing already-running OpenOCD", flush=True)
         else:
             spawned = spawn_openocd(openocd_exe, scripts, target["board_cfg"], args.port,
                                     timeout=30.0, adapter_serial=jtag_serial)
+            owns_debug_session = True
             if args.keep_openocd:
                 print(f"[gdb_batch] OpenOCD (pid {spawned.pid}) stays running for follow-up use.", flush=True)
 
@@ -259,19 +337,36 @@ def main() -> int:
         ok, output = run_gdb(gdb_exe, elf, build_gdb_command_list(args, bool(target["hw_breakpoints"])), args.timeout)
         print(output)
         if not ok and "timed out" in output:
-            rescue_after_timeout(gdb_exe, args.port)
-            return 2
-        if not ok:
-            return 1
-        print("[gdb_batch] session finished; breakpoints removed, target resumed.", flush=True)
-        return 0
+            # A second symbol-less GDB can hit FreeRTOS thread assertions too.
+            # Cleanup below talks directly to OpenOCD, not through another GDB.
+            result = 2
+        elif ok:
+            print("[gdb_batch] GDB session finished; verifying hardware cleanup next.", flush=True)
+            result = 0
     finally:
+        if owns_debug_session:
+            try:
+                states = verify_target_resumed()
+                print(f'[gdb_batch] Hardware cleanup verified: {states}', flush=True)
+            except Exception as exc:
+                print(f'[gdb_batch] CLEANUP FAILED: {exc}; target state is unconfirmed. '
+                      'No reset was performed.', flush=True)
+                cleanup_failed = True
+            else:
+                cleanup_failed = False
+        else:
+            cleanup_failed = False
         if spawned is not None and not args.keep_openocd:
-            spawned.terminate()
+            try:
+                print(openocd_rpc('shutdown'), flush=True)
+            except (OSError, RuntimeError):
+                pass
             try:
                 spawned.wait(timeout=5)
             except subprocess.TimeoutExpired:
+                spawned.terminate()
                 spawned.kill()
+    return 3 if cleanup_failed else result
 
 
 if __name__ == "__main__":

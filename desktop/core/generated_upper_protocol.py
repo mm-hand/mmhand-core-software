@@ -9,7 +9,7 @@
 """
 
 PROTOCOL_HEADER = 0xFE
-HOST_PROTOCOL_VERSION = 2
+HOST_PROTOCOL_VERSION = 4
 PROTOCOL_TAIL = 0xFF
 DISCONNECT_SENTINEL = 32767
 P4_TIMESTAMP_BYTES = 4
@@ -18,6 +18,7 @@ MOTOR_COUNT = 27
 ENCODER_RAW_MODULO = 16384
 
 # P4 -> Desktop 包类型。
+PACKET_TYPE_SERVO_MAINTENANCE = 0x1B  # 舵机维护事务结果
 PACKET_TYPE_SENSOR = 0x01  # 21 关节映射角
 PACKET_TYPE_SERVO_ANGLE = 0x03  # 27 路 logical ABS
 PACKET_TYPE_SERVO_TELEM = 0x05  # 舵机遥测
@@ -41,17 +42,18 @@ PACKET_TYPE_MULTITURN_RESTORE_RESULT = 0x17  # 桌面 JSON 多圈恢复异步最
 PACKET_TYPE_CONTROL_TRACE = 0x18  # 同一控制周期的目标角、反馈角、舵机CMD和下位机时间
 PACKET_TYPE_SERVO_REBASE_ZERO_RESULT = 0x19  # 硬件ABS设零事务的最终token、成功失败位图；尾108字节保留区固定为0
 PACKET_TYPE_DIRECT_TARGET_RESULT = 0x1A  # 通用直控目标完成总线同步写后的事务结果，与机械到位独立
+PACKET_TYPE_CONTROL_PARAMETERS = 0x1C  # 控制参数整组应用结果及实际修订和CRC读回
+PACKET_TYPE_CONTROL_COMPONENTS = 0x1D  # 同周期PI、换向和慢反馈分量及采样分频
 
 # Desktop -> P4 命令。
-CMD_CALIBRATE = 0xCA  # 按当前 active scope 启动自动标定
+CMD_SERVO_MAINTENANCE = 0xF4  # 舵机维护会话、探测及单步改号
 CMD_ANGLE_CTRL = 0xCB  # 下发完整 21 路关节目标角，单位 degree
-CMD_START = 0xCC  # 历史启动命令，进入控制申请流程
+CMD_START = 0xCC  # 申请当前活动范围的就绪状态，供上位机标定流程使用
 CMD_STOP = 0xCD  # 停止当前运行并撤销待执行目标
 CMD_RESET = 0xCE  # 清除允许恢复的系统故障锁存
 CMD_MOTOR_POS_ABS = 0xD3  # 通用logical ABS直控：token、实际电机位图、27路int32 counts、速度和加速度；token=0不跟踪，位图=0用当前scope
 CMD_ACTIVE_SCOPE = 0xD7  # 同步 active joint/motor mask 与 control enable
 CMD_RUN_FEEDBACK = 0xD8  # 申请状态机进入负反馈运行
-CMD_PAUSE = 0xD9  # 暂停当前负反馈或直控运行
 CMD_RESTORE_MULTITURN = 0xDA  # 按位图恢复 27 路 logical ABS 多圈快照
 CMD_HOST_HEARTBEAT = 0xDC  # 刷新上位机在线计时器，不携带业务数据
 CMD_MOTOR_POS_ABS_ONE = 0xDE  # 单台 Mxx logical ABS 直控，Mxx 加 int32 counts
@@ -67,11 +69,14 @@ CMD_CLEAR_CALIBRATION_SCOPE = 0xEB  # 按电机位图清除关联关节 Auto/LUT
 CMD_SERVO_RESET_ZERO = 0xEC  # 标定前归零所选舵机硬件圈数并清除对应多圈锚点
 CMD_STATE_SYNC_REQUEST = 0xED  # 按位请求静态状态、标定快照、路由和产品指纹
 CMD_TASK_DIAG_SUBSCRIBE = 0xEE  # 打开或关闭 RTOS 任务诊断按需上报
-CMD_CONTROL_TRACE_SUBSCRIBE = 0xEF  # 打开或关闭统一下位机时间的控制跟踪流
+CMD_CONTROL_DIAGNOSTICS = 0xFA  # 控制诊断订阅：启用字节和1至100控制周期采样分频
 CMD_SERVO_REBASE_ZERO = 0xF0  # 按电机位图用0x0B校正舵机实际ABS为0，读回确认后P4 ABS同步为0
 CMD_MOTOR_ABS_ZERO = 0xF1  # Direct电机页按非空电机位图将当前位置设为ABS零点；复用硬件0x0B归零事务及0x19最终结果
 CMD_MOTOR_DIRECT_RELEASE = 0xF2  # 结束当前普通直控并保留扭矩和故障；非零token匹配已执行事务，零匹配当前直控代际
 CMD_PROTOCOL_HELLO = 0xF3  # 双向版本及控制模型与反馈拓扑契约握手，不授权运动
+CMD_CONTROL_RELEASE = 0xF6  # 释放普通控制权，不锁存急停，不恢复旧目标
+CMD_CONTROL_PARAMETERS_SET = 0xF8  # 原子设置39个控制与输入滤波参数，版本1、修订、浮点数组、CRC32
+CMD_CONTROL_PARAMETERS_QUERY = 0xF9  # 读回P4当前控制参数修订、CRC和已配置状态
 
 PROTO_ACK_STATUS_OK = 0  # 命令已同步执行成功
 PROTO_ACK_STATUS_UNSUPPORTED_MODE = 1  # 当前状态或 owner 不允许该命令
@@ -118,11 +123,12 @@ P4_TRAILING_TIMESTAMP_PACKET_TYPES = frozenset({
     PACKET_TYPE_CONTROL_TRACE,
     PACKET_TYPE_SERVO_REBASE_ZERO_RESULT,
     PACKET_TYPE_DIRECT_TARGET_RESULT,
+    PACKET_TYPE_CONTROL_COMPONENTS,
 })
 
 # 固定下行 payload 长度，不包含命令字。
 COMMAND_PAYLOAD_LENGTHS = {
-    CMD_CALIBRATE: 0,
+    CMD_SERVO_MAINTENANCE: 12,
     CMD_ANGLE_CTRL: 84,
     CMD_START: 0,
     CMD_STOP: 0,
@@ -130,7 +136,6 @@ COMMAND_PAYLOAD_LENGTHS = {
     CMD_MOTOR_POS_ABS: 119,
     CMD_ACTIVE_SCOPE: 9,
     CMD_RUN_FEEDBACK: 0,
-    CMD_PAUSE: 0,
     CMD_RESTORE_MULTITURN: 112,
     CMD_HOST_HEARTBEAT: 0,
     CMD_MOTOR_POS_ABS_ONE: 5,
@@ -146,15 +151,18 @@ COMMAND_PAYLOAD_LENGTHS = {
     CMD_SERVO_RESET_ZERO: 4,
     CMD_STATE_SYNC_REQUEST: 4,
     CMD_TASK_DIAG_SUBSCRIBE: 1,
-    CMD_CONTROL_TRACE_SUBSCRIBE: 1,
+    CMD_CONTROL_DIAGNOSTICS: 2,
     CMD_SERVO_REBASE_ZERO: 4,
     CMD_MOTOR_ABS_ZERO: 4,
     CMD_MOTOR_DIRECT_RELEASE: 4,
     CMD_PROTOCOL_HELLO: 9,
+    CMD_CONTROL_RELEASE: 0,
+    CMD_CONTROL_PARAMETERS_SET: 165,
+    CMD_CONTROL_PARAMETERS_QUERY: 0,
 }
 
 COMMANDS_REQUIRING_HANDSHAKE = frozenset({
-    CMD_CALIBRATE,
+    CMD_SERVO_MAINTENANCE,
     CMD_ANGLE_CTRL,
     CMD_START,
     CMD_MOTOR_POS_ABS,
@@ -170,4 +178,7 @@ COMMANDS_REQUIRING_HANDSHAKE = frozenset({
     CMD_SERVO_RESET_ZERO,
     CMD_SERVO_REBASE_ZERO,
     CMD_MOTOR_ABS_ZERO,
+    CMD_CONTROL_RELEASE,
+    CMD_CONTROL_PARAMETERS_SET,
+    CMD_CONTROL_PARAMETERS_QUERY,
 })

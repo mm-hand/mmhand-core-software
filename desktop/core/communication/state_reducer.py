@@ -24,13 +24,11 @@ from ..protocol import (
     CMD_PROTOCOL_HELLO,
     COMMANDS_REQUIRING_HANDSHAKE,
     CMD_ACTIVE_SCOPE,
-    CMD_CALIBRATE,
     CMD_CLEAR_CALIBRATION,
     CMD_CLEAR_CALIBRATION_SCOPE,
     CMD_MANUAL_ENCODER_REFERENCE,
     CMD_MANUAL_ENCODER_SINGLE,
 
-    CMD_PAUSE,
     CMD_RESET,
     CMD_RESTORE_MULTITURN,
     CMD_RUN_FEEDBACK,
@@ -44,7 +42,6 @@ from ..protocol import (
     PROTO_ACK_STATUS_QUEUED,
     SYSTEM_FAULT_CALIBRATION,
     SYSTEM_STATE_CALIBRATION_RUNNING,
-    SYSTEM_STATE_PAUSED,
     SYSTEM_STATE_IDLE,
 
     SYSTEM_STATE_READY,
@@ -54,6 +51,7 @@ from ..protocol import (
     TASK_RUNTIME_NAMES,
 )
 from ..session_log import log_session
+from ..protocol import parse_control_components_packet, parse_control_detail_packet
 from .ack_tracker import AckTracker
 from .event_channel import EventChannel
 from .feedback_history import TimestampedFeedbackHistory
@@ -87,6 +85,7 @@ class StateReducer:
         self._task_runtime_window_sequence: Optional[int] = None
         self._task_runtime_window_packets: dict[int, dict] = {}
         self._task_runtime_dropped_windows = 0
+        self._control_parts = {}
 
     @property
     def last_model(self) -> Optional[HandModel]:
@@ -106,6 +105,7 @@ class StateReducer:
         self._task_runtime_window_sequence = None
         self._task_runtime_window_packets.clear()
         self._task_runtime_dropped_windows = 0
+        self._control_parts.clear()
 
     def begin(self) -> tuple[HandModel, float]:
         """创建本批数据的工作副本，并继承不能被单包覆盖的通信有效位。"""
@@ -194,6 +194,10 @@ class StateReducer:
                 emitted = self._apply_joint_calibration_snapshot(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
             elif packet_kind == "calibration_diagnostic":
                 emitted = self._apply_calibration_diagnostic(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
+            elif packet_kind == "control_components":
+                part = parse_control_components_packet(payload)
+                if part is not None:
+                    self._cache_control_part(packet_p4_time_ms, part, 'components')
             elif packet_kind == "control_trace":
                 emitted = self._apply_control_trace(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
             elif packet_kind == "task_diagnostic":
@@ -797,9 +801,16 @@ class StateReducer:
     def _apply_control_trace(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one control_trace packet within the RX batch boundary."""
         emitted = False
+        detail = parse_control_detail_packet(payload)
+        if detail is not None:
+            self._cache_control_part(packet_p4_time_ms, detail, 'detail')
+            return False
         parsed = owner._parse_protocol_payload("parse_control_trace_packet", payload)
         if parsed is not None and packet_p4_time_ms is not None:
             model.has_control_trace = True
+            parts = self._control_parts.pop((packet_p4_time_ms, parsed['sequence']), {})
+            model.control_trace_components = parts.get('components', {})
+            model.control_trace_detail = parts.get('detail', {})
             model.control_trace_sequence = int(parsed["sequence"])
             model.control_trace_target_token = int(parsed["target_token"])
             model.control_trace_p4_time_ms = int(packet_p4_time_ms)
@@ -826,6 +837,11 @@ class StateReducer:
             model.control_trace_last_rx_ts = time.time()
             emitted = True
         return emitted
+
+    def _cache_control_part(self, timestamp, part, kind):
+        self._control_parts.setdefault((timestamp, part['sequence']), {})[kind] = part
+        while len(self._control_parts) > 32:
+            self._control_parts.pop(next(iter(self._control_parts)))
 
     def _apply_task_diagnostic(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one task_diagnostic packet within the RX batch boundary."""
@@ -966,7 +982,6 @@ class StateReducer:
         if parsed is not None:
             ack_cmd, applied_mode, status = parsed
             if ack_cmd in (
-                CMD_CALIBRATE,
                 CMD_CLEAR_CALIBRATION,
                 CMD_CLEAR_CALIBRATION_SCOPE,
                 CMD_SERVO_RESET_ZERO,
@@ -1025,11 +1040,9 @@ class StateReducer:
                 CMD_START,
                 CMD_STOP,
                 CMD_RESET,
-                CMD_CALIBRATE,
                 CMD_ACTIVE_SCOPE,
                 CMD_RUN_FEEDBACK,
-                CMD_PAUSE,
-                CMD_RESTORE_MULTITURN,
+                            CMD_RESTORE_MULTITURN,
                 CMD_MANUAL_ENCODER_REFERENCE,
                 CMD_MANUAL_ENCODER_SINGLE,
                 CMD_CLEAR_CALIBRATION,
@@ -1048,16 +1061,10 @@ class StateReducer:
                     model.system_state = SYSTEM_STATE_UNCONTROLLABLE
                     if model.calib_status in ("PENDING", "RUNNING"):
                         model.calib_status = "IDLE"
-                elif ack_cmd == CMD_CALIBRATE:
-                    model.control_enabled = False
-                    model.system_state = SYSTEM_STATE_CALIBRATION_RUNNING
                 elif ack_cmd == CMD_ACTIVE_SCOPE:
                     pass
                 elif ack_cmd == CMD_RUN_FEEDBACK:
                     model.control_enabled = int(applied_mode) == SYSTEM_STATE_RUN_FEEDBACK
-                elif ack_cmd == CMD_PAUSE:
-                    model.control_enabled = False
-                    model.system_state = SYSTEM_STATE_PAUSED
                 elif ack_cmd == CMD_RESTORE_MULTITURN:
                     pass
                 elif ack_cmd in (

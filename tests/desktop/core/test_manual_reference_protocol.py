@@ -50,14 +50,13 @@ def test_clear_manual_reference_uses_same_fixed_wire_length():
     assert payload == bytes(len(payload))
 
 
-def test_system_status_parses_manual_nvs_extension_and_old_payload():
+def test_system_status_requires_current_length_and_parses_manual_fields():
     legacy = bytearray(43)
     parsed_legacy = parse_system_status_packet(bytes(legacy))
-    assert parsed_legacy is not None
-    assert parsed_legacy[-1] is False
+    assert parsed_legacy is None
 
     extended = legacy + struct.pack(">III", 0x001FFFFF, 0x12345678, 7) + bytes([1])
-    parsed = parse_system_status_packet(bytes(extended))
+    parsed = parse_system_status_packet(bytes(extended).ljust(173, b"\x00"))
     assert parsed is not None
     assert parsed[19:24] == (
         0x001FFFFF,
@@ -79,7 +78,7 @@ def test_system_status_parses_calibration_assembly_warning_extension():
     for offset in offsets:
         payload.extend(struct.pack(">h", offset))
 
-    parsed = parse_system_status_packet(bytes(payload))
+    parsed = parse_system_status_packet(bytes(payload).ljust(173, b"\x00"))
 
     assert parsed is not None
     assert parsed[4] == 4
@@ -93,7 +92,7 @@ def test_system_status_parses_feedback_admission_extension():
     payload.extend(struct.pack(">I", 42))
     payload.extend(bytes([3, 4]))
 
-    parsed = parse_system_status_packet(bytes(payload))
+    parsed = parse_system_status_packet(bytes(payload).ljust(173, b"\x00"))
 
     assert parsed is not None
     # The calibration warning fields deliberately remain at the tuple tail for
@@ -108,7 +107,7 @@ def test_system_status_parses_feedback_collision_extension():
     payload.extend(struct.pack(">II", dual_hold_mask, 9))
     payload.extend(struct.pack(">I", armed_mask))
 
-    parsed = parse_system_status_packet(bytes(payload))
+    parsed = parse_system_status_packet(bytes(payload).ljust(173, b"\x00"))
 
     assert parsed is not None
     assert parsed[-7:-3] == (
@@ -133,7 +132,7 @@ def test_system_status_parses_servo_reset_zero_extension():
     payload[168:172] = struct.pack(">I", invalidated_joint_mask)
     payload[172] = 3
 
-    parsed = parse_system_status_packet(bytes(payload))
+    parsed = parse_system_status_packet(bytes(payload).ljust(173, b"\x00"))
 
     assert parsed is not None
     assert parsed[36:44] == (

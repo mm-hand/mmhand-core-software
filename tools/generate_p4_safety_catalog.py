@@ -193,8 +193,8 @@ RULE_BINDING_OVERRIDES: dict[str, RuleBinding] = {
         "tasks/motion_control/MotionControlService.cpp", "ControlCollisionHold",
         "safety/policies/CollisionSafetyPolicy.cpp", "holdReleased = true"),
     "ControlLutBoundaryClamp": binding(
-        "safety/policies/ControlBoundarySafetyPolicy.cpp", "clampAbsToBoundary",
-        "tasks/motion_control/DualTendonControl.cpp", "clampAbsToBoundary",
+        "control/JointFeedbackController.cpp", "out.boundaryClamped = true",
+        "tasks/motion_control/MotionControlService.cpp", "result.boundaryClamped",
         "tasks/motion_control/MotionControlService.cpp", "ControlLutBoundaryClamp",
         "tasks/motion_control/MotionControlService.cpp", "lutClampEventLatchedBitmap"),
     "ControlJointTargetClamp": binding(

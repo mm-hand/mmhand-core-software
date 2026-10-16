@@ -23,6 +23,7 @@ desktop/resources/config/device_state/
 ESP32-P4/debug.log
 
 # Local analysis/cache artifacts
+.cache/
 .ai-worktrees/
 docs/ai/.explain_cache/
 .understand-anything/

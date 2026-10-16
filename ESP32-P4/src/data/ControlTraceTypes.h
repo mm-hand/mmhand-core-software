@@ -29,6 +29,11 @@ struct ControlTraceData_t {
     int32_t motorActualAbs[SERVO_TOTAL_NUM];
     int16_t pidCounts[SERVO_TOTAL_NUM]; ///< 四舍五入并饱和到 int16 的双腱 PID 修正。
     int16_t recoveryCounts[SERVO_TOTAL_NUM]; ///< 实际叠加的整数恢复量。
+    uint8_t sampleDivisor;
+    int16_t proportionalCounts[SERVO_TOTAL_NUM];
+    int16_t integralCounts[SERVO_TOTAL_NUM];
+    int16_t reversalCounts[SERVO_TOTAL_NUM];
+    int16_t slowDegCenti[ENCODER_TOTAL_NUM];
 };
 
 #endif // MMHAND_CONTROL_TRACE_TYPES_H

@@ -1,4 +1,7 @@
 #include <Arduino.h>
+#if !ARDUINO_USB_MODE || !ARDUINO_USB_CDC_ON_BOOT
+#error "S3 requires Hardware CDC/JTAG and USB CDC On Boot Enabled"
+#endif
 #include "src/config/Config.h"
 #include "src/hal/HalEncoders.h"
 #include "src/hal/HalTactile.h"
@@ -18,6 +21,10 @@ constexpr uint32_t kBootSettleDelayMs = 5000;
  * @note 外设初始化完成后，实际周期工作均由FreeRTOS任务承担。
  */
 void setup() {
+    // USB is an optional observer. A closed/unread CDC port must never stall
+    // sensor acquisition or CAN, including the low-rate diagnostic writers.
+    Serial.setTxBufferSize(4096);
+    Serial.setTxTimeoutMs(0);
     Serial.begin(921600);
 #if ENABLE_TACTILE_TASK
     // 延时前先把触觉片选线置为非选中，防止上电阶段误选多个传感器。

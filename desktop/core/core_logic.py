@@ -45,7 +45,6 @@ from desktop.paths import CALIB_LOAD_SNAPSHOT_PATH, MULTITURN_RUNTIME_PATH, CONF
 from .protocol import (
     HOST_PROTOCOL_VERSION,
     CMD_ACTIVE_SCOPE,
-    CMD_CALIBRATE,
     CMD_CLEAR_CALIBRATION_SCOPE,
     CMD_CALIB_LOAD_JOINT,
     CMD_CALIB_LOAD_LIMITS,
@@ -70,7 +69,6 @@ from .protocol import (
     SYSTEM_STATE_RECOVERY_REQUIRED,
     SYSTEM_STATE_RUN_FEEDBACK,
     SYSTEM_STATE_READY,
-    SYSTEM_STATE_PAUSED,
     SYSTEM_STATE_RUN_DIRECT,
     SERVO_TARGET_OWNER_CONTROL,
 
@@ -369,7 +367,7 @@ class HandController:
             state.copy_state_from(self.current_state)
         targets = list(state.servo_angles)
         age = time.time() - state.servo_abs_last_rx_ts
-        p4_age = (state.p4_time_ms - state.servo_feedback_p4_time_ms) & 0xFFFFFFFF
+        p4_age = ((state.p4_time_ms - state.servo_feedback_p4_time_ms + 0x80000000) & 0xFFFFFFFF) - 0x80000000
         valid = state.servo_online_bitmap & state.servo_route_controllable_bitmap
         reason = ""
         if not self.comm or not mask:
@@ -378,7 +376,7 @@ class HandController:
             reason = "full route scan is running"
         elif not state.has_servo_angle_data or not state.has_servo_route_status:
             reason = "waiting for logical ABS and routes"
-        elif not state.has_p4_time or not 0 <= age <= 0.5 or p4_age > 500:
+        elif not state.has_p4_time or not 0 <= age <= 0.5 or abs(p4_age) > 500:
             reason = "logical ABS feedback is stale"
         elif mask & (~valid | state.multi_turn_unknown_bitmap):
             reason = "selected motor offline, unroutable or Turn Unknown"
@@ -388,11 +386,43 @@ class HandController:
         ):
             reason = "current ABS outside command range; refusing a clamped hold"
         if not reason:
+            if (state.system_state == SYSTEM_STATE_RUN_DIRECT and state.control_enabled
+                    and state.servo_target_owner == 1 and state.active_motor_mask == mask):
+                return True, 'Direct control is already enabled', targets
             self.invalidate_direct_commands()
             self.set_control_mode(ControlMode.DIRECT_MOTOR)
-            self.start()
-            if not self.comm.send_command(("motor_pos_abs", targets)):
-                reason = "hold command was not queued"
+            generation = self._coordinate_cancel_generation
+            with self._coordinate_command_lock:
+                if generation != self._coordinate_cancel_generation:
+                    return False, 'Direct enable cancelled', targets
+                state = self._coordinate_state()
+                if (not 0 <= time.time() - state.servo_abs_last_rx_ts <= .5 or
+                    mask & (~state.servo_online_bitmap | ~state.servo_route_controllable_bitmap | state.multi_turn_unknown_bitmap)):
+
+                    return False, 'Current ABS became stale or unavailable', targets
+                targets = list(state.servo_angles)
+                if any(targets[i] != self._clamp_motor_abs_for_current_session(i, targets[i])
+                       for i in range(MOTOR_COUNT) if mask & (1 << i)):
+
+                    return False, 'Current ABS would require clamping', targets
+                token = (state.direct_target_token + 1) & 0xffffffff or 1
+                submitted_at = time.time()
+                self.start()
+                if not self.comm.send_command(('motor_pos_abs', token, mask, targets, 400, 20)):
+                    return False, 'Current-position hold was not queued', targets
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline and generation == self._coordinate_cancel_generation:
+                state = self._coordinate_state()
+                if (state.direct_target_token == token and state.direct_target_result_rx_ts >= submitted_at):
+                    if state.direct_target_status != 2 or state.direct_target_applied_mask != mask or state.direct_target_rejected_mask:
+                        return False, 'P4 rejected current-position hold', targets
+                    if (state.control_enabled and state.servo_target_owner == 1 and
+                            state.system_state == SYSTEM_STATE_RUN_DIRECT and state.active_motor_mask == mask
+                            and 0 <= time.time() - state.system_status_last_rx_ts <= .6):
+                        return True, 'Selected motors enabled; holding current ABS', targets
+                time.sleep(.01)
+            reason = 'Direct enable execution was not confirmed'
+
         selected = {i: targets[i] for i in range(min(len(targets), MOTOR_COUNT)) if mask & (1 << i)}
         log_session("DIRECT_ENABLE", f"mask=0x{mask:08X} feedback_ms={state.servo_feedback_p4_time_ms} "
                     f"age_s={age:.3f} ABS={selected} hold={selected if not reason else {}} reject={reason or 'none'}")
@@ -414,24 +444,6 @@ class HandController:
         except Exception:
             return 0
 
-    def pause(self):
-        """Pause firmware output without clearing the cached target."""
-        with self._coordinate_command_lock:
-            self._coordinate_cancel_generation += 1
-            self._multiturn_restore_cancelled = True
-        with self.state_lock:
-            host_running = self._host_calibration_overlay.get('calib_status') in (
-                'PENDING', 'RUNNING',
-            )
-            self._cancel_host_calibration()
-            self._host_calibration_overlay = {}
-            if host_running:
-                self.current_state.calib_status = 'IDLE'
-        with self._coordinate_command_lock:
-            if self.comm:
-                self.comm.send_command("pause")
-        self._paused = True
-        self._started = False
 
 
     def initialize(self, comm_port: str) -> bool:
@@ -1368,7 +1380,7 @@ class HandController:
                 return (False, "multi-turn restore result remains unknown after 3 queries: "
                         + self._format_motor_mask(unresolved_mask))
             if cancelled and unknown_mask:
-                return (False, "multi-turn restore cancelled by STOP or PAUSE: "
+                return (False, "multi-turn restore cancelled by STOP: "
                         + self._format_motor_mask(unknown_mask))
             saved_mask, _saved_abs, _saved_raw, identity_ready = (
                 self._multiturn_recovery_anchors(state)
@@ -1473,7 +1485,6 @@ class HandController:
                             SYSTEM_STATE_RUN_DIRECT,
                         )
 
-                        self._paused = int(new_model.system_state) == SYSTEM_STATE_PAUSED
                 for cb in self.update_callbacks:
                     try:
                         cb(self.current_state)
@@ -1742,13 +1753,17 @@ class HandController:
     ) -> bool:
         """Write one joint while preserving all existing Manual entries."""
         self.last_manual_write_phase = 'INSTALL_FAILED'
+        def failed(phase):
+            self.last_manual_write_phase = phase
+            log_session('MANUAL', f'J{joint:02d} endpoint write failed at {phase}')
+            return False
         joint = int(joint)
         if not 0 <= joint < ENCODER_COUNT or not self.comm or cancelled():
             return False
         if not self.query_manual_encoder_references(
             MANUAL_REFERENCE_ACK_TIMEOUT_S
         ):
-            return False
+            return failed('QUERY_FAILED')
         with self.state_lock:
             state = self.current_state
             expected_mask = int(
@@ -1782,12 +1797,12 @@ class HandController:
             PROTO_ACK_STATUS_OK,
             PROTO_ACK_STATUS_QUEUED,
         ):
-            return False
+            return failed('ACK_TIMEOUT' if ack is None else f'ACK_REJECTED_{int(ack[2])}')
         if (
             int(ack[2]) == PROTO_ACK_STATUS_QUEUED
             and not self._wait_for_manual_reference_commit_result(sent_at)
         ):
-            return False
+            return failed('COMMIT_FAILED')
         expected_crc = manual_encoder_reference_crc(expected_min, expected_max)
         verified = self._verify_manual_encoder_readback(
             expected_mask,
@@ -1795,6 +1810,8 @@ class HandController:
             expected_max,
             expected_crc,
         )
+        if not verified:
+            return failed('READBACK_FAILED')
         if verified and not cancelled():
             self.last_manual_write_phase = 'INSTALLED_NOT_SAVED'
             try:
@@ -2923,7 +2940,7 @@ class HandController:
 
 
     def stop(self):
-        """停止：暂停时也可发送，便于紧急停"""
+        """撤销待发目标和标定事务，向P4发送STOP。"""
         with self._coordinate_command_lock:
             self._coordinate_cancel_generation += 1
             self._multiturn_restore_cancelled = True
@@ -2938,7 +2955,7 @@ class HandController:
 
 
     def reset(self):
-        """发送重置指令；暂停时不发送"""
+        """发送显式故障复位指令，不恢复旧目标。"""
         self._cancel_host_calibration()
         self._host_calibration_overlay = {}
         with self._coordinate_command_lock:

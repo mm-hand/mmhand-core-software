@@ -651,7 +651,7 @@ bool stepS3CanRxService(SystemRuntimeContext* sharedData, uint32_t nowMs)
         if ((uint32_t)(nowMs - lastCanDiagPrintMs) >= 10000) {
             const CanControllerStatus statusInfo = canDriver.status();
             const bool hasStatus = statusInfo.valid != 0;
-            FW_LOG_DEBUG_PRINTF("[CAN RX DBG] encFrames=%lu encSnap=%lu encCrcErr=%lu tacFrames=%lu tacSnap=%lu tacCrcErr=%lu other=%lu lastId=0x%03lX valid=%u tsAge=%lu firstRaw=%u err0=%u twai=%d rxQ=%lu rxMiss=%lu rxOverrun=%lu busErr=%lu rxErr=%lu txErr=%lu\r\n",
+            FW_LOG_INFO_PRINTF("[CAN RX] encFrames=%lu encSnap=%lu encCrcErr=%lu tacFrames=%lu tacSnap=%lu tacCrcErr=%lu other=%lu lastId=0x%03lX valid=%u tsAge=%lu firstRaw=%u err0=%u\r\n",
                                 (unsigned long)encFrameCount,
                                 (unsigned long)encSnapshotCount,
                                 (unsigned long)encoderCrcErrorCount,
@@ -663,7 +663,8 @@ bool stepS3CanRxService(SystemRuntimeContext* sharedData, uint32_t nowMs)
                                 rxBuffer.isValid ? 1U : 0U,
                                 rxBuffer.isValid ? (unsigned long)(nowMs - rxBuffer.timestamp) : 0UL,
                                 (unsigned)rxBuffer.encoderValues[0],
-                                (unsigned)rxBuffer.errorFlags[0],
+                                (unsigned)rxBuffer.errorFlags[0]);
+            FW_LOG_INFO_PRINTF("[CAN STATUS] state=%d rxQ=%lu rxMiss=%lu rxOverrun=%lu busErr=%lu rxErr=%lu txErr=%lu\r\n",
                                 hasStatus ? (int)statusInfo.state : -1,
                                 hasStatus ? (unsigned long)statusInfo.pendingRxCount : 0UL,
                                 hasStatus ? (unsigned long)statusInfo.rxMissedCount : 0UL,

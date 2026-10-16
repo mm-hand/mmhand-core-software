@@ -182,6 +182,10 @@ def _validate_item(item: dict, card: dict, allowed: set[str], own: set[str],
                 raise ValueError(f"Explanation field too short ({lang}.{field}): {card['id']}")
         if _contains_generic_text(lang, values):
             raise ValueError(f"Generic template explanation ({lang}): {card['id']}")
+        text = ' '.join(values.values())
+        for term in card.get('details', {}).get('required_terms', []):
+            if term not in text:
+                raise ValueError(f"Required installation/use content omitted ({lang}): {card['id']}: {term}")
         if is_conditional(card):
             condition = values["condition"]
             if len(condition.strip()) < 24:

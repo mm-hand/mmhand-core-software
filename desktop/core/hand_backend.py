@@ -27,6 +27,7 @@ from .protocol import ControlMode, ENCODER_COUNT, directed_encoder_delta
 from desktop.paths import CALIB_LOAD_SNAPSHOT_PATH
 from .calibration_snapshot import CalibrationSnapshotError, joint_calib_result_tendon_lut_abs_ranges
 from .session_log import log_session
+from .teleop_input import TeleopInputFilter
 
 
 StateCallback = Callable[[HandModel], None]
@@ -126,6 +127,7 @@ class HandBackend(ApplicationActions):
         self._ros2_armed_scope: Optional[Tuple[int, int, bool]] = None
         self._ros2_last_drop_reason = ""
         self._ros2_last_drop_log_ts = 0.0
+        self._ros2_input_filter = TeleopInputFilter(count=ENCODER_COUNT)
         # generation令牌把Replay检查与每帧入队绑定，其他运动源可立即使旧令牌失效。
         self._replay_motion_lock = threading.RLock()
         self._replay_motion_generation = 0
@@ -140,6 +142,7 @@ class HandBackend(ApplicationActions):
             self._workspace_mapping_version, self._workspace_urdf_crc = 0, 0
         self._joint_target_callback_lock = threading.Lock()
         self._init_application_actions()
+        self._update_input_filter()
         self._ensure_controller_callback_registered()
 
     @property
@@ -604,6 +607,7 @@ class HandBackend(ApplicationActions):
             was_armed = self._ros2_output_armed
             self._ros2_output_armed = False
             self._ros2_armed_scope = None
+            self._ros2_input_filter.reset()
             if was_armed:
                 log_session("ROS2_GATE", f"DISARM reason={reason or 'requested'}")
             return True, "ROS2 joint output disabled"
@@ -625,6 +629,7 @@ class HandBackend(ApplicationActions):
 
         self._ros2_output_armed = True
         self._ros2_armed_scope = scope
+        self._ros2_input_filter.reset()
         self._ros2_last_drop_reason = ""
         log_session(
             "ROS2_GATE",
@@ -638,7 +643,7 @@ class HandBackend(ApplicationActions):
         return True, "ROS2 input enabled; waiting for a valid P4 state"
 
     def set_ros2_output_armed(self, armed: bool, *, reason: str = "") -> Tuple[bool, str]:
-        """授权或撤销两条 ROS2 21 关节角输入链路。
+        """授权或撤销 /mmhand/joint_angle_deg 的 21 关节角输入链路。
 
         该授权只由独立 ROS2 INPUT 或 CLI 的独立按键建立，普通控制 ENABLE
         不得隐式放行外部目标。P4 在线、READY 和作用域一致性仍由每一帧发送前
@@ -729,9 +734,14 @@ class HandBackend(ApplicationActions):
                     # 后续恰逢 UI 切换 scope，旧遥操帧也不能作用到新选中的关节。
                     ros2_joint_mask = int(self._ros2_armed_scope[1])
                     self._ros2_last_drop_reason = ""
+                    # perf_counter also has sub-millisecond resolution on
+                    # Windows Python <3.13; monotonic may repeat for 15ms.
+                    filtered = self._ros2_input_filter.update_degrees(values, time.perf_counter())
+                    if filtered is None:
+                        return JointCommandResult(sent=False, message='ROS2 input filter rejected this frame', targets=values)
                     self.set_control_mode(ControlMode.JOINT_ANGLE)
                     return self.send_joint_targets(
-                        values,
+                        filtered,
                         source=source,
                         live=True,
                         input_space=input_space,
@@ -871,18 +881,7 @@ class HandBackend(ApplicationActions):
     def invalidate_joint_commands(self) -> int:
         return self._run_user_output(lambda: self._controller.invalidate_joint_commands(), 0)
 
-    def pause(self) -> None:
-        self._manual_cancel.set()
-        with self._ros2_output_lock:
-            with self._replay_motion_lock:
-                self.cancel_replay_motion("pause")
-                self._set_ros2_output_armed_locked(False, reason="pause")
-                if self._calibration_workflow.is_host_calibration_active():
-                    self._calibration_workflow.cancel()
-                self._controller.pause()
 
-    def resume(self) -> None:
-        self._run_user_output(lambda: self._controller.resume())
 
     def set_target_angles(self, angles: List[float]) -> JointCommandResult:
         return self.send_joint_targets(angles, source="Backend set_target_angles", live=False)
@@ -977,11 +976,12 @@ class HandBackend(ApplicationActions):
         )
 
     def set_manual_encoder_reference(
-        self, joint: int, manual_min_raw: int, manual_max_raw: int
+        self, joint: int, manual_min_raw: int, manual_max_raw: int, *, cancelled=lambda: False
     ) -> bool:
         return self._run_manual_transaction(
-            lambda cancelled: self._controller.set_manual_encoder_reference(
-                joint, manual_min_raw, manual_max_raw, cancelled=cancelled
+            lambda transaction_cancelled: self._controller.set_manual_encoder_reference(
+                joint, manual_min_raw, manual_max_raw,
+                cancelled=lambda: transaction_cancelled() or cancelled()
             ),
             False,
         )

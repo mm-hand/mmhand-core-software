@@ -32,6 +32,7 @@ struct InterTaskChannels {
     MessageChannel<MappedAngleData_t> mappedAngleQueue; ///< 21 关节角快照。
     MessageChannel<ControlTraceData_t> controlTraceQueue; ///< 订阅期间逐周期 FIFO，不阻塞控制。
     uint8_t controlTraceRecordingEnabled = 0; ///< HostComm 写，控制任务原子读取。
+    uint8_t controlTraceDivisor = 5;
     MessageChannel<RemoteTactileData_t> tactileQueue; ///< 顺序触觉数据。
     SemaphoreHandle_t commandStateMutex; ///< 保护目标角和直控命令的成组读写。
 };

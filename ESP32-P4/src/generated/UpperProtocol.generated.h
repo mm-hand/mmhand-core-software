@@ -11,7 +11,7 @@
 #include "../config/DimensionsConfig.h"
 
 inline constexpr uint8_t PROTOCOL_HEADER = 0xFE;
-inline constexpr uint8_t kHostProtocolVersion = 2;
+inline constexpr uint8_t kHostProtocolVersion = 4;
 inline constexpr uint8_t PROTOCOL_TAIL = 0xFF;
 inline constexpr int16_t PROTOCOL_DISCONNECT_SENTINEL = 32767;
 inline constexpr size_t kP4TimestampBytes = 4;
@@ -20,6 +20,7 @@ static_assert(ENCODER_TOTAL_NUM == 21, "Protocol joint count drift");
 static_assert(SERVO_TOTAL_NUM == 27, "Protocol motor count drift");
 
 // P4 -> Desktop 包类型。
+inline constexpr uint8_t PACKET_TYPE_SERVO_MAINTENANCE = 0x1B; ///< 舵机维护事务结果
 inline constexpr uint8_t PACKET_TYPE_SENSOR = 0x01; ///< 21 关节映射角
 inline constexpr uint8_t PACKET_TYPE_SERVO_ANGLE = 0x03; ///< 27 路 logical ABS
 inline constexpr uint8_t PACKET_TYPE_SERVO_TELEM = 0x05; ///< 舵机遥测
@@ -43,17 +44,18 @@ inline constexpr uint8_t PACKET_TYPE_MULTITURN_RESTORE_RESULT = 0x17; ///< 桌�
 inline constexpr uint8_t PACKET_TYPE_CONTROL_TRACE = 0x18; ///< 同一控制周期的目标角、反馈角、舵机CMD和下位机时间
 inline constexpr uint8_t PACKET_TYPE_SERVO_REBASE_ZERO_RESULT = 0x19; ///< 硬件ABS设零事务的最终token、成功失败位图；尾108字节保留区固定为0
 inline constexpr uint8_t PACKET_TYPE_DIRECT_TARGET_RESULT = 0x1A; ///< 通用直控目标完成总线同步写后的事务结果，与机械到位独立
+inline constexpr uint8_t PACKET_TYPE_CONTROL_PARAMETERS = 0x1C; ///< 控制参数整组应用结果及实际修订和CRC读回
+inline constexpr uint8_t PACKET_TYPE_CONTROL_COMPONENTS = 0x1D; ///< 同周期PI、换向和慢反馈分量及采样分频
 
 // Desktop -> P4 命令及 ACK 状态。
-inline constexpr uint8_t CMD_CALIBRATE = 0xCA; ///< 按当前 active scope 启动自动标定
+inline constexpr uint8_t CMD_SERVO_MAINTENANCE = 0xF4; ///< 舵机维护会话、探测及单步改号
 inline constexpr uint8_t CMD_ANGLE_CTRL = 0xCB; ///< 下发完整 21 路关节目标角，单位 degree
-inline constexpr uint8_t CMD_START = 0xCC; ///< 历史启动命令，进入控制申请流程
+inline constexpr uint8_t CMD_START = 0xCC; ///< 申请当前活动范围的就绪状态，供上位机标定流程使用
 inline constexpr uint8_t CMD_STOP = 0xCD; ///< 停止当前运行并撤销待执行目标
 inline constexpr uint8_t CMD_RESET = 0xCE; ///< 清除允许恢复的系统故障锁存
 inline constexpr uint8_t CMD_MOTOR_POS_ABS = 0xD3; ///< 通用logical ABS直控：token、实际电机位图、27路int32 counts、速度和加速度；token=0不跟踪，位图=0用当前scope
 inline constexpr uint8_t CMD_ACTIVE_SCOPE = 0xD7; ///< 同步 active joint/motor mask 与 control enable
 inline constexpr uint8_t CMD_RUN_FEEDBACK = 0xD8; ///< 申请状态机进入负反馈运行
-inline constexpr uint8_t CMD_PAUSE = 0xD9; ///< 暂停当前负反馈或直控运行
 inline constexpr uint8_t CMD_RESTORE_MULTITURN = 0xDA; ///< 按位图恢复 27 路 logical ABS 多圈快照
 inline constexpr uint8_t CMD_HOST_HEARTBEAT = 0xDC; ///< 刷新上位机在线计时器，不携带业务数据
 inline constexpr uint8_t CMD_MOTOR_POS_ABS_ONE = 0xDE; ///< 单台 Mxx logical ABS 直控，Mxx 加 int32 counts
@@ -69,11 +71,14 @@ inline constexpr uint8_t CMD_CLEAR_CALIBRATION_SCOPE = 0xEB; ///< 按电机位�
 inline constexpr uint8_t CMD_SERVO_RESET_ZERO = 0xEC; ///< 标定前归零所选舵机硬件圈数并清除对应多圈锚点
 inline constexpr uint8_t CMD_STATE_SYNC_REQUEST = 0xED; ///< 按位请求静态状态、标定快照、路由和产品指纹
 inline constexpr uint8_t CMD_TASK_DIAG_SUBSCRIBE = 0xEE; ///< 打开或关闭 RTOS 任务诊断按需上报
-inline constexpr uint8_t CMD_CONTROL_TRACE_SUBSCRIBE = 0xEF; ///< 打开或关闭统一下位机时间的控制跟踪流
+inline constexpr uint8_t CMD_CONTROL_DIAGNOSTICS = 0xFA; ///< 控制诊断订阅：启用字节和1至100控制周期采样分频
 inline constexpr uint8_t CMD_SERVO_REBASE_ZERO = 0xF0; ///< 按电机位图用0x0B校正舵机实际ABS为0，读回确认后P4 ABS同步为0
 inline constexpr uint8_t CMD_MOTOR_ABS_ZERO = 0xF1; ///< Direct电机页按非空电机位图将当前位置设为ABS零点；复用硬件0x0B归零事务及0x19最终结果
 inline constexpr uint8_t CMD_MOTOR_DIRECT_RELEASE = 0xF2; ///< 结束当前普通直控并保留扭矩和故障；非零token匹配已执行事务，零匹配当前直控代际
 inline constexpr uint8_t CMD_PROTOCOL_HELLO = 0xF3; ///< 双向版本及控制模型与反馈拓扑契约握手，不授权运动
+inline constexpr uint8_t CMD_CONTROL_RELEASE = 0xF6; ///< 释放普通控制权，不锁存急停，不恢复旧目标
+inline constexpr uint8_t CMD_CONTROL_PARAMETERS_SET = 0xF8; ///< 原子设置39个控制与输入滤波参数，版本1、修订、浮点数组、CRC32
+inline constexpr uint8_t CMD_CONTROL_PARAMETERS_QUERY = 0xF9; ///< 读回P4当前控制参数修订、CRC和已配置状态
 inline constexpr uint8_t PROTO_ACK_STATUS_OK = 0; ///< 命令已同步执行成功
 inline constexpr uint8_t PROTO_ACK_STATUS_UNSUPPORTED_MODE = 1; ///< 当前状态或 owner 不允许该命令
 inline constexpr uint8_t PROTO_ACK_STATUS_QUEUED = 2; ///< 异步请求已入队，最终结果看状态包
@@ -112,7 +117,7 @@ inline constexpr size_t kServoRebaseZeroPayloadBytes = 4;
 inline constexpr size_t kMotorDirectReleasePayloadBytes = 4;
 inline constexpr size_t kStateSyncRequestPayloadBytes = 4;
 inline constexpr size_t kTaskDiagSubscribePayloadBytes = 1;
-inline constexpr size_t kControlTraceSubscribePayloadBytes = 1;
+inline constexpr size_t kControlDiagnosticsPayloadBytes = 2;
 inline constexpr size_t kSerialRxBufferSize = 1024;
 inline constexpr int32_t kEncoderModulo = 16384;
 
@@ -120,7 +125,7 @@ inline constexpr int32_t kEncoderModulo = 16384;
 inline constexpr size_t generatedCommandPayloadLength(uint8_t command)
 {
     switch (command) {
-        case CMD_CALIBRATE: return 0;
+        case CMD_SERVO_MAINTENANCE: return 12;
         case CMD_ANGLE_CTRL: return kFloatPayloadBytes;
         case CMD_START: return 0;
         case CMD_STOP: return 0;
@@ -128,7 +133,6 @@ inline constexpr size_t generatedCommandPayloadLength(uint8_t command)
         case CMD_MOTOR_POS_ABS: return kMotorPosAbsPayloadBytes;
         case CMD_ACTIVE_SCOPE: return kActiveScopePayloadBytes;
         case CMD_RUN_FEEDBACK: return 0;
-        case CMD_PAUSE: return 0;
         case CMD_RESTORE_MULTITURN: return kRestoreMultiTurnPayloadBytes;
         case CMD_HOST_HEARTBEAT: return 0;
         case CMD_MOTOR_POS_ABS_ONE: return kMotorPosAbsOnePayloadBytes;
@@ -144,11 +148,14 @@ inline constexpr size_t generatedCommandPayloadLength(uint8_t command)
         case CMD_SERVO_RESET_ZERO: return kServoResetZeroPayloadBytes;
         case CMD_STATE_SYNC_REQUEST: return kStateSyncRequestPayloadBytes;
         case CMD_TASK_DIAG_SUBSCRIBE: return kTaskDiagSubscribePayloadBytes;
-        case CMD_CONTROL_TRACE_SUBSCRIBE: return kControlTraceSubscribePayloadBytes;
+        case CMD_CONTROL_DIAGNOSTICS: return kControlDiagnosticsPayloadBytes;
         case CMD_SERVO_REBASE_ZERO: return kServoRebaseZeroPayloadBytes;
         case CMD_MOTOR_ABS_ZERO: return 4;
         case CMD_MOTOR_DIRECT_RELEASE: return kMotorDirectReleasePayloadBytes;
         case CMD_PROTOCOL_HELLO: return 9;
+        case CMD_CONTROL_RELEASE: return 0;
+        case CMD_CONTROL_PARAMETERS_SET: return 165;
+        case CMD_CONTROL_PARAMETERS_QUERY: return 0;
         default: return SIZE_MAX;
     }
 }
@@ -157,7 +164,7 @@ inline constexpr size_t generatedCommandPayloadLength(uint8_t command)
 inline constexpr bool generatedCommandRequiresHandshake(uint8_t command)
 {
     switch (command) {
-        case CMD_CALIBRATE: return true;
+        case CMD_SERVO_MAINTENANCE: return true;
         case CMD_ANGLE_CTRL: return true;
         case CMD_START: return true;
         case CMD_MOTOR_POS_ABS: return true;
@@ -173,6 +180,9 @@ inline constexpr bool generatedCommandRequiresHandshake(uint8_t command)
         case CMD_SERVO_RESET_ZERO: return true;
         case CMD_SERVO_REBASE_ZERO: return true;
         case CMD_MOTOR_ABS_ZERO: return true;
+        case CMD_CONTROL_RELEASE: return true;
+        case CMD_CONTROL_PARAMETERS_SET: return true;
+        case CMD_CONTROL_PARAMETERS_QUERY: return true;
         default: return false;
     }
 }

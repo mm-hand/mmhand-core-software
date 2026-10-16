@@ -38,7 +38,7 @@ def test_ros2_handler_sends_valid_21_degree_targets() -> None:
     assert ok is True
     assert backend.control_modes == []
     assert backend.sent == [
-        ([1.5] * ENCODER_COUNT, "ROS2:/mmhand/joint_targets", "urdf_deg", [1.5] * ENCODER_COUNT)
+        ([1.5] * ENCODER_COUNT, "ROS2:/mmhand/joint_angle_deg", "urdf_deg", [1.5] * ENCODER_COUNT)
     ]
 
 

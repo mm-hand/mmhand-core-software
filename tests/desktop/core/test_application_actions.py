@@ -467,12 +467,13 @@ def test_two_fresh_captures_save_once_then_single_endpoint_resaves(hand, monkeyp
     state = hand._controller.current_state
     state.encoders[0].raw_sensor = 11000  # J00 安装方向 -1
     assert wait_operation(hand, hand.request_manual_capture(0, 'max'))['status'] == 'SUCCESS'
-    writer.assert_called_once_with(0, 12000, 11000)
+    assert writer.call_count == 1 and writer.call_args.args == (0, 12000, 11000)
+    assert writer.call_args.kwargs['cancelled']() is False
     state.encoders[0].raw_sensor = 12500
     wait_operation(hand, hand.request_manual_capture(0, 'min'))
     assert hand._manual_drafts[0]['max'] == 11000
     assert writer.call_count == 2
-    writer.assert_called_with(0, 12500, 11000)
+    assert writer.call_args.args == (0, 12500, 11000)
 
 
 def test_manual_installed_but_not_saved_keeps_draft_until_next_set(hand, monkeypatch):
@@ -583,3 +584,24 @@ def test_port_discovery_does_not_connect_or_create_second_thread(hand, monkeypat
     assert hand._discovery_thread is worker
     assert hand.application_snapshot()['devices'] == [{'port': 'COM7', 'description': 'P4'}]
     connect.assert_not_called()
+
+
+def test_port_discovery_failure_clears_stale_choices(hand):
+    hand._save_data = False
+    calls = []
+
+    def discover():
+        calls.append(True)
+        if len(calls) == 1:
+            return [('COM7', 'P4')]
+        raise OSError('USB enumeration failed')
+
+    hand.open_application(discover=discover)
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        snapshot = hand.application_snapshot()
+        if snapshot['discovery_error']:
+            break
+        time.sleep(0.01)
+    assert snapshot['devices'] == []
+    assert 'USB enumeration failed' in snapshot['discovery_error']

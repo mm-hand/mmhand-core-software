@@ -9,17 +9,21 @@
 #include "log/FirmwareLog.h"
 #include "SystemAssembly.h"
 #include "../hal/serial/HostSerialPort.h"
+#include "diagnostics/UsbDiagnostics.h"
 
 #include <Arduino.h>
 
 void appBootstrapSetup()
 {
+    p4::diagnostics::beginUsbDiagnostics();
     // 二进制协议和固件日志共用该串口，波特率必须与 desktop 保持一致。
     HostSerialPort::begin(kHostUartBaud);
-    while (!Serial) {
-        delay(10);
-    }
+    // USB is a transport, not a prerequisite for starting the system. Waiting
+    // for HWCDC's host-read indication can leave a replugged board here forever.
+    // SystemAssembly starts with empty scopes and no motor output owner.
     delay(1000);
+
+    p4::diagnostics::markUsbBootPhase(2);
 
     if (!assembleAndStartSystem()) {
         FW_LOG_ERROR_PRINTLN("[SYSTEM] bootstrap failed; halt");
@@ -27,6 +31,7 @@ void appBootstrapSetup()
             delay(1000);
         }
     }
+    p4::diagnostics::markUsbBootPhase(3);
 }
 
 void appBootstrapLoop()

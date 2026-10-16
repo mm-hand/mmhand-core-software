@@ -408,26 +408,6 @@ void updateReadyStateIfIdle(SystemRuntimeContext* sharedData)
     }
 }
 
-static bool feedbackCompletionMatchesCurrentCommand(SystemRuntimeContext* sharedData,
-                                                    const SystemEvent_t& event)
-{
-    // token=0 保留给不绑定代次的内部完成事件；正常控制使用 joint_command_token。
-    return sharedData &&
-           (event.token == 0 || event.token == sharedData->joint_command_token);
-}
-
-static void releaseFeedbackRun(SystemRuntimeContext* sharedData)
-{
-    if (!sharedData) {
-        return;
-    }
-    // 保留舵机最后一次接受的位置作为稳定保持，仅释放反馈任务所有权，
-    // 这样上位机可以立即切换 active scope 并发送下一条关节命令。
-    sharedData->control_enabled = 0;
-    sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
-    setSystemState(sharedData, idleOrReadyState(sharedData));
-}
-
 /**
  * E-STOP锁存是所有运动状态的共同硬门禁，只有RESET可以解除。
  * 把检查放在状态所有权授予之前，避免UI显示RUN_DIRECT但驱动层持续拒绝目标。
@@ -495,38 +475,6 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                 break;
             }
 
-            if (sharedData->system_state == SYSTEM_STATE_PAUSED) {
-                const uint8_t resumeState = sharedData->paused_resume_state;
-                const bool resumeReady =
-                    (resumeState == SYSTEM_STATE_RUN_DIRECT)
-                        ? p4::state::controllableEntryReady(sharedData)
-                        : ((resumeState == SYSTEM_STATE_RUN_FEEDBACK) &&
-                           activeJointsInControlWorkspace(sharedData));
-                if (!resumeReady) {
-                    sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
-                    sharedData->control_enabled = 0;
-                    setSystemState(sharedData, idleOrReadyState(sharedData));
-                    break;
-                }
-                resetServoTargetQueue(sharedData);
-                if (!grantMotionOwnerUnlessServoRebaseZeroPending(
-                        sharedData, SERVO_TARGET_OWNER_CONTROL, 1,
-                        resumeState, event.servoMaintenanceToken)) {
-                    break;
-                }
-                if (resumeState == SYSTEM_STATE_RUN_DIRECT) {
-                    setCommandModeDirect(sharedData);
-                } else if (resumeState == SYSTEM_STATE_RUN_FEEDBACK) {
-                    setCommandModeJoint(sharedData);
-                }
-                setSystemState(sharedData,
-                               (resumeState == SYSTEM_STATE_RUN_DIRECT ||
-                                resumeState == SYSTEM_STATE_RUN_FEEDBACK)
-                                   ? resumeState
-                                   : idleOrReadyState(sharedData));
-                break;
-            }
-
             resetServoTargetQueue(sharedData);
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
             sharedData->control_enabled = 0;
@@ -534,6 +482,8 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
             break;
 
         case SYSTEM_EVENT_STOP:
+
+
             // 丢弃 STOP 之前已排队的运动事件。上位机必须在看到
             // UNCONTROLLABLE 后重新发送命令，旧事件不能让设备自行复动。
             sharedData->stateEventQueue.reset();
@@ -555,6 +505,8 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
             break;
 
         case SYSTEM_EVENT_RESET:
+
+
             // RESET 清命令、清可复位保护并断扭矩，但不伪造多圈或标定数据。
             resetCommandState(sharedData);
             sharedData->control_enabled = 0;
@@ -658,6 +610,7 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                                   (uint8_t)DIRECT_REJECT_STATE);
                 break;
             }
+
             setSystemState(sharedData, SYSTEM_STATE_RUN_DIRECT);
             break;
 
@@ -825,64 +778,37 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                                        FEEDBACK_REJECT_NONE);
             break;
 
-        case SYSTEM_EVENT_RUN_DIRECT_DONE:
+        case SYSTEM_EVENT_MOTOR_DIRECT_RELEASE:
             if (sharedData->system_state != SYSTEM_STATE_RUN_DIRECT) {
-                FW_LOG_INFO_PRINTF("[STATE] ignore RUN_DIRECT_DONE in state=%u\r\n",
+                FW_LOG_INFO_PRINTF("[STATE] ignore MOTOR_DIRECT_RELEASE in state=%u\r\n",
                               (unsigned)sharedData->system_state);
                 break;
             }
             if (event.token != sharedData->applied_direct_generation) {
-                FW_LOG_INFO_PRINTF("[STATE] ignore stale RUN_DIRECT_DONE generation=%lu applied=%lu\r\n",
+                FW_LOG_INFO_PRINTF("[STATE] ignore stale MOTOR_DIRECT_RELEASE generation=%lu applied=%lu\r\n",
                                    (unsigned long)event.token,
                                    (unsigned long)sharedData->applied_direct_generation);
                 break;
             }
+
             if (!retireDirectCommand(sharedData, event.token)) break;
             resetServoTargetQueue(sharedData);
             setSystemState(sharedData, idleOrReadyState(sharedData));
             break;
 
-        case SYSTEM_EVENT_RUN_FEEDBACK_DONE:
-            if (sharedData->system_state != SYSTEM_STATE_RUN_FEEDBACK) {
-                FW_LOG_INFO_PRINTF("[STATE] ignore RUN_FEEDBACK_DONE in state=%u\r\n",
-                              (unsigned)sharedData->system_state);
-                break;
-            }
-            if (!feedbackCompletionMatchesCurrentCommand(sharedData, event)) {
-                FW_LOG_INFO_PRINTF("[STATE] ignore stale RUN_FEEDBACK_DONE token=%lu current=%lu\r\n",
-                              (unsigned long)event.token,
-                              (unsigned long)sharedData->joint_command_token);
-                break;
-            }
-            releaseFeedbackRun(sharedData);
-            break;
+        case SYSTEM_EVENT_CONTROL_RELEASE:
+            if ((sharedData->servo_target_owner != SERVO_TARGET_OWNER_NONE &&
+                 sharedData->servo_target_owner != SERVO_TARGET_OWNER_CONTROL) ||
+                sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING) break;
+            clearPendingDirectCommand(sharedData, DIRECT_REJECT_STATE);
+            resetServoTargetQueue(sharedData);
 
-        case SYSTEM_EVENT_RUN_FEEDBACK_TIMEOUT:
-            if (sharedData->system_state != SYSTEM_STATE_RUN_FEEDBACK) {
-                break;
-            }
-            if (!feedbackCompletionMatchesCurrentCommand(sharedData, event)) {
-                break;
-            }
-            FW_LOG_INFO_PRINTF(
-                "[STATE] RUN_FEEDBACK timeout token=%lu; releasing owner\r\n",
-                (unsigned long)event.token);
-            releaseFeedbackRun(sharedData);
-            break;
 
-        case SYSTEM_EVENT_PAUSE:
-            // PAUSE 记录原运行态并断扭矩；START 仅在门禁仍满足时恢复。
-            if (sharedData->system_state != SYSTEM_STATE_RUN_DIRECT &&
-                sharedData->system_state != SYSTEM_STATE_RUN_FEEDBACK) {
-                FW_LOG_INFO_PRINTF("[STATE] reject PAUSE in state=%u\r\n",
-                              (unsigned)sharedData->system_state);
-                break;
-            }
-            sharedData->paused_resume_state = sharedData->system_state;
+            sharedAtomicStore(&sharedData->feedback_recovery_pending, (uint8_t)0);
+            sharedAtomicStore(&sharedData->feedback_recovery_request_sequence, (uint32_t)0);
             sharedData->control_enabled = 0;
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
-            requestServoEmergencyTorqueOff(sharedData);
-            setSystemState(sharedData, SYSTEM_STATE_PAUSED);
+            setSystemState(sharedData, idleOrReadyState(sharedData));
             break;
 
         case SYSTEM_EVENT_ROPE_INIT:

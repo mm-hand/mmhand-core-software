@@ -330,6 +330,8 @@ class HandModel:
     control_trace_actual_deg: List[float] = field(default_factory=lambda: [0.0] * ENCODER_COUNT)
     control_trace_motor_command_abs: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     control_trace_last_rx_ts: float = 0.0
+    control_trace_components: dict = field(default_factory=dict)
+    control_trace_detail: dict = field(default_factory=dict)
     # 最近一次协议 ACK，用于把“UI 请求”和“P4 实际处理”分别写入事件日志。
     proto_ack_sequence: int = 0
     proto_ack_cmd: int = 0

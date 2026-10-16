@@ -31,6 +31,7 @@
 #include "../../config/RuntimeMonitorConfig.h"
 #include "HostCommandRouter.h"
 #include "HostFrameReader.h"
+#include "../servo_bus/ServoMaintenance.h"
 #include "../../safety/SafetyEventReporter.h"
 #include "../../safety/policies/CommunicationSafetyPolicy.h"
 #include "../../safety/SafetyEventStore.h"
@@ -136,12 +137,13 @@ void setHostTaskDiagSubscribed(bool subscribed, uint32_t nowMs)
     g_hostCommRuntime.nextTaskDiagId = 0;
 }
 
-void setHostControlTraceSubscribed(bool subscribed)
+void setHostControlTraceSubscribed(bool subscribed, uint8_t divisor)
 {
     auto* sharedData = g_hostCommRuntime.sharedData;
     if (sharedData) {
         sharedAtomicStore(&sharedData->controlTraceRecordingEnabled, (uint8_t)0);
         sharedData->controlTraceQueue.reset();
+        sharedAtomicStore(&sharedData->controlTraceDivisor, divisor);
         sharedAtomicStore(&sharedData->controlTraceRecordingEnabled, (uint8_t)subscribed);
     }
     g_hostCommRuntime.controlTraceSubscribed = subscribed;
@@ -208,6 +210,7 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
     auto& nextTaskDiagId = runtime.nextTaskDiagId;
     auto& taskDiagSubscribed = runtime.taskDiagSubscribed;
     auto& pendingStateSyncMask = runtime.pendingStateSyncMask;
+    publishServoMaintenance();
     auto& lastServoResetZeroResultToken = runtime.lastServoResetZeroResultToken;
     auto& lastSafetyEventSequenceSent = runtime.lastSafetyEventSequenceSent;
     const bool processRx = request.periodicDue ||

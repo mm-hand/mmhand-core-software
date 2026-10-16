@@ -39,6 +39,21 @@ slower than the release build, but variables and line stepping survive
 optimization. Builds land in `.debug/<target>/` (git-ignored); the ELF/BIN
 pair there is the single source of truth shared by upload and GDB.
 
+For the affected P4 Arduino SDK, `build_debug.ps1` first runs
+`patch_p4_usb_fifo.py`. The vendor TX helper used a read/modify/write on EP1;
+reading this FIFO consumes RX bytes, so full-duplex traffic could corrupt
+commands. The backport uses a direct 32-bit write, matching
+[Espressif's current implementation](https://github.com/espressif/esp-idf/blob/master/components/esp_hal_usb/esp32p4/include/hal/usb_serial_jtag_ll.h).
+The script preserves the original header beside it as
+`*.mmhand-before-fifo-fix.bak` and refuses unknown implementations. This
+changes neither the USB connector nor CDC/JTAG mode. Arduino IDE users must
+run the same prerequisite before compiling, and rebuild the core after the
+first application (do not reuse a core archive built with the old header):
+
+```powershell
+python tools/debug/patch_p4_usb_fifo.py --tools-root "$env:LOCALAPPDATA/Arduino15/packages/esp32/tools"
+```
+
 ```powershell
 # P4 (S3: add -Target s3; FQBN and GDB are switched automatically)
 powershell -File tools/debug/build_debug.ps1 -Target p4
@@ -97,9 +112,18 @@ python tools/debug/gdb_batch.py --target p4 --break servoBusTask --cmd "info reg
 
 The script auto-starts OpenOCD if none is running (reuses it otherwise),
 prints the raw GDB output for the agent to read, and unconditionally ends
-with `delete` → `info breakpoints` → `detach` — even when GDB times out (a
-rescue session removes breakpoints left behind by the killed GDB). There is
-deliberately no way to reset or detach with breakpoints armed.
+with `delete` → `info breakpoints` → `detach` on normal completion. These
+messages alone do not prove that SMP cores resumed. Both launchers install
+`esp_debug_cleanup.tcl`; the batch tool additionally verifies every hardware
+core is running through OpenOCD Tcl RPC before graceful shutdown. On timeout,
+cleanup uses OpenOCD directly, not a second symbol-less GDB (which can itself
+assert in FreeRTOS thread selection). P4's three triggers per core are cleared
+and read back before resume, including orphaned triggers. Cleanup failure
+returns a nonzero status; it never silently resets the board. Full OpenOCD
+logs are continuously drained to `.debug/openocd-*.log`.
+
+Close CDC connections and release motion authorization before debugging;
+reconnect after OpenOCD exits. See [USB stability evidence](usb-stability.md).
 
 Interactive stepping (rarely needed by agents): start OpenOCD with
 `--keep-openocd`, then drive GDB interactively as a human would.
@@ -152,8 +176,11 @@ Symptoms: GDB connect dropped immediately, OpenOCD log shows
 `could not remove breakpoint`, `Failed to probe flash`, `gdb connection
 rejected`, or the board's serial output stops entirely.
 
-Fix — force a full system reset through download mode (clears the debug
-trigger registers that a soft reset does not):
+First retain the failure logs. If OpenOCD can attach, use the repository
+cleanup hook to clear/read back P4 hardware triggers and verify both cores
+running; this can restore serial data without a reset. If that fails or
+OpenOCD cannot attach, an explicit full system reset through download mode
+clears debug trigger state:
 
 ```text
 esptool.exe -p COM12 chip-id     # enter download mode, full system reset
@@ -162,7 +189,8 @@ esptool.exe -p COM12 run         # boot the application again
 
 There is no `riscv clear_all_hw_breakpoints` command in
 openocd-esp32 v0.12.0-esp32-20251215 (it prints a command list), so the
-esptool route is the reliable software recovery. If even esptool cannot
+repository hook accesses the P4 trigger CSRs directly; do not substitute
+unknown debugger commands. If even esptool cannot
 connect, unplug and replug the board's USB cable (power cycle clears
 everything).
 
@@ -190,3 +218,50 @@ everything).
 | `tools/debug/verify_debug_env.ps1` | prints resolved toolchain, build/flashed hashes, USB visibility |
 | `tools/debug/gdb_batch.py` | one-shot agent entry point (auto-OpenOCD, enforced cleanup) |
 | `.debug/<target>/` | git-ignored build output: ELF (GDB) + BIN (flash) |
+
+
+## Live attach must not reset the P4
+
+P4 builds also verify two reproducible USB prerequisites:
+`patch_p4_usb_fifo.py` (SDK direct FIFO write) and `patch_p4_hwcdc.py`
+(Arduino HWCDC empty-IN wakeup). Both back up the vendor file and reject
+unknown implementations. The latter currently accepts the audited3.3.10
+baseline only. Its guarded empty-packet commit addresses an observed
+re-enumeration state; it is not an automatic chip reset. See
+[USB evidence and acceptance](usb-stability.md) for the actual validation
+status. A different Arduino version requires a fresh baseline audit.
+
+The launchers set `ESP_FLASH_SIZE 0` BEFORE the board configuration. The
+vendor flash-enabled attach hook can otherwise run `reset halt` to disable
+memory protection. This was reproduced on P4 and confirmed by a JTAG reset
+diagnostic; it clears RAM calibration. `gdb_memory_map disable` alone does
+not suppress this hook. Keep hardware breakpoints enabled on both targets;
+use Arduino for uploading, not the live debug session for flash writes.
+The batch tool requires an ELF matching its uploaded hash and recorded USB
+identity. It refuses an incompatible pre-existing OpenOCD without touching
+that server's targets.
+
+## Waveshare ESP32-S3-Nano: recovery when native USB does not enumerate
+
+This machine uses Waveshare ESP32-S3-Nano, with one native USB Type-C
+connector and an RST button. Do not assume a separate USB-UART connector or
+BOOT button from another S3 development board.
+
+Waveshare's board-specific recovery procedure is to short **B1 to GND**
+before applying power. B1 is GPIO0, not digital D1; do not substitute B0.
+Disconnect USB and external power, leave sensors disconnected, fit the jumper,
+then reconnect the USB data cable. Keep the board in download mode while
+checking its actual enumerated COM port and flashing the matching debug build.
+After successful upload, remove the jumper before reset/re-power for normal
+execution. There is no need to erase the entire Flash for this recovery step.
+
+Sources:
+- https://docs.waveshare.com/ESP32-S3-Nano/FAQ
+- https://files.waveshare.com/wiki/ESP32-S3-Nano/ESP32-S3-Nano-Schematic.pdf
+- https://support.arduino.cc/hc/en-us/articles/9625819325212-About-the-B1-and-B0-pins-on-the-Nano-ESP32
+
+USB descriptor failure alone does not establish whether the cause is the
+application, debug state, USB connection or power. Successful ROM enumeration
+is the next diagnostic observation; do not claim ROM mode was entered merely
+because RST was pressed. Keep BIN and ELF matched and remove breakpoints
+before detaching, as described above.

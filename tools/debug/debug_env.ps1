@@ -62,8 +62,8 @@ if ($Target -eq "p4") {
     $script:Fqbn = (
         "esp32:esp32:esp32p4:" +
         "UploadSpeed=921600," +
-        "USBMode=default," +
-        "CDCOnBoot=default," +
+        "USBMode=hwcdc," +
+        "CDCOnBoot=cdc," +
         "MSCOnBoot=default," +
         "DFUOnBoot=default," +
         "UploadMode=default," +
@@ -84,7 +84,7 @@ if ($Target -eq "p4") {
         -Filter "*" -Leaf "bin\riscv32-esp-elf-gdb.exe"
 }
 else {
-    $script:Fqbn = "esp32:esp32:esp32s3"
+    $script:Fqbn = "esp32:esp32:esp32s3:USBMode=hwcdc,CDCOnBoot=cdc"
     $script:SketchName = "ESP32-S3"
     $script:ElfName = "ESP32-S3.ino.elf"
     $script:OpenOcdBoardCfg = "board/esp32s3-builtin.cfg"

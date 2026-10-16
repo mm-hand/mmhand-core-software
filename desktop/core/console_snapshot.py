@@ -66,6 +66,7 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
         j, draft = row['joint'], row['draft']
         row['feedback_control_status'] = ('UNKNOWN' if not control_known else
             'ENABLED' if feedback_active and state.active_joint_mask & (1 << j) else 'DISABLED')
+        row['collision_detected'] = bool(fresh and state.feedback_collision_hold_bitmap & (1 << j))
         result = state.joint_calib_results[j] or {}
         minimum, maximum = draft.get('min', row['manual_min']), draft.get('max', row['manual_max'])
         span = directed_encoder_delta(minimum, maximum, row['direction']) if row['manual_valid'] or {'min', 'max'} <= draft.keys() else None
@@ -79,9 +80,10 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
         if draft and draft.get('status') != 'SAVED' or draft.get('status') == 'SAVED' and not row['auto_valid']:
             motor_status = ['PENDING']
         transaction = hand._motor_transactions.get(j)
-        if transaction in ('FAILED', 'PENDING'):
+        if transaction in ('FAILED', 'PENDING', 'CALIBRATING'):
             motor_status = [transaction]
         row.update(manual_min=minimum if 'min' in draft or row['manual_valid'] else None,
+                   capture_status=hand._manual_capture_status.get(j, ''),
                    manual_max=maximum if 'max' in draft or row['manual_valid'] else None,
                    span=span, urdf_span=urdf_span, difference=abs(span - urdf_span) if span is not None else None,
                    joint_quality=quality, motor_quality=motor_status, motors=list(joint_motors(j)),
@@ -114,8 +116,13 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
         rate_hz=trace.average_hz, warnings=list(trace.warnings)) if trace else {}
     current_op = next((op for op in snapshot['operations'] if op['operation_id'] == hand._application_busy), {})
     snapshot['connections'] = {}
-    s3_received_at = getattr(hand._tactile_state, 'tactile_last_rx_ts', 0.0)
-    s3_age = int((now - s3_received_at) * 1000) if s3_received_at and now >= s3_received_at else None
+    comm = hand.tactile_comm
+    link = comm.connection_diagnostics() if comm and callable(getattr(comm, 'connection_diagnostics', None)) else {}
+    if not isinstance(link, dict):
+        link = {}
+    s3_received_at = link.get('last_valid_rx', getattr(hand._tactile_state, 'tactile_last_rx_ts', 0.0))
+    # RX can publish after this snapshot captured `now`; that is fresh data.
+    s3_age = max(0, int((now - s3_received_at) * 1000)) if s3_received_at else None
     for name, connected, port, age in (
         ('p4', hand.is_comm_connected(), getattr(hand.comm, 'port', ''), snapshot['diagnostics']['receive_age_ms']),
         ('s3', hand.is_tactile_serial_connected(), hand.tactile_port, s3_age)):
@@ -123,6 +130,10 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
         transition = 'Connecting…' if pending == 'connect' + name else 'Disconnecting…' if pending == 'disconnect' + name else ''
         snapshot['connections'][name] = dict(connected=connected, port=port, age_ms=age if connected else None,
             label=transition or ('Disconnect' if connected else 'Connect'), pending=bool(transition))
+        snapshot['connections'][name]['data_status'] = ('Disconnected' if not connected else
+            'Waiting for data' if age is None else 'Stale' if age > 600 else 'Online')
+        if name == 's3' and connected and age is None and link.get('opened_at') and now - link['opened_at'] > 10:
+            snapshot['connections'][name]['data_status'] = 'No valid frames' if link.get('bytes', 0) else 'No bytes received'
     snapshot['recording'].update(enabled=hand._save_data, full_tactile=hand._record_full_tactile,
         duration_s=max(0, now - hand._recording_started_at) if hand._recorder.is_running() else 0,
         error=hand._recording_error, finalizing=bool(hand._recording_thread and hand._recording_thread.is_alive()))

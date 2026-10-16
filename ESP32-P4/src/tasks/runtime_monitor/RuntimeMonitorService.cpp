@@ -13,6 +13,7 @@
 #include "../../config/RuntimeMonitorConfig.h"
 #include "../../system/TaskRuntimeMetrics.h"
 #include "../../system/TaskRuntimeWindow.h"
+#include "../../system/diagnostics/UsbDiagnostics.h"
 #include "../../safety/SafetyEventReporter.h"
 #include "../../safety/policies/RuntimeSafetyPolicy.h"
 
@@ -544,4 +545,5 @@ void stepRuntimeMonitorService(uint32_t nowMs)
     sampleTaskStacks();
     sampleCpuUsage();
     freezeRuntimeWindow(esp_timer_get_time());
+    p4::diagnostics::sampleUsbDiagnostics(nowMs);
 }

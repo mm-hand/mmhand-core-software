@@ -19,7 +19,6 @@ def build(hand, act, confirm):
         act(lambda: hand.request_motors({m: drafts[m]['value'] for m in selected}))
     with ui.row().classes('page-toolbar'):
         ui.button('ENABLE Selected', on_click=lambda: act(hand.request_direct_enable))
-        ui.button('Pause', on_click=lambda: act(hand.request_pause))
         ui.button('Clear Faults', on_click=lambda: act(hand.request_clear_faults))
         ui.button('Send Selected', on_click=send_selected)
         zero_selected = ui.button('Reset Motor Multi-turn Position', on_click=lambda: act(hand.request_direct_zero))

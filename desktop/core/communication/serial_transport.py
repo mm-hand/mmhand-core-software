@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import threading
+from ..session_log import log_session
 from typing import Any, Callable, Optional
 
 
@@ -56,11 +57,22 @@ class SerialTransport:
             return False
 
         handle = self._serial_factory(
-            self.port,
+            None,
             self.baudrate,
             timeout=self.timeout_s,
         )
+        # Configure native USB Serial/JTAG before opening the OS handle so
+        # an ordinary connection cannot perform the ROM DTR/RTS reset sequence.
+        handle.write_timeout = 0.5
+        handle.dtr = False
+        handle.rts = False
+        handle.port = self.port
+        # Record intent before open, including failures. Never toggle these
+        # lines as a connection-recovery mechanism.
+        log_session('COMM', f'open port={self.port} baud={self.baudrate} dtr=False rts=False write_timeout=0.5')
+        handle.open()
         self._serial = handle
+        log_session('COMM', f'opened port={self.port}')
         return self.is_open
 
     @property
@@ -89,7 +101,10 @@ class SerialTransport:
             raise OSError("serial transport is not open")
         with self._write_lock:
             written = self._serial.write(data)
-        return len(data) if written is None else int(written)
+        count = len(data) if written is None else int(written)
+        if count != len(data):
+            raise OSError(f"serial short write: {count}/{len(data)} bytes")
+        return count
 
     def close(self) -> None:
         """关闭并释放串口句柄；重复调用安全。"""

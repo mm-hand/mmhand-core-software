@@ -106,6 +106,7 @@ def _wide_joint_fields() -> List[str]:
         "command_age_ms",
         "feedback_age_ms",
         "trace_sequence_gap",
+        "trace_sample_divisor", "trace_components_valid",
         "trace_period_ms",
         "motor_command_mask",
         "trace_detail_valid", "servo_feedback_age_ms", "control_dt_us",
@@ -115,6 +116,7 @@ def _wide_joint_fields() -> List[str]:
         label = f"J{idx:02d}"
         fields.extend([
             f"{label}_current_deg",
+            f"{label}_slow_deg",
             f"{label}_current_valid",
             f"{label}_target_deg",
             f"{label}_encoder_raw",
@@ -122,7 +124,7 @@ def _wide_joint_fields() -> List[str]:
         ])
     for idx in range(27):
         fields.append(f"M{idx:02d}_cmd_abs")
-        fields.extend(f"M{idx:02d}_{suffix}" for suffix in ("actual_abs", "pid_counts", "recovery_counts"))
+        fields.extend(f"M{idx:02d}_{suffix}" for suffix in ("actual_abs", "pid_counts", "recovery_counts", "proportional_counts", "integral_counts", "reversal_counts"))
     return fields
 
 

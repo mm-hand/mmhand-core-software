@@ -21,7 +21,7 @@ def _ack(comm, status):
 
 def test_unconfirmed_or_rejected_contract_blocks_all_motion_forms():
     comm = _comm()
-    for cmd in ("start", "calibrate", "run_feedback",
+    for cmd in ("start", "run_feedback",
                 ("angle_live", [0.0] * 21),
                 ("joint_target_run_masked", [0.0] * 21, 1),
                 ("motor_pos_abs", [0] * 27)):
@@ -54,3 +54,11 @@ def test_hello_retry_is_two_hz_even_when_motion_heartbeat_is_disabled(monkeypatc
     monkeypatch.setattr(comm_layer.time, "time", lambda: 100.5)
     comm._maybe_send_host_heartbeat()
     assert len(sent) == 2
+
+
+def test_removed_and_unknown_commands_are_not_queued():
+    comm = _comm()
+    for confirmed in (False, True):
+        comm._protocol_compatible = confirmed
+        assert not comm.send_command("unknown-command")
+        assert comm.tx_queue.empty()

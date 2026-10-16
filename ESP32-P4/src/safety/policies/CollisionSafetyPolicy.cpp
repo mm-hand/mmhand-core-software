@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "../../config/ControlConfig.h"
+#include "../../control/ControlParameters.h"
 
 namespace {
 
@@ -29,27 +30,13 @@ static uint8_t normalizeMotionMode(uint8_t mode)
         : FEEDBACK_COLLISION_MOTION_RELEASE;
 }
 
-static uint32_t progressWindowForMotionMode(uint8_t mode)
-{
-    return mode == FEEDBACK_COLLISION_MOTION_TIGHTEN
-        ? kCollisionTightenProgressWindowMs
-        : kCollisionReleaseProgressWindowMs;
-}
-
-static float minProgressForMotionMode(uint8_t mode)
-{
-    return mode == FEEDBACK_COLLISION_MOTION_TIGHTEN
-        ? kCollisionTightenMinProgressDeg
-        : kCollisionReleaseMinProgressDeg;
-}
-
 } // namespace
 
 const char* feedbackCollisionMotionModeName(uint8_t mode)
 {
     return normalizeMotionMode(mode) == FEEDBACK_COLLISION_MOTION_TIGHTEN
-        ? "tighten"
-        : "release";
+        ? "flexion"
+        : "extension";
 }
 
 FeedbackCollisionGuard::FeedbackCollisionGuard()
@@ -77,8 +64,10 @@ void FeedbackCollisionGuard::startCandidate(JointState& state,
     state.candidateDirection = direction;
     // 候选段开始后不再随每周期目标抖动切换阈值；改变物理方向时才重建窗口。
     state.candidateMotionMode = normalizeMotionMode(motionMode);
-    state.progressWindowMs = progressWindowForMotionMode(state.candidateMotionMode);
-    state.minProgressDeg = minProgressForMotionMode(state.candidateMotionMode);
+    state.progressWindowMs = COLLISION_WINDOW_MS;
+    const auto p = mmhand::control::readParameters();
+    state.minProgressDeg = p[state.candidateMotionMode == FEEDBACK_COLLISION_MOTION_TIGHTEN ?
+        mmhand::control::CollisionStallVelocityFlexDegS : mmhand::control::CollisionStallVelocityExtendDegS] * COLLISION_WINDOW_MS * 0.001f;
     appendSample(state, timestampMs, feedbackDeg);
 }
 
@@ -210,7 +199,13 @@ FeedbackCollisionResult FeedbackCollisionGuard::update(
                           FEEDBACK_COLLISION_RELEASE_INVALID_FEEDBACK);
     }
 
+    const auto parameters = mmhand::control::readParameters();
+    if (!parameters.configured) return resetJoint(jointIndex);
+    using namespace mmhand::control;
     JointState& state = joints_[jointIndex];
+    if (state.configRevision != parameters.revision) {
+        resetJoint(jointIndex); state.configRevision = parameters.revision;
+    }
     if (!state.contextActive) {
         state.contextActive = true;
         state.targetInitialized = true;
@@ -223,7 +218,7 @@ FeedbackCollisionResult FeedbackCollisionGuard::update(
         : 0.0f;
     const bool targetChanged =
         state.targetInitialized &&
-        fabsf(targetDeltaDeg) >= kCollisionTargetResetDeg;
+        fabsf(targetDeltaDeg) >= parameters[CollisionTargetResetDeg];
     state.targetInitialized = true;
     state.lastTargetDeg = input.targetDeg;
 
@@ -233,7 +228,7 @@ FeedbackCollisionResult FeedbackCollisionGuard::update(
     if (state.holdActive) {
         const float targetRetreatDeg = -state.holdDirection *
             (input.targetDeg - state.holdTargetDeg);
-        if (targetRetreatDeg >= kCollisionTargetRetreatReleaseDeg) {
+        if (targetRetreatDeg >= parameters[CollisionRetreatDeg]) {
             // 用户相对触发碰撞的原目标回撤至少 1 度即可解除 HOLD。
             // 重复原目标或继续向障碍物深入仍保持锁定；解除后必须重新通过
             // 速度窗口，才允许再次进入碰撞监测。
@@ -259,7 +254,7 @@ FeedbackCollisionResult FeedbackCollisionGuard::update(
     }
 
     const float errorDeg = input.targetDeg - input.feedbackDeg;
-    if (fabsf(errorDeg) <= kCollisionMinErrorDeg) {
+    if (fabsf(errorDeg) <= parameters[CollisionMinErrorDeg]) {
         // 关节进入到位区即结束当前监测段，避免到位后的弹簧回弹被判为碰撞。
         const bool hadMonitoring = state.candidateActive || state.armed;
         const bool wasArmed = state.armed;
@@ -275,8 +270,14 @@ FeedbackCollisionResult FeedbackCollisionGuard::update(
         return result;
     }
 
+    if (!input.pidPushActive) {
+        const bool wasArmed = state.armed;
+        clearMonitoring(state);
+        auto result = makeResult(state); result.armedChanged = wasArmed;
+        return result;
+    }
     const float direction = directionOf(errorDeg);
-    const uint8_t motionMode = normalizeMotionMode(input.driveMotionMode);
+    const uint8_t motionMode = direction > 0 ? FEEDBACK_COLLISION_MOTION_TIGHTEN : FEEDBACK_COLLISION_MOTION_RELEASE;
     const bool directionChanged =
         state.candidateActive && state.candidateDirection != direction;
     const bool motionModeChanged = state.candidateActive &&
@@ -311,7 +312,7 @@ FeedbackCollisionResult FeedbackCollisionGuard::update(
     const bool velocityWindowReady = findWindowStart(
         state,
         input.timestampMs,
-        kCollisionVelocityWindowMs,
+        COLLISION_WINDOW_MS,
         state.candidateStartMs,
         &velocityStart);
     float directionVelocity = 0.0f;
@@ -325,19 +326,20 @@ FeedbackCollisionResult FeedbackCollisionGuard::update(
     }
 
     // 禁止再用“累计移动超过固定角度”旁路武装；
-    // 只有最近 200 ms 方向平均速度达标，才证明本运动段曾正常运动。
+    // 只有最近 500 ms 方向平均速度达标，才证明本运动段曾正常运动。
     if (!state.armed && velocityWindowReady &&
-        directionVelocity >= kCollisionArmVelocityDegPerSec) {
+        input.pidPushActive && directionVelocity > parameters[motionMode == FEEDBACK_COLLISION_MOTION_TIGHTEN ? CollisionArmVelocityFlexDegS : CollisionArmVelocityExtendDegS]) {
         state.armed = true;
+        state.armedStartMs = input.timestampMs;
         result.armedChanged = true;
     }
 
     AngleSample progressStart;
-    const bool progressWindowReady = findWindowStart(
+    const bool progressWindowReady = state.armed && findWindowStart(
         state,
         input.timestampMs,
         state.progressWindowMs,
-        state.candidateStartMs,
+        state.armedStartMs,
         &progressStart);
     float directionProgress = 0.0f;
     if (progressWindowReady) {
@@ -345,7 +347,7 @@ FeedbackCollisionResult FeedbackCollisionGuard::update(
             (input.feedbackDeg - progressStart.angleDeg);
     }
 
-    // 200 ms 速度窗用于确认关节曾正常运动；武装后再用
+    // 500 ms 速度窗用于确认关节曾正常运动；武装后再用
     // 当前模式的进展窗判断是否停滞。LUT 不再充当电机运动边界，
     // 因此只要 PID 仍沿目标方向推进即可进入碰撞保持。
     if (state.armed && progressWindowReady &&

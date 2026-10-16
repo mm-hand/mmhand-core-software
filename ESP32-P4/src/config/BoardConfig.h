@@ -17,7 +17,12 @@ inline constexpr int TWAI_RX_PIN = 48;
 inline constexpr int kServoBusRxPins[NUM_BUSES] = {21, 23, 27, 33};
 inline constexpr int kServoBusTxPins[NUM_BUSES] = {20, 22, 26, 32};
 /** P4 与上位机之间的运行期 USB-UART 波特率；必须与 desktop 的 BAUDRATE 保持一致。 */
-inline constexpr uint32_t kHostUartBaud = 921600;
+// Runtime host protocol and application logs use the expansion-board USB
+// Serial/JTAG connector. Waveshare CH343 Type-C is only a migration/recovery
+// upload path. Arduino: USBMode=hwcdc, CDCOnBoot=cdc, JTAGAdapter=builtin.
+inline constexpr int kHostUsbDmPin = 24;
+inline constexpr int kHostUsbDpPin = 25;
+inline constexpr uint32_t kHostUartBaud = 921600; // CDC line coding; not a UART wire rate.
 inline constexpr uint32_t kServoBusBaud = 1000000;
 /**
  * UART 驱动 RX 环形缓冲区容量。

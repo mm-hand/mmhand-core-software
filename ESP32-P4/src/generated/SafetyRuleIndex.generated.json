@@ -471,12 +471,12 @@
       "active": true,
       "retired": false,
       "policy": {
-        "file": "safety/policies/ControlBoundarySafetyPolicy.cpp",
-        "symbol": "clampAbsToBoundary"
+        "file": "control/JointFeedbackController.cpp",
+        "symbol": "out.boundaryClamped = true"
       },
       "caller": {
-        "file": "tasks/motion_control/DualTendonControl.cpp",
-        "symbol": "clampAbsToBoundary"
+        "file": "tasks/motion_control/MotionControlService.cpp",
+        "symbol": "result.boundaryClamped"
       },
       "event": {
         "file": "tasks/motion_control/MotionControlService.cpp",

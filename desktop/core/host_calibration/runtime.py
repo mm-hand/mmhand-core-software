@@ -38,6 +38,7 @@ from ..protocol import (
     STATE_SYNC_ALL, SYSTEM_STATE_IDLE, SYSTEM_STATE_READY,
     SYSTEM_STATE_RECOVERY_REQUIRED, SYSTEM_STATE_RUN_DIRECT,
     SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_FAULT_MULTITURN_UNKNOWN,
+    SYSTEM_FAULT_SERVO_OFFLINE, SYSTEM_FAULT_CALIBRATION,
     STATE_SYNC_MULTITURN_STATE, VALID_MOTOR_MASK, build_calib_load_joint_cmd,
 )
 from ..session_log import log_session
@@ -127,7 +128,13 @@ class HostCalibrationIO:
                 time.time() - state.system_status_last_rx_ts > 1.0):
             return False
         if self._motion_started:
-            if state.system_fault_bitmap & ~((1 << 5) | (1 << 6)):
+            scope = self._motion_scope
+            faults = state.system_fault_bitmap & ~SYSTEM_FAULT_CALIBRATION
+            if not (scope & ~state.servo_online_bitmap):
+                faults &= ~SYSTEM_FAULT_SERVO_OFFLINE
+            if not (scope & state.multi_turn_unknown_bitmap):
+                faults &= ~SYSTEM_FAULT_MULTITURN_UNKNOWN
+            if faults or scope & state.servo_route_conflict_bitmap:
                 return False
             if (state.system_state == SYSTEM_STATE_RUN_DIRECT and
                     state.control_enabled and state.servo_target_owner == 1):
@@ -589,32 +596,8 @@ class HostCalibrationIO:
         return True
 
     def _prepare_workspace_reset_scope(self):
-        # UI 已规划一次；串口状态可能在点击后变化，核心在 F0 前重新核对。
-        from .dual_motor import WORKSPACE_DUAL_JOINTS
-        selected = self.selected_joint_mask | sum(
-            1 << joint for joint in {MOTOR_TO_JOINT_INDEX[m]
-                for m in range(MOTOR_COUNT) if self.selected_motor_mask & (1 << m)})
-        if not any(selected & (1 << joint) for joint in WORKSPACE_DUAL_JOINTS):
-            return True
-        state = self._state()
-        for joint in WORKSPACE_DUAL_JOINTS:
-            if selected & (1 << joint):
-                continue
-            pair = sum(1 << motor for motor in joint_motors(joint))
-            if state.servo_route_conflict_bitmap & pair:
-                self.feedback_recovery_error = f'J{joint:02d} helper motor route conflict; check IDs and bus connections'
-                return False
-            online = state.servo_online_bitmap & pair
-            if not online:
-                self.preparation_reset_mask &= ~pair
-                continue  # 原工作空间策略：整对离线的辅助手指跳过。
-            if online != pair:
-                self.feedback_recovery_error = f'J{joint:02d} workspace helper pair partially online (mask=0x{pair:08X})'
-                return False
-            if state.multi_turn_unknown_bitmap & pair:
-                self.feedback_recovery_error = f'J{joint:02d} helper multi-turn position unknown; only selected calibration joints may rebuild coordinates'
-                return False
-            self.preparation_reset_mask &= ~pair  # 辅助电机不能被 UI 的 reset 范围归零。
+        # Never reset or preposition fingers outside the explicit calibration scope.
+        self.preparation_reset_mask &= self.selected_motor_mask
         return True
 
     def wait_servo_recovery(self, mask):

@@ -15,7 +15,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Publish mmhand joint target arrays over ROS2.")
     parser.add_argument("--topic", default=DEFAULT_JOINT_TARGET_TOPIC)
     parser.add_argument("--rate", type=float, default=10.0, help="Publish rate in Hz.")
-    parser.add_argument("--amplitude", type=float, default=10.0, help="Sine amplitude in degrees.")
+    parser.add_argument("--amplitude", type=float, default=10.0, help="Sine amplitude in degrees (J00-J20).")
     args = parser.parse_args()
 
     import rclpy
@@ -37,7 +37,7 @@ def main() -> None:
             msg = Float32MultiArray()
             msg.data = data
             dim = MultiArrayDimension()
-            dim.label = "mmhand_joints_deg"
+            dim.label = "mmhand:J00-J20:urdf_deg"
             dim.size = ENCODER_COUNT
             dim.stride = ENCODER_COUNT
             layout = MultiArrayLayout()

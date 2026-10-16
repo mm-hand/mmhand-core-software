@@ -43,7 +43,7 @@ $sourceFiles = Get-ChildItem -LiteralPath $sourceRoot -Recurse -File |
 
 # R0：顶层目录是架构契约；历史功能型目录不得回流。
 $allowedTopLevel = @(
-    "config", "data", "generated", "hal", "safety", "system", "tasks"
+    "config", "data", "generated", "hal", "safety", "system", "tasks", "control"
 )
 $actualTopLevel = Get-ChildItem -LiteralPath $sourceRoot -Directory |
     Where-Object {
@@ -56,7 +56,7 @@ foreach ($name in $actualTopLevel) {
     }
 }
 foreach ($legacy in @("core", "domain", "hardware", "shared", "actuator",
-                       "calibration", "communication", "control", "persistence",
+                       "calibration", "communication", "persistence",
                        "recovery", "app", "modules", "platform", "runtime")) {
     if (Test-Path -LiteralPath (Join-Path $sourceRoot $legacy)) {
         Add-Failure "Legacy source directory still exists: $legacy"

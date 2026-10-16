@@ -203,13 +203,14 @@ def test_historical_packet_cannot_hide_genuinely_stale_device_feedback(io):
     assert not io._fresh_feedback(state, 4)
 
 
-def test_feedback_age_handles_p4_wrap_and_system_clock_extrapolation(io):
+def test_feedback_age_handles_p4_wrap_and_system_clock_extrapolation(io, monkeypatch):
+    monkeypatch.setattr(time, 'time', lambda: 1024.0)
     state = io.controller.current_state
     state.system_status_p4_time_ms = 10
     assert 26 <= io._age(state, 0xFFFFFFF0, time.time()) < 100
     state.system_status_p4_time_ms = 1000
     state.system_status_last_rx_ts = time.time() - 0.6
-    assert io._age(state, 1000, time.time()) >= 600
+    assert io._age(state, 1000, time.time()) == pytest.approx(600)
 
 
 def _recovery_clock(io, monkeypatch, *, advance_feedback=True):
@@ -508,12 +509,34 @@ def test_normal_direct_done_allows_next_step_but_stop_and_foreign_token_do_not(i
     assert not io.owns_control()  # 用户 STOP 不等于普通 DONE。
 
 
+def test_motor_calibration_faults_are_scoped_without_masking_selected_failures(io):
+    from desktop.core.protocol import SYSTEM_FAULT_SERVO_OFFLINE
+    state = io.controller.current_state
+    io._motion_started = True
+    io._motion_scope = 4
+    state.system_state = SYSTEM_STATE_RUN_DIRECT
+    state.control_enabled = True
+    state.servo_target_owner = 1
+    state.servo_online_bitmap = 4
+    state.multi_turn_unknown_bitmap = ((1 << 27) - 1) & ~4
+    state.system_fault_bitmap = SYSTEM_FAULT_SERVO_OFFLINE | SYSTEM_FAULT_MULTITURN_UNKNOWN
+    assert io.owns_control()
+    state.servo_online_bitmap = 0
+    assert not io.owns_control()
+    state.servo_online_bitmap = 4
+    state.multi_turn_unknown_bitmap |= 4
+    assert not io.owns_control()
+    state.multi_turn_unknown_bitmap &= ~4
+    state.system_fault_bitmap |= SYSTEM_FAULT_OVERLOAD
+    assert not io.owns_control()
+
+
 @pytest.mark.parametrize('unknown', [0, 1 << 5])
-def test_core_rejects_unknown_helper_without_rebasing_it(io, unknown):
+def test_core_ignores_unselected_unknown_helper_without_rebasing_it(io, unknown):
     io.selected_joint_mask = 1
     io.selected_motor_mask = io.preparation_reset_mask = 3
     io.controller.current_state.multi_turn_unknown_bitmap = unknown
-    assert io._prepare_workspace_reset_scope() == (unknown == 0)
+    assert io._prepare_workspace_reset_scope()
     assert io.preparation_reset_mask == 3
 
 
@@ -556,7 +579,7 @@ def test_j07_initial_recovery_requires_only_its_selected_motor(io, monkeypatch, 
     ('unknown', 'helper multi-turn position unknown'),
     ('route_conflict', 'helper motor route conflict'),
 ])
-def test_unusable_helper_pair_blocks_side_sway_initial_rebase(io, monkeypatch, failure, reason):
+def test_unselected_unusable_helper_never_blocks_or_enters_rebase(io, monkeypatch, failure, reason):
     io.selected_joint_mask = 1
     io.selected_motor_mask = io.preparation_reset_mask = 3
     state = io.controller.current_state
@@ -568,10 +591,12 @@ def test_unusable_helper_pair_blocks_side_sway_initial_rebase(io, monkeypatch, f
     else:
         state.servo_route_conflict_bitmap = 1 << 5
     monkeypatch.setattr(io, '_prepare_device', lambda: True)
-    io.controller.rebase_servo_abs_zero = MagicMock()
-    assert not io.wait_servo_recovery(3)
-    assert reason in io.feedback_recovery_error
-    io.controller.rebase_servo_abs_zero.assert_not_called()
+    monkeypatch.setattr(io, '_rebase', MagicMock(return_value=True))
+    _recovery_clock(io, monkeypatch)
+    assert io.wait_servo_recovery(3)
+    io._rebase.assert_called_once_with(3)
+    assert io.feedback_recovery_error == ''
+
 
 
 def test_outside_logical_range_is_rejected_without_clamping(io, monkeypatch):
@@ -591,10 +616,10 @@ def test_external_stop_cancels_host_session_and_preserves_real_p4_state(io):
     assert io.controller.current_state.calib_status == 'IDLE'
 
 
-def test_pause_cancels_host_display_and_old_worker_cannot_restore_running(io):
+def test_stop_cancels_host_display_and_old_worker_cannot_restore_running(io):
     io.session_state('RUNNING')
-    io.controller.pause()
-    io.controller.comm.send_command.assert_called_once_with('pause')
+    io.controller.stop()
+    io.controller.comm.send_command.assert_called_once_with('stop')
     assert not io.owns_control()
     io.session_state('RUNNING')
     io.controller._apply_host_calibration_overlay()

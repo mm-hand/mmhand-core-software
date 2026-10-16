@@ -82,10 +82,16 @@ def test_desktop_frame_builder_rejects_unknown_command() -> None:
         protocol._build_command_frame(0xFE, b"")
 
 
-def test_current_pause_and_retired_numbers_cannot_be_reassigned(tmp_path: Path) -> None:
+def test_removed_commands_have_no_api_and_retired_numbers_cannot_be_reassigned(tmp_path: Path) -> None:
     schema = json.loads(generator.DEFAULT_SCHEMA.read_text(encoding="utf-8"))
-    assert protocol.CMD_PAUSE == 217
-    assert any(cmd["name"] == "CMD_PAUSE" and cmd["value"] == 217 for cmd in schema["commands"])
+    assert not hasattr(protocol, 'CMD_PAUSE')
+    assert not hasattr(protocol, 'CMD_CALIBRATE')
+    assert not hasattr(protocol, 'build_calibrate_cmd')
+    with pytest.raises(ValueError, match='unknown upper command'):
+        protocol._build_command_frame(202)
+    assert not any(cmd['name'] in ('CMD_CALIBRATE', 'CMD_PAUSE', 'CMD_FEEDBACK_HOLD', 'CMD_DIRECT_HOLD',
+                                  'CMD_CONTROL_TRACE_SUBSCRIBE') for cmd in schema['commands'])
+    assert {202, 217, 239, 245, 247} <= set(schema['retired_command_values'])
     assert schema["p4_runtime"]["heartbeats_ms"]["kSystemStatusHeartbeatMs"] == 200
     schema["retired_command_values"] = [250]
     schema["commands"][0]["value"] = 250

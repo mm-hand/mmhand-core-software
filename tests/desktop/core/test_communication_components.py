@@ -60,6 +60,7 @@ class _FakeSerial:
         self.writes: list[bytes] = []
 
     def open(self) -> None:
+        self.lines_at_open = (self.dtr, self.rts)
         self.is_open = True
 
     def close(self) -> None:
@@ -86,7 +87,7 @@ def test_serial_transport_owns_open_write_and_close() -> None:
     assert transport.serial is None
 
 
-def test_tactile_transport_keeps_usb_cdc_control_lines_active() -> None:
+def test_native_usb_transport_sets_inactive_reset_lines_before_open() -> None:
     transport = SerialTransport(
         "COM_TOUCH",
         921_600,
@@ -95,8 +96,9 @@ def test_tactile_transport_keeps_usb_cdc_control_lines_active() -> None:
     )
 
     assert transport.open() is True
-    assert transport.serial.dtr is True
-    assert transport.serial.rts is True
+    assert transport.serial.lines_at_open == (False, False)
+    assert transport.serial.port == 'COM_TOUCH'
+    assert transport.serial.write_timeout == 0.5
 
 
 def test_frame_decoder_handles_log_bytes_fragmentation_and_sticky_frames() -> None:
@@ -138,6 +140,17 @@ def test_packet_router_strips_p4_timestamp_and_assigns_semantic_kind() -> None:
     assert packet.p4_time_ms is None
 
 
+def test_ack_survives_unrelated_packets_in_one_rx_batch_and_is_cleared_on_reset():
+    tracker = AckTracker()
+    tracker.publish(0xE8, 0, 0, received_at=10.0)
+    tracker.publish(0xED, 0, 0, received_at=10.001)
+    tracker.publish(0xF3, 0, 0, received_at=10.002)
+    assert tracker.wait_for(0xE8, timeout_s=0, received_after=9.9) == (0xE8,0,0,10.0)
+    assert tracker.wait_for(0xE8, timeout_s=0, received_after=10.1) is None
+    tracker.reset()
+    assert tracker.wait_for(0xE8, timeout_s=0) is None
+
+
 def test_ack_tracker_rejects_stale_ack_and_exposes_monotonic_sequence() -> None:
     tracker = AckTracker()
     first_sequence = tracker.publish(0x10, 2, 0, received_at=10.0, p4_time_ms=100)
@@ -169,6 +182,23 @@ def test_ack_tracker_rejects_stale_ack_and_exposes_monotonic_sequence() -> None:
 
     tracker.reset()
     assert tracker.drain_events() == []
+
+
+def test_new_command_cannot_reuse_ack_with_same_wall_clock_timestamp() -> None:
+    comm = LowerComputerComm("")
+    comm._transport.attach(_FakeSerial("COM_TEST"))
+    comm.running = True
+    comm._protocol_compatible = True
+    tracker = comm._ack_tracker
+    tracker.publish(CMD_RESET, 0, 0, received_at=10.0)
+    tracker.publish(0xED, 0, 0, received_at=10.0)
+
+    assert comm.send_command("reset")
+    assert comm.wait_for_ack(CMD_RESET, 0, received_after=10.0) is None
+    # An unrelated transaction's result survives.
+    assert tracker.wait_for(0xED, 0, received_after=10.0) == (0xED, 0, 0, 10.0)
+    tracker.publish(CMD_RESET, 0, 0, received_at=10.0)
+    assert comm.wait_for_ack(CMD_RESET, 0, received_after=10.0) == (CMD_RESET, 0, 0, 10.0)
 
 
 def test_event_channel_preserves_order_until_explicit_drain() -> None:
@@ -268,7 +298,7 @@ def _connectivity_packet(
     encoder_mask: int = (1 << ENCODER_COUNT) - 1, unknown_mask: int = 0,
     encoder_fault_mask: int = 0, can_online: bool = True,
 ) -> tuple:
-    payload = bytearray(43)
+    payload = bytearray(173)
     struct.pack_into(">I", payload, 13, unknown_mask)
     struct.pack_into(">I", payload, 26, servo_mask)
     struct.pack_into(">I", payload, 30, encoder_mask)
@@ -633,3 +663,11 @@ def test_f0_nonzero_reserved_area_cannot_change_result_or_coordinate_history() -
     assert len(comm.feedback_history.read(cursor)) == 4
     assert comm._state_reducer.last_model.servo_rebase_zero_result_token == 42
     assert comm._state_reducer.last_model.servo_rebase_zero_result_p4_time_ms == 10
+
+
+def test_partial_serial_frame_is_a_transport_failure():
+    transport = SerialTransport("COM_TEST", 921600, 0.02, _FakeSerial)
+    transport.open()
+    transport.serial.write = lambda data: len(data) - 1
+    with pytest.raises(OSError, match="serial short write: 2/3 bytes"):
+        transport.write(b"abc")

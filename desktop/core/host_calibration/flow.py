@@ -89,7 +89,7 @@ def _is_cancelled(io) -> bool:
 
 
 def run(io, joint_mask: int, motor_mask: int,
-        on_joint: Callable[[int, dict], None], params=None) -> CalibrationSessionResult:
+        on_joint: Callable[[int, dict], None], params=None, on_joint_started=None) -> CalibrationSessionResult:
     """按固件原策略顺序运行；成功关节立即写回，后续失败不撤销它。"""
     joints = selected_joints(joint_mask, motor_mask)
     selected_mask = sum(1 << joint for joint in joints)
@@ -134,6 +134,8 @@ def run(io, joint_mask: int, motor_mask: int,
                             message = "calibration cancelled or control lost"
                             break
                         joint_motors = calibration_joint_motor_mask(joint)
+                        if on_joint_started is not None:
+                            on_joint_started(joint, joint_motors)
                         io.session_state("RUNNING", progress=index * 100 // len(joints),
                                          joint=joint, completed=completed, failed=failed)
                         prepared, prepare_message = _accepted(

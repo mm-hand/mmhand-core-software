@@ -173,7 +173,7 @@ def test_identity_change_after_confirmation_cancels_same_connect(
     disconnect.assert_called_once_with(stop_lower=True)
 
 
-def test_pause_during_connect_cancels_and_disconnects(hand, monkeypatch):
+def test_stop_during_connect_cancels_and_disconnects(hand, monkeypatch):
     entered, release = threading.Event(), threading.Event()
 
     def initialize(port):
@@ -183,16 +183,14 @@ def test_pause_during_connect_cancels_and_disconnects(hand, monkeypatch):
         assert release.wait(2), "test did not release connection initialization"
         return True
 
-    pause, disconnect = Mock(), Mock()
+    disconnect = Mock()
     monkeypatch.setattr(hand._controller, "initialize", initialize)
-    monkeypatch.setattr(hand, "pause", pause)
     monkeypatch.setattr(hand, "disconnect", disconnect)
     result = hand.request_connect("COM13")
     try:
         assert result.accepted, result.message
         assert entered.wait(1), "connection worker did not start"
-        assert hand.request_pause().accepted
-        pause.assert_called_once()
+        assert hand.stop_motion().accepted
     finally:
         release.set()
 

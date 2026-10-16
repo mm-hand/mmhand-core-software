@@ -1,3 +1,4 @@
+from desktop.core.protocol import HOST_PROTOCOL_VERSION
 """Tests for core_logic.py - HandController.set_motor_positions_absolute"""
 
 import pytest
@@ -16,7 +17,6 @@ from desktop.core.data_models import HandModel
 from desktop.core.device_state_store import MultiTurnRuntimeStore
 from desktop.core.protocol import (
     CMD_ACTIVE_SCOPE,
-    CMD_CALIBRATE,
     CMD_CALIB_LOAD_JOINT,
     CMD_CALIB_LOAD_LIMITS,
     CMD_MANUAL_ENCODER_REFERENCE,
@@ -499,7 +499,7 @@ class TestAsyncPersistenceAck:
     ):
         controller = HandController()
         controller.current_state.has_product_fingerprint = True
-        controller.current_state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": 2}
+        controller.current_state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": HOST_PROTOCOL_VERSION}
         controller.comm = MagicMock()
         controller.comm.wait_for_ack.return_value = (
             CMD_MANUAL_ENCODER_REFERENCE,
@@ -550,7 +550,7 @@ def test_host_multiturn_restore_uses_nearest_circle_for_each_motor(tmp_path):
     state.system_state = SYSTEM_STATE_IDLE
     state.system_status_last_rx_ts = core_logic.time.time()
     state.has_product_fingerprint = True
-    state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": 2}
+    state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": HOST_PROTOCOL_VERSION}
     state.has_multiturn_restore_result = True
     state.has_servo_angle_data = True
     state.servo_abs_last_rx_ts = core_logic.time.time()
@@ -598,7 +598,7 @@ class TestPrepareCalibrationTurnZero:
         )
         state = controller.current_state
         state.has_product_fingerprint = True
-        state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": 2}
+        state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": HOST_PROTOCOL_VERSION}
         state.has_system_status_data = state.has_servo_route_status = True
         state.system_state = SYSTEM_STATE_IDLE
         state.system_status_last_rx_ts = core_logic.time.time()
@@ -644,7 +644,7 @@ class TestPrepareCalibrationTurnZero:
         controller.prepare_calibration_turn_zero = MagicMock(return_value=(False, "reset rejected", 0, 0))
         state = controller.current_state
         state.has_product_fingerprint = True
-        state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": 2}
+        state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": HOST_PROTOCOL_VERSION}
         state.system_state = 0
         state.has_servo_angle_data = True
         state.has_servo_route_status = True
@@ -809,7 +809,7 @@ def test_calibration_namespace_requires_device_identity_and_separates_devices():
     with pytest.raises(CalibrationSnapshotError, match="identity unavailable"):
         _ = controller.calibration_snapshot_path
     controller.current_state.has_product_fingerprint = True
-    controller.current_state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": 2}
+    controller.current_state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": HOST_PROTOCOL_VERSION}
     first = controller.calibration_snapshot_path
     controller.current_state.product_fingerprint["device_id"] = "0000123456789ABD"
     second = controller.calibration_snapshot_path
@@ -824,7 +824,7 @@ def test_production_calibration_service_rejects_foreign_or_unproven_contract():
     from desktop.core.calibration_snapshot import CalibrationSnapshotError
     controller = HandController()
     controller.current_state.has_product_fingerprint = True
-    controller.current_state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": 2,
+    controller.current_state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": HOST_PROTOCOL_VERSION,
         "schema_version": 2, "control_model_crc": 123, "hardware_map_crc": 456}
     service = CalibrationWorkflowService(controller)
     identity = controller.calibration_data_identity
@@ -843,7 +843,7 @@ def test_device_change_clears_manual_drafts_and_calibration_transaction():
     snapshot = core_logic.HandModel()
     snapshot.protocol_compatible = True
     snapshot.has_product_fingerprint = True
-    snapshot.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": 2}
+    snapshot.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": HOST_PROTOCOL_VERSION}
     backend._on_controller_state_update(snapshot)
     assert backend._manual_drafts == {}
     assert backend._calibration_workflow._operation == ""

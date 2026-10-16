@@ -1,3 +1,4 @@
+from desktop.core.protocol import HOST_PROTOCOL_VERSION
 import time
 from unittest.mock import MagicMock, call
 
@@ -13,7 +14,7 @@ def controller_with_motor():
     controller.comm = MagicMock()
     state = controller.current_state
     state.has_product_fingerprint = True
-    state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": 2}
+    state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": HOST_PROTOCOL_VERSION}
     state.system_state = SYSTEM_STATE_IDLE
     state.has_servo_angle_data = state.has_servo_route_status = True
     state.has_p4_time = True
@@ -27,11 +28,24 @@ def controller_with_motor():
 
 def test_direct_enable_holds_exact_abs_and_ignores_unselected_unknown():
     controller = controller_with_motor()
+    state = controller.current_state
+    state.active_motor_mask = 8
+    def executed(command):
+        if isinstance(command, tuple) and command[0] == 'motor_pos_abs':
+            _, token, mask, targets, _, _ = command
+            from desktop.core.protocol import SYSTEM_STATE_RUN_DIRECT
+            state.direct_target_token = token; state.direct_target_status = 2
+            state.direct_target_applied_mask = mask; state.direct_target_rejected_mask = 0
+            state.direct_target_result_rx_ts = state.system_status_last_rx_ts = time.time()
+            state.system_state = SYSTEM_STATE_RUN_DIRECT
+            state.control_enabled = True; state.servo_target_owner = 1
+        return True
+    controller.comm.send_command.side_effect = executed
     ok, _, targets = controller.enable_direct_hold(8)
     assert ok and targets[3] == 3000
     controller.comm.invalidate_pending_direct_commands.assert_called_once()
     assert controller.comm.send_command.call_args_list == [
-        call("start"), call(("motor_pos_abs", targets)),
+        call("start"), call(("motor_pos_abs", 1, 8, targets, 400, 20)),
     ]
 
 

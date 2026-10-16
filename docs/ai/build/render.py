@@ -108,55 +108,27 @@ def config_index(sources: Sources, inventory: list[dict], lang: str, registry: d
 
 
 def formula_sections(sources: Sources, registry: dict[str, int], lang: str) -> str:
-    pid = ref_for(sources, "mmhand", configured_path(sources, "control.pid"), "float f_PID_Calculate")
-    dual = ref_for(sources, "mmhand", configured_path(sources, "control.dual_tendon"), "const float correction")
-    if lang == "zh":
-        intro = "以下式子按当前源码的计算顺序展开；输入异常、死区、限幅及模式准入仍以对应分支为准。"
-        pid_title, dual_title = "单腱离散 PID", "双腱拮抗控制"
-        pid_note = "`dtSeconds` 无效时保持上次输出；非有限输入会清零并报错；死区内保持输出。测量速度用于 D 项，首次样本没有 D 项。"
-        dual_note = "每侧电机先映射到标定电机空间，再计算误差；两台电机任一无效或离线时该求解失败。结果随后按 LUT 裕量边界截取。"
-    else:
-        intro = "These equations follow the current source order. Input errors, deadband, clamps and admission remain governed by their branches."
-        pid_title, dual_title = "Single-tendon discrete PID", "Antagonistic dual-tendon control"
-        pid_note = "Invalid `dtSeconds` retains the previous output; non-finite input clears the controller and reports an error. The deadband retains output. The D term uses measured velocity and is zero for the first sample."
-        dual_note = "Each motor is mapped into calibrated motor space before computing error. Either motor being invalid or offline fails the solver. The target is then clamped to LUT margins."
-    return rf"""{intro}
+    pi = ref_for(sources, "mmhand", configured_path(sources, "control.pi"), "JointFeedbackController::compute")
+    filters = ref_for(sources, "mmhand", configured_path(sources, "control.filter"), "FeedbackFilter::update")
+    title = "实测位置基底的单腱/双腱 PI" if lang == "zh" else "Measured-position single/dual tendon PI"
+    note = ("Kp 是共享的无量纲倍率，s 是各电机有符号局部 LUT 斜率。I 仅在新反馈、稳定目标、持续同向误差、正常跟随且未饱和时积分；其他周期冻结，无泄露。换向补偿以换向瞬间的实测位置为锚点，不重复累加。最终输出统一经过机械限位和速率约束，无 D 项或速度前馈。" if lang == "zh" else
+            "Kp is a shared dimensionless multiplier; s is each motor's signed local LUT slope. I integrates only with new feedback, a stable target, persistent same-sign error, normal following and no saturation; otherwise it freezes, without leakage. Reversal compensation is anchored to measured position at reversal. Final outputs pass mechanical and rate limits. There is no D term or velocity feedforward.")
+    filter_note = ("q_fast 与 q_slow 分别是20ms和500ms有效磁编样本滑动均值。碰撞速度由 q_slow 的500ms窗口位移求得；完整武装窗口之后再检查独立500ms停滞窗口。" if lang == "zh" else
+                   "q_fast and q_slow are valid-sample moving means over20ms and500ms. Collision velocity uses q_slow displacement over500ms; a complete arming window precedes a separate500ms stall window.")
+    return f"""### {title} {cite(pi, registry)}
 
-### {pid_title} {cite(pid, registry)}
+```text
+e = q_des - q_fast
+P_i = Kp_group * s_i * e
+u_i = measured_motor_i + P_i + I_i + reversal_i + recovery_i
+z = LUT(q_fast) - measured_motors
+z_perp = z - s * dot(s,z) / dot(s,s)
+recovery = k_pair * z_perp  (dual tendon; zero for single tendon)
+```
 
-$$
-\begin{{aligned}}
-e_k &= r_k-y_k \\
-v_k &= v_{{k-1}}+\frac{{\Delta t_k}}{{\max(0,\tau)+\Delta t_k}}
-       \left(\frac{{y_k-y_{{k-1}}}}{{\Delta t_k}}-v_{{k-1}}\right) \\
-I_k &= \begin{{cases}}
-\operatorname{{clip}}(I_{{k-1}}+e_k\Delta t_k,-I_{{\max}},I_{{\max}}),& |e_k|\geq|b|,\ K_i\neq0 \\
-0,& |e_k|\geq|b|,\ K_i=0 \\
-I_{{k-1}},& |e_k|<|b|
-\end{{cases}} \\
-u_k &= \begin{{cases}}
-K_p e_k+K_i I_k+\operatorname{{clip}}(-K_dv_k,-D_{{\max}},D_{{\max}}),& |e_k|\geq|b| \\
-u_{{k-1}},& |e_k|<|b|\text{{ or }}\Delta t_k\leq0
-\end{{cases}}
-\end{{aligned}}
-$$
+{note}
 
-{pid_note}
-
-### {dual_title} {cite(dual, registry)}
-
-$$
-\begin{{aligned}}
-e_{{i,k}} &= R_{{i,k}}-F_{{i,k}} \\
-\alpha_k &= \frac{{\Delta t_k}}{{\tau+\Delta t_k}} \\
-V_{{i,k}} &= V_{{i,k-1}}+\alpha_k\left(\frac{{\Delta R_{{i,k}}-\Delta F_{{i,k}}}}{{\Delta t_k}}-V_{{i,k-1}}\right) \\
-I_{{i,k}} &= \operatorname{{clip}}(I_{{i,k-1}}+e_{{i,k}}\Delta t_k,-I_{{\max}},I_{{\max}}) \\
-C_{{i,k}} &= K_p e_{{i,k}}+K_i I_{{i,k}}+\operatorname{{clip}}(K_dV_{{i,k}},-D_{{\max}},D_{{\max}}) \\
-A_{{i,k}} &= \operatorname{{clip}}_{{[L_i^-,L_i^+]}}\left(A^{{current}}_{{i,k}}+\operatorname{{round}}(C_{{i,k}})\right),\quad i\in\{{0,1\}}
-\end{{aligned}}
-$$
-
-{dual_note}
+{filter_note} {cite(filters, registry)}
 """
 
 
@@ -243,8 +215,8 @@ def markdown(sources: Sources, lang: str, graphs: list[dict], inventory: list[di
     for evidence in all_evidence(graphs):
         spans[Sources.key(evidence["repo"], evidence["path"])].append(evidence)
     for repo, path, needle in (
-        ("mmhand", configured_path(sources, "control.pid"), "float f_PID_Calculate"),
-        ("mmhand", configured_path(sources, "control.dual_tendon"), "const float correction"),
+        ("mmhand", configured_path(sources, "control.pi"), "JointFeedbackController::compute"),
+        ("mmhand", configured_path(sources, "control.filter"), "FeedbackFilter::update"),
         ("teleop", configured_path(sources, "teleop.publisher", "teleop"), "self.robot_publisher ="),
         ("teleop", configured_path(sources, "teleop.track", "teleop"), 'output.add_argument("--ros"'),
     ):
@@ -272,92 +244,11 @@ def markdown(sources: Sources, lang: str, graphs: list[dict], inventory: list[di
 
 
 def operation_section(sources: Sources, lang: str, registry: dict[str, int], inventory: list[dict]) -> str:
-    deps = sources.evidence("mmhand", configured_path(sources, "desktop.requirements"), 1)
-    entry = ref_for(sources, "mmhand", configured_path(sources, "desktop.entry"), "def build_parser")
-    mode = ref_for(sources, "mmhand", configured_path(sources, "desktop.manual_ui"), "def _manual_submode")
-    ros = ref_for(sources, "teleop", configured_path(sources, "teleop.publisher", "teleop"), 'self.robot_publisher =')
-    track = ref_for(sources, "teleop", configured_path(sources, "teleop.track", "teleop"), 'output.add_argument("--ros"')
-    topic = ref_for(sources, "teleop", configured_path(sources, "teleop.config", "teleop"), 'ROBOT_TOPIC =')
-    sub = ref_for(sources, "mmhand", configured_path(sources, "desktop.raw_ik"), "create_subscription(")
-    robot = ref_for(sources, "mmhand", configured_path(sources, "tools.robot_generator"), 'parser.add_argument("--check"')
-    protocol = ref_for(sources, "mmhand", configured_path(sources, "tools.protocol_generator"), 'parser.add_argument("--check"')
-    safety = ref_for(sources, "mmhand", configured_path(sources, "tools.safety_generator"), 'parser.add_argument("--check"')
-    urdf = ref_for(sources, "mmhand", configured_path(sources, "tools.urdf_update"), "[string]$StructureRepo")
-    if lang == "zh":
-        return f"""### 安装与启动 {cite([deps] + entry + mode, registry)}
-
-在目标 Python 环境安装源码列出的桌面端依赖：
-
-```powershell
-python -m pip install -r desktop/requirements.txt
-```
-
-```powershell
-python -m desktop ui --mode monitor --no-ros2
-python -m desktop ui --mode replay --no-ros2
-python -m desktop cli --help
-```
-
-监视界面的 Manual 页包含 Device Check、Joint Channels、Motor Channels 和 Test 子页；顶部 Mode 菜单还可进入 Replay。先连接 P4，再在 Device Check 检查或录入 Manual 端点；Joint Channels 使用磁编负反馈，Motor Channels 发送舵机 logical ABS 直控。ENABLE、Pause、Stop、Reset 与 Calibrate 的具体门禁及状态效果请打开第三节的交互图逐节点核对。{cite(mode, registry)}
-
-### ROS2 遥操 {cite(ros + track + topic + sub, registry)}
-
-遥操源码仓库：[mmhand_teleop](https://github.com/mm-hand/mmhand_teleop)。在其根目录执行 `python track.py --ros`：`RosOutput` 将 21 个 J00–J20 角度（degree）作为 `std_msgs/msg/Float32MultiArray` 发布到 `/raw_ik_target`。上位机需显式选择 raw IK 输入：
-
-```powershell
-python -m desktop ui --mode monitor --ros2 --ros2-input raw_ik --ros2-raw-ik-topic /raw_ik_target
-ros2 topic echo --once /raw_ik_target
-```
-
-在 Joint Channels 选择活动范围并完成 ENABLE 后，开启 ROS2 INPUT 授权；输入仍经过目标格式、工作区和 P4 状态门禁。Pause、Stop、范围改变和 Replay 会撤销授权；具体判断式见行为图。{cite(ref_for(sources, 'mmhand', 'desktop/core/hand_backend.py', 'def _set_ros2_output_armed_locked'), registry)}
-
-### 更新 URDF 与生成物 {cite(urdf + robot + protocol + safety, registry)}
-
-结构仓库更新入口为 `tools/update_structure_urdf.ps1 -StructureRepo <路径> -NoPull -SkipP4Build`；脚本同步适配、校验 URDF、生成桌面/P4 模型契约并检查陈旧。直接修改模型清单或活动 URDF 后，运行 `python tools/generate_robot_model.py`，再运行同一命令加 `--check`。修改 `desktop/resources/config/upper_protocol_schema.json` 后运行 `python tools/generate_upper_protocol.py` 及其 `--check`；修改 P4 安全规则目录后运行 `python tools/generate_p4_safety_catalog.py` 及其 `--check`。生成文件应改上游输入后重生成，不要手工改生成物。
-
-### 配置位置
-
-下列条目从已提交配置源码及字段提取；改变值前请查看读取方与对应生成器：
-
-{config_index(sources, inventory, lang, registry)}
-"""
-    return f"""### Install, launch and operate {cite([deps] + entry + mode, registry)}
-
-Install desktop dependencies listed by the committed requirements file:
-
-```powershell
-python -m pip install -r desktop/requirements.txt
-```
-
-```powershell
-python -m desktop ui --mode monitor --no-ros2
-python -m desktop ui --mode replay --no-ros2
-python -m desktop cli --help
-```
-
-Manual contains Device Check, Joint Channels, Motor Channels and Test. The Mode menu also opens Replay. Connect P4, then inspect or enter Manual endpoints in Device Check. Joint Channels uses encoder feedback; Motor Channels sends logical ABS servo targets. Open the interactive behavior graph for the exact guards and state effects of ENABLE, Pause, Stop, Reset and Calibrate. {cite(mode, registry)}
-
-### ROS2 teleoperation {cite(ros + track + topic + sub, registry)}
-
-Source repository: [mmhand_teleop](https://github.com/mm-hand/mmhand_teleop). Run `python track.py --ros` in its root. `RosOutput` publishes 21 J00–J20 angles in degrees as `std_msgs/msg/Float32MultiArray` on `/raw_ik_target`. Select raw IK input explicitly on the desktop:
-
-```powershell
-python -m desktop ui --mode monitor --ros2 --ros2-input raw_ik --ros2-raw-ik-topic /raw_ik_target
-ros2 topic echo --once /raw_ik_target
-```
-
-Select an active scope in Joint Channels, complete ENABLE, then authorize ROS2 INPUT. Format, workspace and P4 state gates still apply. Pause, Stop, scope changes and Replay revoke authorization; inspect the behavior graph for source predicates. {cite(ref_for(sources, 'mmhand', 'desktop/core/hand_backend.py', 'def _set_ros2_output_armed_locked'), registry)}
-
-### Update URDF and generated files {cite(urdf + robot + protocol + safety, registry)}
-
-Run `tools/update_structure_urdf.ps1 -StructureRepo <path> -NoPull -SkipP4Build` for the external structure repository. It synchronizes the adapter, validates URDF, generates Desktop/P4 contracts and checks freshness. After changing the model manifest or active URDF, run `python tools/generate_robot_model.py` and then its `--check` mode. After editing `desktop/resources/config/upper_protocol_schema.json`, run `python tools/generate_upper_protocol.py` and `--check`. After editing the P4 safety rule catalog, run `python tools/generate_p4_safety_catalog.py` and `--check`. Edit upstream inputs and regenerate rather than editing generated files.
-
-### Configuration locations
-
-These entries are extracted from committed configuration source and fields. Inspect their readers and generators before changing values:
-
-{config_index(sources, inventory, lang, registry)}
-"""
+    deps = sources.evidence('mmhand', configured_path(sources, 'desktop.requirements'), 1)
+    intro = ('以下源码注释后的操作卡必须涵盖 P4/S3 GPIO、Type-C 接口、Arduino USB 选项、编译烧录和断点调试；缺少证据时禁止发布。'
+             if lang == 'zh' else
+             'The source-annotated operation cards below must cover P4/S3 GPIO, Type-C connectors, Arduino USB options, build/upload and breakpoint debugging. Missing evidence blocks publication.')
+    return intro + ' ' + cite([deps], registry) + '\n\n' + config_index(sources, inventory, lang, registry)
 
 
 def safety_section(sources: Sources, lang: str, registry: dict[str, int]) -> str:

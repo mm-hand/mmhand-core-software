@@ -16,7 +16,6 @@ from desktop.core.protocol import (
     PACKET_TYPE_MULTITURN_RESTORE_RESULT,
     STATE_SYNC_MULTITURN_STATE,
     SYSTEM_STATE_IDLE,
-    SYSTEM_STATE_PAUSED,
     SYSTEM_STATE_RUN_DIRECT,
     PROTO_ACK_STATUS_UNSUPPORTED_MODE,
     parse_multiturn_restore_result_packet,
@@ -334,7 +333,7 @@ def test_nonstationary_or_unresolved_coordinate_transaction_prevents_restore(res
     elif guard == "active":
         state.system_state = SYSTEM_STATE_RUN_DIRECT
     elif guard == "paused":
-        state.system_state = SYSTEM_STATE_PAUSED
+        state.system_state = 7  # Retired wire state is rejected; no pause compatibility.
     elif guard == "owner":
         state.servo_target_owner = 1
     elif guard == "enabled":

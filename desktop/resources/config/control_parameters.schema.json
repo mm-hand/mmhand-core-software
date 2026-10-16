@@ -1,0 +1,239 @@
+{
+  "schema_version": 1,
+  "fields": [
+    {
+      "group": "single_tendon",
+      "name": "kp",
+      "minimum": 0.0,
+      "maximum": 2.0
+    },
+    {
+      "group": "single_tendon",
+      "name": "ki_per_s",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    {
+      "group": "single_tendon",
+      "name": "integral_limit_counts",
+      "minimum": 0,
+      "maximum": 500
+    },
+    {
+      "group": "dual_tendon",
+      "name": "kp",
+      "minimum": 0.0,
+      "maximum": 2.0
+    },
+    {
+      "group": "dual_tendon",
+      "name": "ki_per_s",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    {
+      "group": "dual_tendon",
+      "name": "integral_limit_counts",
+      "minimum": 0,
+      "maximum": 500
+    },
+    {
+      "group": "dual_tendon",
+      "name": "pair_recovery_gain",
+      "minimum": 0.0,
+      "maximum": 0.5
+    },
+    {
+      "group": "feedback",
+      "name": "fast_window_ms",
+      "minimum": 10,
+      "maximum": 100
+    },
+    {
+      "group": "feedback",
+      "name": "slow_window_ms",
+      "minimum": 100,
+      "maximum": 1000
+    },
+    {
+      "group": "feedback",
+      "name": "integral_noise_deg",
+      "minimum": 0.0,
+      "maximum": 2.0
+    },
+    {
+      "group": "feedback",
+      "name": "integral_confirm_ms",
+      "minimum": 0,
+      "maximum": 1000
+    },
+    {
+      "group": "reversal",
+      "name": "confirm_deg",
+      "minimum": 0.1,
+      "maximum": 10.0
+    },
+    {
+      "group": "reversal",
+      "name": "confirm_ms",
+      "minimum": 0,
+      "maximum": 500
+    },
+    {
+      "group": "reversal",
+      "name": "initial_counts",
+      "minimum": 0,
+      "maximum": 200
+    },
+    {
+      "group": "reversal",
+      "name": "growth_counts_per_s",
+      "minimum": 0,
+      "maximum": 10000
+    },
+    {
+      "group": "reversal",
+      "name": "max_counts",
+      "minimum": 0,
+      "maximum": 300
+    },
+    {
+      "group": "reversal",
+      "name": "exit_travel_deg",
+      "minimum": 0.05,
+      "maximum": 5.0
+    },
+    {
+      "group": "reversal",
+      "name": "settle_ms",
+      "minimum": 0,
+      "maximum": 500
+    },
+    {
+      "group": "reversal",
+      "name": "cooldown_ms",
+      "minimum": 0,
+      "maximum": 1000
+    },
+    {
+      "group": "reversal",
+      "name": "max_duration_ms",
+      "minimum": 100,
+      "maximum": 1000
+    },
+    {
+      "group": "collision",
+      "name": "arm_velocity_flex_deg_s",
+      "minimum": 0.1,
+      "maximum": 100.0
+    },
+    {
+      "group": "collision",
+      "name": "arm_velocity_extend_deg_s",
+      "minimum": 0.1,
+      "maximum": 100.0
+    },
+    {
+      "group": "collision",
+      "name": "stall_velocity_flex_deg_s",
+      "minimum": 0,
+      "maximum": 20.0
+    },
+    {
+      "group": "collision",
+      "name": "stall_velocity_extend_deg_s",
+      "minimum": 0,
+      "maximum": 20.0
+    },
+    {
+      "group": "collision",
+      "name": "min_error_deg",
+      "minimum": 0.5,
+      "maximum": 30.0
+    },
+    {
+      "group": "collision",
+      "name": "target_reset_deg",
+      "minimum": 0.1,
+      "maximum": 10.0
+    },
+    {
+      "group": "collision",
+      "name": "retreat_deg",
+      "minimum": 0.1,
+      "maximum": 10.0
+    },
+    {
+      "group": "output",
+      "name": "max_step_counts",
+      "minimum": 1,
+      "maximum": 300
+    },
+    {
+      "group": "output",
+      "name": "max_rate_counts_per_s",
+      "minimum": 100,
+      "maximum": 10000
+    },
+    {
+      "group": "output",
+      "name": "lut_release_margin_counts",
+      "minimum": 0,
+      "maximum": 500
+    },
+    {
+      "group": "output",
+      "name": "lut_tight_margin_counts",
+      "minimum": 0,
+      "maximum": 1000
+    },
+    {
+      "group": "ros2_input",
+      "name": "min_cutoff_hz",
+      "minimum": 0.01,
+      "maximum": 10.0
+    },
+    {
+      "group": "ros2_input",
+      "name": "beta",
+      "minimum": 0,
+      "maximum": 1.0
+    },
+    {
+      "group": "ros2_input",
+      "name": "derivative_cutoff_hz",
+      "minimum": 0.01,
+      "maximum": 10.0
+    },
+    {
+      "group": "ros2_input",
+      "name": "enter_deg",
+      "minimum": 0.01,
+      "maximum": 1.0
+    },
+    {
+      "group": "ros2_input",
+      "name": "enter_dwell_ms",
+      "minimum": 0,
+      "maximum": 1000
+    },
+    {
+      "group": "ros2_input",
+      "name": "exit_deg",
+      "minimum": 0.02,
+      "maximum": 2.0
+    },
+    {
+      "group": "ros2_input",
+      "name": "exit_confirm_ms",
+      "minimum": 0,
+      "maximum": 500
+    },
+    {
+      "group": "ros2_input",
+      "name": "max_gap_ms",
+      "minimum": 100,
+      "maximum": 5000
+    }
+  ]
+}

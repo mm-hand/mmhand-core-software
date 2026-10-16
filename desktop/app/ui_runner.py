@@ -13,7 +13,6 @@ import socket
 from desktop.core.hand_backend import HandBackend
 from desktop.replay.replay_service import ReplayService
 from desktop.ros2.joint_targets import Ros2JointTargetBridge
-from desktop.ros2.raw_ik_target import RawIkTargetBridge
 
 UI_PORT_SCAN_SPAN = 50
 
@@ -40,8 +39,8 @@ def run_ui(*, ros2_enabled=True, backend=None, show=True, port=8080):
     from nicegui import app, ui, run
     from desktop.ui.browser_view import build_page
     hand = backend or HandBackend()
-    # 两条 ROS2 输入：/mmhand/joint_targets（最终目标）与 /raw_ik_target（外部 IK/遥操）。
-    bridges = [Ros2JointTargetBridge(hand), RawIkTargetBridge(hand)] if ros2_enabled else []
+    # 唯一外部目标入口：J00-J20 的角度（度）。
+    bridges = [Ros2JointTargetBridge(hand)] if ros2_enabled else []
     hand.open_application(replay_service=ReplayService(hand))
     try:
         if bridges:

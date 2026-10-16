@@ -341,8 +341,9 @@ def test_ui_default_workflow_uses_host_io_and_ignores_p4_idle(tmp_path, monkeypa
             return io
 
 
-    def host_run(calib_io, joint_mask, motor_mask, on_joint):
+    def host_run(calib_io, joint_mask, motor_mask, on_joint, *, on_joint_started):
         assert calib_io is io
+        on_joint_started(1, _mask((1,)))
         entered.set()
         assert release.wait(2)
         on_joint(1, {**_success(), "motor_mask": _mask((1,)),
@@ -381,7 +382,7 @@ def test_cancel_keeps_external_output_blocked_until_host_worker_finishes(tmp_pat
         def create_host_calibration_io(self, *_args, **_kwargs):
             return _IO()
 
-    def host_run(*_args):
+    def host_run(*_args, **_kwargs):
         entered.set()
         assert release.wait(2)
         return flow.CalibrationSessionResult(False, cancelled=True)

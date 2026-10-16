@@ -17,11 +17,11 @@ def build(hand, act):
         act(lambda: hand.request_targets({j: drafts[j]['value'] for j in selected}))
     with ui.row().classes('page-toolbar'):
         ui.button('ENABLE Selected', on_click=lambda: act(hand.request_enable))
-        ui.button('Pause', on_click=lambda: act(hand.request_pause))
         ui.button('Clear Faults', on_click=lambda: act(hand.request_clear_faults))
         ui.button('Send Selected', on_click=send_selected)
         ros = ui.switch('ROS2 INPUT', on_change=lambda e: None if syncing[0] else act(lambda: hand.request_ros_input(e.value)))
     initial = hand.application_snapshot(include_curves=False)
+    operation_status = ui.label().classes('text-sm text-slate-700 whitespace-pre-wrap w-full')
     with finger_cards():
         for name, indices in FINGERS:
             with ui.card().classes('w-full'):
@@ -41,12 +41,16 @@ def build(hand, act):
                             ui.button('Send', on_click=lambda j=j: act(lambda: hand.request_targets({j: drafts[j]['value']}))).props('dense outline')
                     def refresh(snapshot, j=j, feedback=feedback, limits=limits, control=control):
                         row = snapshot['joints'][j]
-                        control([row['feedback_control_status']], 'P4-confirmed feedback control state for this joint.')
+                        statuses = [row['feedback_control_status']]
+                        if row.get('collision_detected'):
+                            statuses.append('COLLISION DETECTED')
+                        control(statuses, 'P4-confirmed feedback control and per-joint collision state.')
                         control_abs = ' / '.join(show(snapshot['motors'][m]['abs']) for m in row['motors'])
                         feedback.set_text(f"Enc: {row['encoder']}   Current: {show(row['angle'], '°')}   ROS2 Target: {show(row['ros_target'], '°')}\nRaw: {show(row['raw'])}   Control ABS: {control_abs}")
                         limits.set_text(f"Min: {show(row['min'], '°')}   Max: {show(row['max'], '°')}")
                     refreshers.append(refresh)
     def refresh(snapshot):
+        operation_status.set_text(snapshot.get('message', ''))
         syncing[0] = True
         ros.set_value(snapshot['ros']['enabled'])
         ros.set_enabled(snapshot['ros']['available'] and (not snapshot['ros']['reason'] or snapshot['ros']['enabled']))

@@ -18,7 +18,7 @@ from typing import Callable, Iterable, Optional
 from desktop.core.hand_backend import HandBackend
 from desktop.core.joint_target_adapter import URDF_DEG, adapt_joint_targets
 
-DEFAULT_JOINT_TARGET_TOPIC = "/mmhand/joint_targets"
+DEFAULT_JOINT_TARGET_TOPIC = "/mmhand/joint_angle_deg"
 
 
 @dataclass(frozen=True)
@@ -43,7 +43,7 @@ class JointTargetCommandHandler:
     ) -> None:
         self.backend = backend
         if auto_start:
-            raise ValueError('ROS2 requires /mmhand/joint_targets and 21 URDF degrees; automatic startup is prohibited')
+            raise ValueError('ROS2 requires /mmhand/joint_angle_deg and 21 J00-J20 degrees; automatic startup is prohibited')
         self.topic = topic
         self.auto_start = bool(auto_start)
         self.input_space = str(input_space)
@@ -62,7 +62,7 @@ class JointTargetCommandHandler:
             self._warn(f"ignored ROS2 joint target: {exc}")
             return False
 
-        # 两个 ROS2 输入 topic 统一经过 backend 的授权门。这里不能直接调用
+        # ROS2 输入必须经过 backend 的授权门。这里不能直接调用
         # send_joint_targets，否则 E-STOP 后的下一帧会再次发送 RUN_FEEDBACK。
         result = self.backend.send_ros2_joint_targets(
             adaptation.urdf_targets_deg,
@@ -97,7 +97,7 @@ class Ros2JointTargetBridge:
         auto_start: bool = False,
     ) -> None:
         if topic != DEFAULT_JOINT_TARGET_TOPIC or auto_start:
-            raise ValueError('ROS2 bridge requires /mmhand/joint_targets; automatic startup is prohibited')
+            raise ValueError('ROS2 bridge requires /mmhand/joint_angle_deg; automatic startup is prohibited')
         self.backend = backend
         self.config = Ros2JointTargetConfig(topic=topic, auto_start=auto_start, input_space=URDF_DEG)
         self.handler = JointTargetCommandHandler(

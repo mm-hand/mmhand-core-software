@@ -8,7 +8,7 @@
 禁止依赖：禁止直接操作协议、串口和控制器。
 """
 from nicegui import ui
-from .common import label, show, table, set_rows
+from .common import label, show, table, set_rows, selection, FINGERS
 
 def build(hand, act):
     async def upload(event):
@@ -22,11 +22,19 @@ def build(hand, act):
         ui.button('Play', on_click=lambda: act(hand.request_replay_start))
         metadata = label()
     warnings = label()
+    selectors = []
+    with ui.row().classes('w-full gap-4'):
+        for name, joints in FINGERS:
+            with ui.column().classes('gap-1'):
+                selectors.append(selection(hand, 'selected_joints', joints, name))
+                for joint in joints:
+                    selectors.append(selection(hand, 'selected_joints', [joint], f'J{joint:02d}'))
     preview = table([('joint', 'Joint'), ('angle', 'Current deg'), ('valid', 'Valid'), ('target', 'Replay Target'), ('error', 'Error')])
     with ui.row().classes('w-full items-center'):
         status = label()
         progress = ui.linear_progress(value=0).classes('flex-1')
     def refresh(snapshot):
+        for update in selectors: update(snapshot)
         replay, file = snapshot['replay'], snapshot['replay'].get('file', {})
         metadata.set_text(f"File: {file.get('name', '—')}   Frames: {file.get('frames', '—')}   Duration: {show(file.get('duration_s'), 's')}   Rate: {show(file.get('rate_hz'), 'Hz')}")
         warnings.set_text('Warnings: ' + ('; '.join(file.get('warnings', []) + list(replay.get('warnings', []))) or '—'))

@@ -15,10 +15,16 @@ def build(hand, act):
     with ui.row().classes('page-toolbar'):
         ui.button('Clear Plot', on_click=lambda: cleared_at.__setitem__(0, __import__('time').time()))
         for i in range(5):
-            selectors.append(ui.select({-1: 'None', **{j: f'J{j:02d}' for j in range(21)}}, value=0 if i == 0 else -1, label='Joints' if i == 0 else None).props('dense outlined').classes('w-28'))
+            selectors.append(ui.select({-1: 'None', **{j: f'J{j:02d}' for j in range(21)}}, value=-1, label='Joints' if i == 0 else None).props('dense outlined').classes('w-28'))
     chart = ui.echart({'legend': {}, 'tooltip': {'trigger': 'axis'}, 'xAxis': {'type': 'value', 'name': 'Time (s)'},
         'yAxis': {'type': 'value', 'name': 'Angle (°)'}, 'grid': {'left': 65, 'right': 25, 'bottom': 50}, 'series': []}).classes('w-full h-96')
     recording = label()
+    motor = ui.select({-1: 'None', **{m: f'M{m:02d}' for m in range(27)}}, value=-1,
+                      label='Control components').props('dense outlined').classes('w-48')
+    ui.label('Raw P, I, reversal and pairing corrections precede the final position and rate constraints. Time comes from the P4 control cycle.').classes('text-sm')
+    components_chart = ui.echart({'legend': {}, 'tooltip': {'trigger': 'axis'},
+        'xAxis': {'type': 'value', 'name': 'P4 time (s)'}, 'yAxis': {'type': 'value', 'name': 'Counts'},
+        'series': []}).classes('w-full h-80')
     with ui.expansion('Recording Options').classes('w-full'):
         syncing = [False]
         full = ui.switch('Full tactile data', on_change=lambda e: None if syncing[0] else act(lambda: hand.set_recording_options(e.value)))
@@ -38,6 +44,22 @@ def build(hand, act):
                     lineStyle={'type': style}, data=[[r['host_time'] - start, r[key][j]] for r in history]))
         chart.options['series'] = series
         chart.update()
+        component_series = []
+        if motor.value != -1:
+            m = motor.value
+            for title, source, field in [('P', 'components', 'proportional_counts'),
+                    ('I', 'components', 'integral_counts'), ('Reversal', 'components', 'reversal_counts'),
+                    ('Pair recovery', 'detail', 'recovery_counts')]:
+                data = []
+                for row in snapshot.get('control_components', []):
+                    if row['host_time'] < cleared_at[0]:
+                        continue
+                    values = row[source].get(field)
+                    valid = row['detail'].get('servo_valid_mask', 0) & (1 << m)
+                    data.append([row['p4_time_ms'] / 1000, values[m] if values and valid else None])
+                component_series.append(dict(type='line', name=title, showSymbol=False, connectNulls=False, data=data))
+        components_chart.options['series'] = component_series
+        components_chart.update()
         record = snapshot['recording']
         state = 'Running' if record['running'] else 'Waiting' if record['enabled'] else 'Off'
         recording.set_text(f"Recording: {state}   Duration: {show(record['duration_s'], 's')}   Directory: {record['path'] or '—'}" + ('   Finalizing…' if record['finalizing'] else '') + (f"\nError: {record['error']}" if record['error'] else ''))

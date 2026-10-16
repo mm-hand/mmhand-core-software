@@ -301,7 +301,14 @@ class CalibrationWorkflowService:
                                  "has_next_phase": bool(outcome.get("has_next_joint"))},
                     ))
 
-                session = run_host_calibration(io, joint_mask, motor_mask, on_joint)
+                def on_started(joint, motors):
+                    if self._is_current(epoch):
+                        self._emit(CalibrationWorkflowEvent(
+                            epoch, 'joint_started', True, f'J{joint:02d} calibrating',
+                            1 << joint, motors))
+
+                session = run_host_calibration(io, joint_mask, motor_mask, on_joint,
+                                               on_joint_started=on_started)
                 if self._is_current(epoch):
                     self._emit(CalibrationWorkflowEvent(
                         epoch, "calibration_complete", session.success,

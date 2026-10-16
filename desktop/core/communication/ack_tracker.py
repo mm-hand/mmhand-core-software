@@ -23,9 +23,11 @@ class AckTracker:
     def __init__(self) -> None:
         self._condition = threading.Condition()
         self._last_ack: Optional[tuple] = None
+        self._acks_by_command: dict[int, tuple] = {}
         self._last_p4_time_ms: Optional[int] = None
         self._sequence = 0
-        # ACK 等待使用 latest 值；事件记录使用独立通道，不能被 HandModel 邮箱覆盖。
+        # 等待保留各命令的最近ACK，防止同批次其他命令覆盖待确认结果。
+        # 协议命令字为单字节，缓存最多256项；事件记录使用独立通道。
         self._events: EventChannel[dict] = EventChannel()
 
     def reset(
@@ -41,6 +43,7 @@ class AckTracker:
         """
         with self._condition:
             self._last_ack = None
+            self._acks_by_command.clear()
             self._last_p4_time_ms = None
             if reset_sequence:
                 self._sequence = 0
@@ -60,6 +63,7 @@ class AckTracker:
         with self._condition:
             # 兼容旧调用方：(cmd, mode, status, host_received_at) 必须保持四元素。
             self._last_ack = (int(command), int(mode), int(status), float(received_at))
+            self._acks_by_command[int(command)] = self._last_ack
             self._last_p4_time_ms = None if p4_time_ms is None else int(p4_time_ms)
             self._sequence += 1
             sequence = int(self._sequence)
@@ -78,6 +82,17 @@ class AckTracker:
         """返回尚未交给核心状态线程的 ACK，等待事务不受该操作影响。"""
         return self._events.drain()
 
+    def prepare_command(self, command: int) -> None:
+        """Invalidate the preceding reply before queuing a new command.
+
+        Windows wall-clock timestamps can be equal for adjacent transactions.
+        A timestamp cutoff alone cannot distinguish their replies. Commands of
+        the same type must still be sent and awaited sequentially: the wire
+        ACK has no transaction ID.
+        """
+        with self._condition:
+            self._acks_by_command.pop(int(command), None)
+
     def wait_for(
         self,
         command: int,
@@ -88,7 +103,7 @@ class AckTracker:
         deadline = time.time() + max(0.0, float(timeout_s))
         with self._condition:
             while True:
-                ack = self._last_ack
+                ack = self._acks_by_command.get(int(command))
                 ack_is_new = (
                     received_after is None
                     or (

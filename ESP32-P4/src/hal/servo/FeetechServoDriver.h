@@ -491,7 +491,103 @@ public:
         _syncReadCount = 0;
     }
 
+    // Maintenance uses raw addresses, independent of product Mxx feedback arrays.
+    bool probeMaintenanceId(uint8_t id) {
+        if (!_serial || id >= 254) return false;
+        const auto saved = _sms.IOTimeOut;
+        _sms.IOTimeOut = 3;
+        // A fault-status reply still occupies this address.
+        const bool found = _sms.Ping(id) == id;
+        _sms.IOTimeOut = saved;
+        return found;
+    }
+
+    bool maintenanceIdLocked(uint8_t id) {
+        if (!_serial || id >= 254) return false;
+        const auto saved=_sms.IOTimeOut; _sms.IOTimeOut=3;
+        const bool locked=_sms.readByte(id,SMS_STS_LOCK)==1;
+        _sms.IOTimeOut=saved; return locked;
+    }
+
+    void discardMaintenanceState(uint8_t id) {
+        if(id>MAX_SERVO_ID) return;
+        _feedback[id]=ServoFeedbackInternal{};
+        _torqueDisabled[id]=false; _multiTurnConfigured[id]=false;
+        if(_multiTurnConfigId==id) resetMultiTurnConfigurationJob();
+    }
+
+    uint8_t renameMaintenanceId(uint8_t oldId, uint8_t newId, uint8_t* stage) {
+        if (!_serial || oldId >= 254 || newId >= 254 || oldId == newId) return 3;
+        const auto saved = _sms.IOTimeOut;
+        _sms.IOTimeOut = 20;
+        *stage = 1;
+        if (_sms.readByte(oldId, SMS_STS_ID) != oldId || _sms.getState() || probeMaintenanceId(newId)) {
+            _sms.IOTimeOut = saved; return 3;
+        }
+        *stage = 2;
+        _sms.EnableTorque(oldId, 0);
+        if (_sms.readByte(oldId, SMS_STS_TORQUE_ENABLE) != 0) {
+            _sms.IOTimeOut = saved; return 4;
+        }
+        _sms.unLockEprom(oldId);
+        if (_sms.readByte(oldId, SMS_STS_LOCK) != 0) {
+            _sms.LockEprom(oldId); _sms.IOTimeOut = saved; return 4;
+        }
+        *stage = 3;
+        // ID-write ACK may carry either address; readback determines the outcome.
+        _sms.writeByte(oldId, SMS_STS_ID, newId);
+        delay(10);
+        const int newValue = _sms.readByte(newId, SMS_STS_ID);
+        const int oldValue = _sms.readByte(oldId, SMS_STS_ID);
+        *stage = 4;
+        bool locked = false;
+        if (newValue == newId && oldValue < 0) {
+            locked = _sms.LockEprom(newId) >= 0 && _sms.getState() == 0;
+        } else if (oldValue == oldId && newValue < 0) {
+            _sms.LockEprom(oldId);
+        }
+        *stage = 5;
+        const bool verified = locked && _sms.readByte(newId, SMS_STS_ID) == newId
+                              && _sms.readByte(newId, SMS_STS_LOCK) == 1;
+        _sms.IOTimeOut = saved;
+        return verified ? 0 : 5;
+    }
+
     bool syncReadActive() const { return _syncReadActive; }
+
+    bool readMaintenanceProfile(uint8_t id, uint8_t* values) {
+        for (uint8_t i=0;i<3;++i) {
+            const int value = _sms.readByte(id, 84+i);
+            if (value < 0 || _sms.getState()) return false;
+            values[i] = (uint8_t)value;
+        }
+        return true;
+    }
+
+    uint8_t configureMaintenanceProfile(uint8_t id, uint8_t* values, uint8_t* stage) {
+        const auto timeout = _sms.IOTimeOut; _sms.IOTimeOut = 20;
+        const uint8_t desired[3] = {254,254,0};
+        *stage = 6;
+        if (!readMaintenanceProfile(id, values)) { _sms.IOTimeOut=timeout; return 4; }
+        if (!memcmp(values, desired, 3)) { _sms.IOTimeOut=timeout; return 0; }
+        _sms.EnableTorque(id,0);
+        if (_sms.readByte(id,SMS_STS_TORQUE_ENABLE)!=0) { _sms.IOTimeOut=timeout; return 4; }
+        _sms.unLockEprom(id);
+        if (_sms.readByte(id,SMS_STS_LOCK)!=0) {
+            _sms.LockEprom(id); _sms.IOTimeOut=timeout; return 4;
+        }
+        *stage = 7;
+        bool written = true;
+        for (uint8_t i=0;i<3 && written;++i) {
+            written = _sms.writeByte(id,84+i,desired[i])>=0 && _sms.getState()==0;
+            delay(10);
+        }
+        const bool locked = _sms.LockEprom(id)>=0 && _sms.getState()==0 && _sms.readByte(id,SMS_STS_LOCK)==1;
+        *stage = 8;
+        const bool verified = readMaintenanceProfile(id,values) && !memcmp(values,desired,3);
+        _sms.IOTimeOut=timeout;
+        return written && locked && verified ? 0 : 5;
+    }
     uint64_t syncReadDeadlineUs() const { return _syncReadDeadlineUs; }
 
     /** 对一台离线舵机执行低频单播探测，成功时更新上线去抖状态。 */

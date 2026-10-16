@@ -30,12 +30,16 @@ def build(hand, act, load_calibration, confirm):
                                 ui.tooltip('Raw Dir: ↑ increases raw counts; ↓ decreases raw counts as the joint angle increases.')
                         with ui.row().classes('items-center gap-2'):
                             low = label()
-                            ui.button('Set Min', on_click=lambda j=j: act(lambda: hand.request_manual_capture(j, 'min'))).props('dense outline')
+                            min_button = ui.button('Set Min', on_click=lambda j=j: act(lambda: hand.request_manual_capture(j, 'min'))).props('dense outline')
                             high = label()
-                            ui.button('Set Max', on_click=lambda j=j: act(lambda: hand.request_manual_capture(j, 'max'))).props('dense outline')
+                            max_button = ui.button('Set Max', on_click=lambda j=j: act(lambda: hand.request_manual_capture(j, 'max'))).props('dense outline')
+                        capture_status = label()
                         info = label()
-                    def refresh(snapshot, j=j, badge=badge, raw=raw, low=low, high=high, info=info):
+                    def refresh(snapshot, j=j, badge=badge, raw=raw, low=low, high=high, info=info, min_button=min_button, max_button=max_button, capture_status=capture_status):
                         row = snapshot['joints'][j]
+                        allowed = snapshot['connections']['p4']['connected'] and not snapshot['busy']
+                        min_button.set_enabled(allowed); max_button.set_enabled(allowed)
+                        capture_status.set_text(row.get('capture_status', ''))
                         hint = 'Transaction failed. See System Log and Operation History for the actual reason.' if 'FAILED' in row['joint_quality'] else f"Manual span: {show(row['span'])}; URDF: {row['urdf_span']}; difference: {show(row['difference'])} counts. Installation warning threshold >360 counts; possible magnetic encoder or joint installation error."
                         badge(row['joint_quality'], hint)
                         raw.set_text(f"Raw Dir: {'↑' if row['direction'] > 0 else '↓'}   Current Raw: {show(row['raw'])}")

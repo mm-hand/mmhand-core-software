@@ -10,9 +10,22 @@ from desktop.core.core_logic import ManualPrepareResult
 from desktop.core.comm_layer import LowerComputerComm
 from desktop.core.host_calibration.config import joint_motors
 from desktop.core.protocol import (
-    ControlMode, SYSTEM_STATE_IDLE, SYSTEM_STATE_READY,
-    SYSTEM_STATE_PAUSED, SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK,
+    ControlMode, CMD_CONTROL_RELEASE, SYSTEM_STATE_IDLE, SYSTEM_STATE_READY,
+    SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK,
 )
+
+
+def test_s3_rx_newer_than_snapshot_clock_is_online_instead_of_no_valid_frames(hand, monkeypatch):
+    monkeypatch.setattr(time, 'time', lambda: 1000.0)
+    comm = Mock()
+    comm.get_latest_model.return_value = None
+    comm.connection_diagnostics.return_value = dict(last_valid_rx=time.time()+0.01,
+        opened_at=time.time()-20, bytes=100, frames=1)
+    hand.tactile_comm = comm
+    monkeypatch.setattr(hand, 'is_tactile_serial_connected', lambda: True)
+    connection = hand.application_snapshot()['connections']['s3']
+    assert connection['age_ms'] == 0
+    assert connection['data_status'] == 'Online'
 
 
 def joint_preparation_device(hand, monkeypatch, *, ready_state=SYSTEM_STATE_READY, fault=None):
@@ -24,6 +37,8 @@ def joint_preparation_device(hand, monkeypatch, *, ready_state=SYSTEM_STATE_READ
     comm._protocol_compatible = True
     monkeypatch.setattr(comm, 'is_connected', lambda: True)
     monkeypatch.setattr(controller, 'comm', comm)
+    hand._selected_joints = (3,)  # Explicit user selection for these enable scenarios.
+    monkeypatch.setattr(comm, 'apply_control_parameters', Mock(return_value=(1, 0)))
 
     def scope(motors, joints, require_can):
         state.has_active_scope_status = True
@@ -35,6 +50,14 @@ def joint_preparation_device(hand, monkeypatch, *, ready_state=SYSTEM_STATE_READ
 
     scope_writer = Mock(side_effect=scope)
     monkeypatch.setattr(controller, 'set_active_scope', scope_writer)
+    state.has_sensor_data = True
+    state.encoder_mapped_last_rx_ts = time.time()
+    state.encoder_mapped_p4_time_ms = state.p4_time_ms
+    for encoder in state.encoders:
+        encoder.angle_error = False
+        encoder.raw = 0
+    monkeypatch.setattr(hand, '_apply_joint_workspace_guard',
+        lambda state, values, **kwargs: (list(values), [], [], ''))
     send_command = comm.send_command
 
     def reply(command):
@@ -65,6 +88,17 @@ def joint_preparation_device(hand, monkeypatch, *, ready_state=SYSTEM_STATE_READ
                 state.protocol_compatible = False
             elif fault == 'offline':
                 monkeypatch.setattr(hand, 'is_comm_connected', lambda: False)
+        if sent and command == 'control_release':
+            received = time.time()
+            comm._ack_tracker.publish(CMD_CONTROL_RELEASE, state.system_state, 0, received)
+            state.system_state = SYSTEM_STATE_READY
+            state.servo_target_owner = 0; state.control_enabled = False
+            state.system_status_last_rx_ts = received + .000001
+        if sent and isinstance(command, tuple) and command[0] == 'joint_target_run_masked':
+            state.system_state = SYSTEM_STATE_RUN_FEEDBACK
+            state.control_enabled = True
+            state.servo_target_owner = 1
+            state.system_status_last_rx_ts = time.time()
         return sent
 
     monkeypatch.setattr(comm, 'send_command', reply)
@@ -72,7 +106,7 @@ def joint_preparation_device(hand, monkeypatch, *, ready_state=SYSTEM_STATE_READ
 
 
 @pytest.mark.parametrize('ready_state', [SYSTEM_STATE_IDLE, SYSTEM_STATE_READY])
-def test_joint_enable_confirms_preparation_without_claiming_motion(hand, monkeypatch, ready_state):
+def test_joint_enable_holds_current_pose_and_confirms_actual_motion_owner(hand, monkeypatch, ready_state):
     comm, scope = joint_preparation_device(hand, monkeypatch, ready_state=ready_state)
     hand._selected_joints = (3,)
     comm.tx_queue.put_nowait(('motor_pos_abs_one', 3, 500))
@@ -81,12 +115,16 @@ def test_joint_enable_confirms_preparation_without_claiming_motion(hand, monkeyp
     item = wait_operation(hand, hand.request_enable())
 
     assert item['status'] == 'SUCCESS'
-    assert 'preparation confirmed' in item['message']
+    assert 'closed-loop holding the current pose' in item['message']
     assert hand.get_control_mode() == ControlMode.JOINT_ANGLE
     scope.assert_called_once_with(sum(1 << m for m in joint_motors(3)), 1 << 3, True)
-    assert list(comm.tx_queue.queue) == ['start']
-    assert not hand._controller.current_state.control_enabled
-    assert hand._controller.current_state.servo_target_owner == 0
+    commands = list(comm.tx_queue.queue)
+    assert commands[0] == 'start'
+    assert commands[1][0] == 'joint_target_run_masked'
+    assert commands[1][1][3] == 0.0
+    assert commands[1][2] == 1 << 3
+    assert hand._controller.current_state.control_enabled
+    assert hand._controller.current_state.servo_target_owner == 1
 
 
 @pytest.mark.parametrize('fault', [
@@ -107,25 +145,88 @@ def test_joint_enable_does_not_confirm_old_or_mismatched_p4_status(hand, monkeyp
     assert list(comm.tx_queue.queue) == ['start']
 
 
+def test_joint_enable_requires_parameter_application_before_sending_a_target(hand, monkeypatch):
+    comm, _ = joint_preparation_device(hand, monkeypatch)
+    monkeypatch.setattr(comm, 'apply_control_parameters', Mock(side_effect=ValueError('parameter CRC mismatch')))
+    item = wait_operation(hand, hand.request_enable())
+    assert item['status'] == 'FAILED'
+    assert 'parameter CRC mismatch' in item['message']
+    assert not any(isinstance(c, tuple) and c[0] == 'joint_target_run_masked'
+                   for c in comm.tx_queue.queue)
+
+
+@pytest.mark.parametrize('after_ack', ['moved', 'stale', 'invalid', 'stop'])
+def test_joint_enable_rechecks_current_pose_after_parameter_sync(hand, monkeypatch, after_ack):
+    comm, _ = joint_preparation_device(hand, monkeypatch)
+    hand._selected_joints = (3,)
+    state = hand._controller.current_state
+
+    def change_pose(*args, **kwargs):
+        if after_ack == 'moved':
+            state.encoders[3].raw = 512
+        elif after_ack == 'stale':
+            state.encoder_mapped_last_rx_ts = time.time() - 2
+        elif after_ack == 'invalid':
+            state.encoders[3].angle_error = True
+        else:
+            hand.stop_motion()
+        return (1,0)
+
+    monkeypatch.setattr(comm, 'apply_control_parameters', change_pose)
+    item = wait_operation(hand, hand.request_enable())
+    targets = [c for c in comm.tx_queue.queue
+               if isinstance(c, tuple) and c[0] == 'joint_target_run_masked']
+    if after_ack == 'moved':
+        assert item['status'] == 'SUCCESS', item['message']
+        assert targets[0][1][3] == state.encoders[3].current_angle_deg
+    else:
+        assert item['status'] == 'FAILED'
+        assert not targets
+
+
+def test_joint_enable_never_clamps_the_current_pose(hand, monkeypatch):
+    comm, _ = joint_preparation_device(hand, monkeypatch)
+    monkeypatch.setattr(hand, '_apply_joint_workspace_guard',
+                        lambda state, values, **kwargs: (values, [], [3], 'J03 outside limits'))
+    item = wait_operation(hand, hand.request_enable())
+    assert item['status'] == 'FAILED'
+    assert 'J03 outside limits' in item['message']
+    assert list(comm.tx_queue.queue) == ['start']
+
+
+@pytest.mark.parametrize('status_ms,sample_ms,age,expected', [
+    (1000, 1200, 0.1, True), (1200, 1000, 0.1, True),
+    (0xfffffff0, 10, 0.1, True), (10, 0xfffffff0, 0.1, True),
+    (1000, 1800, 0.1, False), (1000, 1000, 1.0, False),
+])
+def test_mapped_angle_freshness_accepts_heartbeat_skew_and_clock_wrap(
+        hand, status_ms, sample_ms, age, expected):
+    state = hand._controller.current_state
+    state.has_sensor_data = True
+    state.p4_time_ms = status_ms
+    state.encoder_mapped_p4_time_ms = sample_ms
+    state.encoder_mapped_last_rx_ts = time.time() - age
+    assert hand._mapped_feedback_fresh(state) is expected
+
+
 @pytest.mark.parametrize('p4_state,owner,enabled', [
-    (SYSTEM_STATE_PAUSED, 0, False),
     (SYSTEM_STATE_RUN_DIRECT, 1, True),
     (SYSTEM_STATE_RUN_FEEDBACK, 1, True),
     (SYSTEM_STATE_READY, 1, False),
     (SYSTEM_STATE_READY, 0, True),
 ])
-def test_joint_enable_never_resumes_or_resets_active_motion(hand, monkeypatch, p4_state, owner, enabled):
+def test_joint_enable_hands_over_existing_normal_control_without_stop(hand, monkeypatch, p4_state, owner, enabled):
     comm, scope = joint_preparation_device(hand, monkeypatch)
     state = hand._controller.current_state
     state.system_state, state.servo_target_owner, state.control_enabled = p4_state, owner, enabled
 
     item = wait_operation(hand, hand.request_enable())
 
-    assert item['status'] == 'FAILED'
-    assert 'Stop active motion' in item['message']
-    scope.assert_not_called()
-    assert hand.get_control_mode() == ControlMode.DIRECT_MOTOR
-    assert comm.tx_queue.empty()
+    assert item['status'] == 'SUCCESS', item['message']
+    scope.assert_called_once()
+    commands = list(comm.tx_queue.queue)
+    assert 'control_release' in commands and 'stop' not in commands and 'reset' not in commands
+    assert hand.get_control_mode() == ControlMode.JOINT_ANGLE
 
 def test_joint_ready_requires_matching_persisted_pair(hand):
     state = hand._controller.current_state
@@ -137,6 +238,50 @@ def test_joint_ready_requires_matching_persisted_pair(hand):
     assert hand.application_snapshot()['joints'][0]['joint_quality'][0] in ('READY', 'OFFSET')
     hand._manual_saved_pairs[0] = (12000, 10999)
     assert hand.application_snapshot()['joints'][0]['joint_quality'] == ['UNKNOWN']
+
+
+@pytest.mark.parametrize('faults', [0, 0x50, 0x51])
+def test_clear_faults_releases_host_stop_even_when_live_hardware_faults_recur(hand, monkeypatch, faults):
+    comm, _ = joint_preparation_device(hand, monkeypatch)
+    state = hand._controller.current_state
+    hand._estop_requested_at = time.time() - 1
+    state.system_fault_bitmap = faults
+    assert hand.application_snapshot()['device'] == 'Stopped'
+
+    def reset_ack(*args, **kwargs):
+        received = time.time()
+        state.system_status_last_rx_ts = received + 0.000001
+        return (206, 0, 2, received)
+
+    monkeypatch.setattr(comm, 'wait_for_ack', reset_ack)
+    item = wait_operation(hand, hand.request_clear_faults())
+    assert item['status'] == 'SUCCESS'
+    assert hand._estop_requested_at == 0
+    assert hand.application_snapshot()['device'] == ('Fault' if faults else 'Ready')
+    assert list(comm.tx_queue.queue) == ['reset']
+    if faults:
+        assert f'0x{faults:08X}' in item['message']
+
+
+@pytest.mark.parametrize('failure', ['no_ack', 'rejected', 'old_status', 'new_stop'])
+def test_clear_faults_cannot_clear_stop_without_ack_and_fresh_stationary_status(hand, monkeypatch, failure):
+    comm, _ = joint_preparation_device(hand, monkeypatch)
+    hand._estop_requested_at = time.time() - 1
+
+    def reset_ack(*args, **kwargs):
+        if failure == 'no_ack':
+            return None
+        received = time.time()
+        if failure == 'new_stop':
+            hand.stop_motion()
+        return (206, 0, 1 if failure == 'rejected' else 2, received)
+
+    monkeypatch.setattr(comm, 'wait_for_ack', reset_ack)
+    monkeypatch.setattr(hand, '_wait_application',
+                        lambda predicate, epoch: epoch == hand._application_epoch and predicate(hand.get_state_snapshot()))
+    item = wait_operation(hand, hand.request_clear_faults())
+    assert item['status'] == 'FAILED'
+    assert hand._estop_requested_at != 0
 
 
 def test_release_selected_tendons_freezes_only_selected_joint_motors(hand, monkeypatch):
@@ -177,6 +322,8 @@ def test_manual_transaction_blocks_other_motion_owners(hand):
     hand._manual_transaction_active = False
 
 def test_stop_does_not_wait_for_scope_ack(hand, monkeypatch):
+    hand._selected_joints = (3,)
+    monkeypatch.setattr(hand, '_synchronize_control_parameters', lambda epoch: (True, 'applied'))
     entered, release = threading.Event(), threading.Event()
     def scope(*args):
         entered.set()
@@ -217,10 +364,10 @@ def test_max_first_and_repeated_same_end_require_the_other_end(hand, monkeypatch
     writer.assert_not_called()
     hand._controller.current_state.encoders[0].raw_sensor = 13000
     wait_operation(hand, hand.request_manual_capture(0, 'min'))
-    writer.assert_called_once_with(0, 13000, 12000)
+    assert writer.call_count == 1 and writer.call_args.args == (0, 13000, 12000)
     hand._controller.current_state.encoders[0].raw_sensor = 11500
     wait_operation(hand, hand.request_manual_capture(0, 'max'))
-    writer.assert_called_with(0, 13000, 11500)
+    assert writer.call_args.args == (0, 13000, 11500)
 
 def test_save_failure_retains_pair_and_next_set_retries_once(hand, monkeypatch):
     writer = Mock(side_effect=[False, True])

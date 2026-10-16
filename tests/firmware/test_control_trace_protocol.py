@@ -6,8 +6,9 @@ from desktop.core.communication.ack_tracker import AckTracker
 from desktop.core.communication.packet_router import P4PacketRouter
 from desktop.core.communication.state_reducer import StateReducer
 from desktop.core.generated_upper_protocol import (
-    CMD_CONTROL_TRACE_SUBSCRIBE,
+    CMD_CONTROL_DIAGNOSTICS,
     PACKET_TYPE_CONTROL_TRACE,
+    PACKET_TYPE_CONTROL_COMPONENTS,
     PACKET_TYPE_SERVO_ANGLE,
 )
 from desktop.core.protocol import (
@@ -39,10 +40,10 @@ def _business_payload() -> bytes:
 
 def test_control_trace_subscription_has_explicit_on_off_payload() -> None:
     assert build_control_trace_subscribe_cmd(True) == bytes(
-        [0xFE, 0x03, CMD_CONTROL_TRACE_SUBSCRIBE, 0x01, 0xFF]
+        [0xFE, 0x04, CMD_CONTROL_DIAGNOSTICS, 0x01, 0x05, 0xFF]
     )
     assert build_control_trace_subscribe_cmd(False) == bytes(
-        [0xFE, 0x03, CMD_CONTROL_TRACE_SUBSCRIBE, 0x00, 0xFF]
+        [0xFE, 0x04, CMD_CONTROL_DIAGNOSTICS, 0x00, 0x05, 0xFF]
     )
 
 
@@ -120,3 +121,28 @@ def test_servo_abs_reducer_keeps_its_own_p4_timestamp() -> None:
     assert model.p4_time_ms == 1015
     assert model.servo_feedback_p4_time_ms == 1000
     assert model.servo_angles[19] == 1019
+
+
+def test_control_parts_match_both_timestamp_and_cycle_and_reset_on_disconnect():
+    from desktop.core.protocol import parse_control_components_packet
+    class Owner:
+        _heartbeat_enabled = False
+        _parse_protocol_payload = staticmethod(lambda name, payload: parse_control_trace_packet(payload))
+        _apply_connectivity_visibility = staticmethod(lambda model: None)
+    router = P4PacketRouter({PACKET_TYPE_CONTROL_TRACE: 'control_trace',
+                            PACKET_TYPE_CONTROL_COMPONENTS: 'control_components'},
+        lambda kind, payload: (payload[:-4], struct.unpack('>I', payload[-4:])[0]))
+    reducer = StateReducer(router, AckTracker())
+    part = bytes([1]) + struct.pack('>IB',7,5) + struct.pack('>27h',*range(27))*3 + struct.pack('>21h',*range(21))
+    assert parse_control_components_packet(part)['integral_counts'][3] == 3
+    assert parse_control_components_packet(part[:-1]) is None
+    stamped = lambda body, stamp: body + struct.pack('>I',stamp)
+    model = reducer.process_packets(Owner(), [(PACKET_TYPE_CONTROL_COMPONENTS, stamped(part,1000)),
+        (PACKET_TYPE_CONTROL_TRACE, stamped(_business_payload(),1000))])
+    assert model.control_trace_components['divisor'] == 5
+    model = reducer.process_packets(Owner(), [(PACKET_TYPE_CONTROL_COMPONENTS, stamped(part,1000)),
+        (PACKET_TYPE_CONTROL_TRACE, stamped(_business_payload(),1010))])
+    assert model.control_trace_components == {}
+    reducer.reset()
+    model = reducer.process_packets(Owner(), [(PACKET_TYPE_CONTROL_TRACE, stamped(_business_payload(),1000))])
+    assert model.control_trace_components == {}

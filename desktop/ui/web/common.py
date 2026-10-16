@@ -29,7 +29,7 @@ def quality():
         container.clear()
         with container:
             for value in values:
-                color = 'positive' if value in ('READY', 'ENABLED') else 'negative' if value == 'FAILED' else 'warning' if value in ('OFFSET', 'WEAK RETURN', 'HIGH FRICTION') else 'grey'
+                color = 'primary' if value == 'CALIBRATING' else 'positive' if value in ('READY', 'ENABLED') else 'negative' if value in ('FAILED', 'COLLISION DETECTED', 'FAULT') else 'warning' if value in ('OFFSET', 'WEAK RETURN', 'HIGH FRICTION') else 'grey'
                 with ui.badge(quality_name(value), color=color):
                     if tooltip:
                         ui.tooltip(tooltip)

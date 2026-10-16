@@ -24,7 +24,6 @@ class CalibrationDiagnosticSpec:
     fields: Tuple[str, str, str, str]
     formatter: Formatter
     suggestion: str
-    legacy: bool = False
 
 
 def _hex(value: int) -> str:
@@ -88,10 +87,9 @@ def _spec(
     *,
     kinds: Tuple[str, str, str, str] = ("int", "int", "int", "hex"),
     formatter: Formatter | None = None,
-    legacy: bool = False,
 ) -> CalibrationDiagnosticSpec:
     return CalibrationDiagnosticSpec(
-        title, fields, formatter or _fields_formatter(fields, kinds), suggestion, legacy
+        title, fields, formatter or _fields_formatter(fields, kinds), suggestion
     )
 
 
@@ -146,7 +144,7 @@ CALIBRATION_DIAGNOSTICS: Dict[int, CalibrationDiagnosticSpec] = {
     ),
     protocol.CALIB_DIAG_REASON_CONTROL_LOST: _spec(
         "Calibration control ownership lost", ("system_state", "owner", "control_enabled", "active_joint_mask"),
-        "Check whether STOP, Pause, Clear Fault, Enable, or another control flow interrupted calibration.",
+        "Check whether STOP, Clear Faults, Enable, or another control flow interrupted calibration.",
     ),
     protocol.CALIB_DIAG_REASON_HOLD_TARGET_FAILED: _spec(
         "Failed to hold other joints", ("current_index", "joint_count", "batch_count", "selected_joint_mask"),
@@ -213,44 +211,6 @@ CALIBRATION_DIAGNOSTICS: Dict[int, CalibrationDiagnosticSpec] = {
         "Check primary/secondary tendon preload, winding directions, encoder feedback, and mechanical binding.",
     ),
 }
-
-
-_LEGACY = {
-    protocol.CALIB_DIAG_REASON_LEGACY_CAN_FEEDBACK_TIMEOUT: (
-        "Legacy CAN feedback timeout", ("can_online", "sample_age_ms", "timeout_ms", "affected_joint_mask")
-    ),
-    protocol.CALIB_DIAG_REASON_LEGACY_SERVO_FEEDBACK_TIMEOUT: (
-        "Legacy servo feedback timeout", ("abs_ok", "raw_ok", "telemetry_ok", "affected_motor_mask")
-    ),
-    protocol.CALIB_DIAG_REASON_LEGACY_TELEMETRY_TIMEOUT: (
-        "Legacy telemetry timeout", ("abs_ok", "raw_ok", "telemetry_ok", "affected_motor_mask")
-    ),
-    protocol.CALIB_DIAG_REASON_LEGACY_TURN_UNKNOWN: (
-        "Legacy turn unknown", ("", "", "", "unknown_motor_mask")
-    ),
-    protocol.CALIB_DIAG_REASON_LEGACY_LOAD_NOT_REACHED: (
-        "Legacy load not reached", ("load", "threshold", "travel_counts", "motor_mask")
-    ),
-    protocol.CALIB_DIAG_REASON_LEGACY_ANGLE_NOT_MOVING: (
-        "Legacy angle not moving", ("angle_delta", "threshold", "stable_samples", "motor_mask")
-    ),
-    protocol.CALIB_DIAG_REASON_LEGACY_WRONG_DIRECTION: (
-        "Legacy wrong direction", ("actual_delta", "expected_sign", "threshold", "motor_mask")
-    ),
-    protocol.CALIB_DIAG_REASON_LEGACY_ZERO_RETURN_TIMEOUT: (
-        "Legacy zero return timeout", ("abs_error", "required_travel", "zero_deg_x100", "motor_mask")
-    ),
-    protocol.CALIB_DIAG_REASON_LEGACY_INTERNAL_ERROR: (
-        "Legacy internal error", ("detail_a", "detail_b", "detail_c", "affected_mask")
-    ),
-}
-for reason, (title, fields) in _LEGACY.items():
-    CALIBRATION_DIAGNOSTICS[reason] = _spec(
-        title,
-        fields,
-        "This diagnostic came from legacy firmware or a historical log. Preserve the raw values and inspect logs from the matching version.",
-        legacy=True,
-    )
 
 
 PHASE_NAMES = {

@@ -617,8 +617,21 @@ bool sendMappedAnglePacket(const MappedAngleData_t& mappedAngle)
 /** 上报同一 10 ms 控制周期采用的目标和反馈；包尾时间即 controlTimestamp。 */
 bool sendControlTracePacket(const ControlTraceData_t& trace)
 {
-    // 同 packet type 按精确载荷长度区分扩展帧(240)与旧基础帧(220)。
-    // 先发扩展后发基础；旧桌面忽略未知长度，新桌面按 sequence+timestamp 合并。
+    // v4 cycle: components, motor detail, then joint/base. All share sequence and timestamp.
+    uint8_t components[224];
+    size_t ci = 0;
+    components[ci++] = PROTOCOL_HEADER; components[ci++] = 0;
+    components[ci++] = PACKET_TYPE_CONTROL_COMPONENTS;
+    components[ci++] = 1;
+    appendU32BigEndian(components, &ci, trace.sequence);
+    components[ci++] = trace.sampleDivisor;
+    for (uint8_t i=0; i<SERVO_TOTAL_NUM; ++i) appendI16BigEndian(components, &ci, trace.proportionalCounts[i]);
+    for (uint8_t i=0; i<SERVO_TOTAL_NUM; ++i) appendI16BigEndian(components, &ci, trace.integralCounts[i]);
+    for (uint8_t i=0; i<SERVO_TOTAL_NUM; ++i) appendI16BigEndian(components, &ci, trace.reversalCounts[i]);
+    for (uint8_t i=0; i<ENCODER_TOTAL_NUM; ++i) appendI16BigEndian(components, &ci, trace.slowDegCenti[i]);
+    appendU32BigEndian(components, &ci, trace.timestamp);
+    components[ci++] = PROTOCOL_TAIL; components[1] = ci - 2;
+    if (FW_SERIAL_WRITE(components, ci) != ci) return false;
     uint8_t detail[256];
     size_t di = 0;
     detail[di++] = PROTOCOL_HEADER;

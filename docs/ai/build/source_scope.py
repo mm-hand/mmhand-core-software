@@ -254,7 +254,7 @@ def _hints(rows: list[str]) -> list[dict]:
     patterns = (
         ("python_definition", re.compile(r"^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(")),
         ("ui_signal", re.compile(r"\.(?:clicked|toggled|triggered|currentChanged)\.connect\s*\(")),
-        ("ros_topic", re.compile(r"create_(?:publisher|subscription)\s*\(|/raw_ik_target")),
+        ("ros_topic", re.compile(r"create_(?:publisher|subscription)\s*\(|/mmhand/joint_angle_deg")),
         ("freertos_task", re.compile(r"xTaskCreate(?:PinnedToCore)?\s*\(|pdMS_TO_TICKS\s*\(")),
         ("protocol", re.compile(r"\b(?:CAN_ID_[A-Z0-9_]+|CMD_[A-Z0-9_]+)\b")),
         ("configuration", re.compile(r"\b(?:CONFIG_|TASK_[A-Z_]+|ROBOT_TOPIC)\b")),

@@ -103,7 +103,6 @@ bool assembleAndStartSystem() {
     // 上电默认不允许任何任务拥有舵机输出；状态机完成硬件/标定门禁后再进入 IDLE/READY。
     sharedData.control_mode = CONTROL_MODE_JOINT;
     sharedData.system_state = SYSTEM_STATE_UNCONTROLLABLE;
-    sharedData.paused_resume_state = SYSTEM_STATE_IDLE;
     sharedData.servo_target_owner = SERVO_TARGET_OWNER_NONE;
     sharedData.feedback_admission_status = FEEDBACK_ADMISSION_IDLE;
     sharedData.feedback_reject_reason = FEEDBACK_REJECT_NONE;
@@ -116,8 +115,8 @@ bool assembleAndStartSystem() {
 
     // 默认活动范围为 J08-J11；上位机连接后会按 UI 选择覆盖这两个 mask。
     const uint32_t validMotorMask = validMotorChannelMask();
-    sharedData.active_motor_mask = ((1UL << 8) | (1UL << 9) | (1UL << 10) | (1UL << 11)) & validMotorMask;
-    sharedData.active_joint_mask = ((1UL << 8) | (1UL << 9) | (1UL << 10) | (1UL << 11));
+    sharedData.active_motor_mask = 0;
+    sharedData.active_joint_mask = 0;
     // 所有有效舵机上电先视为多圈未知，只有桌面 JSON 恢复或重新标定后才能清位。
     sharedData.multi_turn_unknown_bitmap = validMotorMask;
     memset((void*)sharedData.servo_route_bus, SERVO_ROUTE_BUS_UNKNOWN,

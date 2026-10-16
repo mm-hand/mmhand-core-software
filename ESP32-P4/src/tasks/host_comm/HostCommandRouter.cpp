@@ -219,7 +219,7 @@ bool upperReleaseMotorDirect(SystemRuntimeContext* sharedData, uint32_t token)
     if (accepted) sharedData->direct_release_generation = generation;
     if (lock) xSemaphoreGive(lock);
     if (!accepted) return false;
-    if (postSystemEventForToken(sharedData, SYSTEM_EVENT_RUN_DIRECT_DONE, generation)) {
+    if (postSystemEventForToken(sharedData, SYSTEM_EVENT_MOTOR_DIRECT_RELEASE, generation)) {
         return true;
     }
     if (!lock || xSemaphoreTake(lock, pdMS_TO_TICKS(10)) == pdTRUE) {

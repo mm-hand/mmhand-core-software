@@ -47,8 +47,11 @@ class GuideTest(unittest.TestCase):
             self.assertIn(f"](behavior.{language}.html)", content)
             self.assertIn(f"](architecture.{language}.html)", content)
             self.assertRegex(content, r"\[\d+\]\(#ref-\d+\)")
-            self.assertIn("/raw_ik_target", content)
-            self.assertIn("--ros2-input raw_ik", content)
+            self.assertIn("/mmhand/joint_angle_deg", content)
+            for term in ('GPIO', 'USBMode=hwcdc', 'CDCOnBoot=cdc', 'JTAGAdapter=builtin',
+                         'build_debug.ps1', 'upload_debug.ps1', 'gdb_batch.py'):
+                self.assertIn(term, content)
+            self.assertNotIn('--ros2-input raw_ik', content)
 
     def test_bilingual_graph_identity_and_evidence(self) -> None:
         for kind in ("behavior", "architecture"):

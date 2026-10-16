@@ -19,16 +19,14 @@ inline constexpr uint8_t MOTOR_DIRECT_SOURCE_ABSOLUTE = 1; ///< 已解析的 log
 
 /** 顶层状态机事件编号是任务间 ABI，缺失编号为已删除但不能复用的历史事件。 */
 inline constexpr uint8_t SYSTEM_EVENT_START = 1;
+inline constexpr uint8_t SYSTEM_EVENT_CONTROL_RELEASE = 19;
 inline constexpr uint8_t SYSTEM_EVENT_STOP = 2;
 inline constexpr uint8_t SYSTEM_EVENT_RESET = 3;
 // 4/5/6 是已删除的 P4 自动标定事件，永久保留编号，不再接收或产生。
 inline constexpr uint8_t SYSTEM_EVENT_RUN_DIRECT = 7;
-inline constexpr uint8_t SYSTEM_EVENT_RUN_DIRECT_DONE = 8;
+inline constexpr uint8_t SYSTEM_EVENT_MOTOR_DIRECT_RELEASE = 8;
 inline constexpr uint8_t SYSTEM_EVENT_RUN_FEEDBACK = 9;
-inline constexpr uint8_t SYSTEM_EVENT_RUN_FEEDBACK_DONE = 10;
-inline constexpr uint8_t SYSTEM_EVENT_PAUSE = 11;
 inline constexpr uint8_t SYSTEM_EVENT_REEVALUATE_READY = 14;
-inline constexpr uint8_t SYSTEM_EVENT_RUN_FEEDBACK_TIMEOUT = 15;
 inline constexpr uint8_t SYSTEM_EVENT_ROPE_INIT = 16;
 inline constexpr uint8_t SYSTEM_EVENT_ROPE_INIT_DONE = 17;
 inline constexpr uint8_t SYSTEM_EVENT_ROPE_INIT_FAILED = 18;
@@ -40,7 +38,6 @@ inline constexpr uint8_t SYSTEM_STATE_RUN_FEEDBACK = 2;
 // 4 是已删除的 P4 自动标定运行态，永久保留编号，不再进入。
 inline constexpr uint8_t SYSTEM_STATE_READY = 5;
 inline constexpr uint8_t SYSTEM_STATE_RUN_DIRECT = 6;
-inline constexpr uint8_t SYSTEM_STATE_PAUSED = 7;
 inline constexpr uint8_t SYSTEM_STATE_ROPE_INIT_RUNNING = 8;
 inline constexpr uint8_t SYSTEM_STATE_RECOVERY_REQUIRED = 9;
 

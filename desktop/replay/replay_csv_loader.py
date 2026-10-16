@@ -17,7 +17,6 @@ import math
 from pathlib import Path
 from typing import Dict, Optional, Sequence
 
-from desktop.core.data_recording.motion_sampler import classify_motion_source
 from desktop.core.protocol import ENCODER_COUNT
 
 from .replay_models import ALL_JOINTS_MASK, ReplayFrame, ReplayTrace
@@ -26,8 +25,6 @@ from .replay_models import ALL_JOINTS_MASK, ReplayFrame, ReplayTrace
 REPLAY_LARGE_GAP_SECONDS = 1.0
 _COMMAND_TARGET_FIELDS = (
     "output_joint_targets_json",
-    "joint_targets_json",
-    "input_joint_targets_json",
 )
 
 
@@ -43,22 +40,12 @@ def _parse_int(value: object, default: int = 0) -> int:
 
 
 def _parse_host_time(row: Dict[str, str]) -> tuple[float, str]:
-    """读取新格式毫秒时间，同时兼容旧ISO和Unix秒字段。"""
-    candidates = [
-        row.get("host_time", ""),
-        row.get("host_time_iso", ""),
-        row.get("host_time_unix_s", ""),
-    ]
+    """读取当前格式 host_time。"""
+    candidates = [row.get("host_time", "")]
     for candidate in candidates:
         text = str(candidate or "").strip()
         if not text:
             continue
-        try:
-            epoch = float(text)
-            if math.isfinite(epoch):
-                return epoch, text
-        except ValueError:
-            pass
         try:
             parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
             return parsed.timestamp(), text
@@ -87,20 +74,7 @@ def _parse_joint_targets(
             raise ValueError(f"{field_name} contains NaN or an infinite value")
         return values, ALL_JOINTS_MASK
 
-    values = list(previous_values) if previous_values is not None else [0.0] * ENCODER_COUNT
-    value_mask = int(previous_valid_mask) & ALL_JOINTS_MASK
-    for joint in range(ENCODER_COUNT):
-        text = str(row.get(f"J{joint:02d}_target_deg", "") or "").strip()
-        if not text:
-            continue
-        value = float(text)
-        if not math.isfinite(value):
-            raise ValueError(f"J{joint:02d}_target_deg contains NaN or an infinite value")
-        values[joint] = value
-        value_mask |= 1 << joint
-    if value_mask == 0:
-        raise ValueError("Missing a joint target array or named Jxx_target_deg columns")
-    return values, value_mask
+    raise ValueError("Missing current output_joint_targets_json array")
 
 
 def _same_optional_metadata(current: object, candidate: object) -> bool:
@@ -115,10 +89,8 @@ def _detect_csv_kind(fieldnames: Sequence[str]) -> str:
         return "command"
     if any(f"J{joint:02d}_current_deg" in names for joint in range(ENCODER_COUNT)):
         return "joint_actual"
-    if any(f"J{joint:02d}_target_deg" in names for joint in range(ENCODER_COUNT)):
-        return "command"
     raise ValueError(
-        "CSV is neither a motion command table nor a table with Jxx_target_deg/Jxx_current_deg columns"
+        "CSV requires current command metadata and output_joint_targets_json, or Jxx_current_deg columns"
     )
 
 
@@ -227,8 +199,6 @@ def load_replay_csv(path: Path | str) -> ReplayTrace:
     first_host_text = ""
     previous_epoch: Optional[float] = None
     max_gap_s = 0.0
-    legacy_sent_unknown = False
-    legacy_scope_unknown = False
     previous_actual_values: Optional[list[float]] = None
     previous_actual_valid_mask = 0
     previous_command_values: Optional[list[float]] = None
@@ -252,29 +222,15 @@ def load_replay_csv(path: Path | str) -> ReplayTrace:
 
             if data_kind == "command":
                 row_source = str(row.get("source", "") or "").strip()
-                live = _is_true(row.get("live_enabled"))
-                inferred_source_kind, inferred_frame_kind, inferred_replayable = (
-                    classify_motion_source(row_source, live)
-                )
-                source_kind = str(row.get("source_kind", "") or inferred_source_kind)
-                frame_kind = str(row.get("frame_kind", "") or inferred_frame_kind)
-                replayable_text = str(row.get("replayable", "") or "").strip()
-                # 新schema列可能存在但旧写入方未填值；空值必须继续按来源推断，
-                # 不能把整份历史CSV误判为“禁止回放”。
-                replayable = (
-                    _is_true(replayable_text)
-                    if replayable_text
-                    else inferred_replayable
-                )
-                if "valid" in row and not _is_true(row.get("valid")):
-                    replayable = False
-                if "blocked" in row and _is_true(row.get("blocked")):
-                    replayable = False
-                if "sent_to_backend" in row:
-                    if not _is_true(row.get("sent_to_backend")):
-                        replayable = False
-                else:
-                    legacy_sent_unknown = True
+                required = ('source_kind', 'frame_kind', 'replayable', 'stream_id',
+                            'command_joint_mask', 'valid', 'blocked', 'sent_to_backend')
+                missing = [name for name in required if str(row.get(name, '') or '').strip() == '']
+                if missing:
+                    raise ValueError(f"CSV row {row_number} is missing current command fields: {', '.join(missing)}")
+                source_kind = row['source_kind']
+                frame_kind = row['frame_kind']
+                replayable = (_is_true(row['replayable']) and _is_true(row['valid'])
+                              and not _is_true(row['blocked']) and _is_true(row['sent_to_backend']))
                 if not replayable or frame_kind not in ("continuous", "discrete"):
                     dropped_rows += 1
                     previous_epoch = epoch
@@ -288,12 +244,11 @@ def load_replay_csv(path: Path | str) -> ReplayTrace:
                     previous_command_values = list(targets)
                     previous_command_valid_mask = int(value_mask)
                     row_mask = _parse_int(
-                        row.get("command_joint_mask")
-                        or row.get("active_joint_mask"),
+                        row.get("command_joint_mask"),
                         0,
                     ) & ALL_JOINTS_MASK
                     if row_mask == 0:
-                        row_mask = value_mask
+                        raise ValueError("Command has no explicit active joint scope")
                     row_mapping_id = str(row.get("mapping_id", "") or "")
                     row_mapping_version = _parse_int(row.get("mapping_version"), 0)
                     row_crc = _parse_int(row.get("urdf_config_crc"), 0)
@@ -313,12 +268,6 @@ def load_replay_csv(path: Path | str) -> ReplayTrace:
                 urdf_crc = urdf_crc or row_crc
                 joint_order_crc = joint_order_crc or row_order_crc
                 stream_id = str(row.get("stream_id", "") or "")
-                if not stream_id:
-                    stream_id = (
-                        f"legacy-{source_kind}-{row_mask:08X}"
-                        if frame_kind == "continuous"
-                        else f"legacy-event-{row_number}"
-                    )
                 source_names.add(row_source or source_kind)
             else:
                 try:
@@ -338,8 +287,6 @@ def load_replay_csv(path: Path | str) -> ReplayTrace:
                 stream_id = f"joint-actual-{row_mask:08X}"
                 source_names.add("Joint Current")
 
-            if row_mask == 0:
-                legacy_scope_unknown = True
             missing_requested_value_mask |= row_mask & ~value_mask
             active_joint_mask |= row_mask
             if first_epoch is None:
@@ -364,10 +311,6 @@ def load_replay_csv(path: Path | str) -> ReplayTrace:
             )
             previous_epoch = epoch
 
-    if legacy_sent_unknown:
-        warnings.append("Legacy CSV has no sent_to_backend field; original queue acceptance cannot be verified")
-    if legacy_scope_unknown or active_joint_mask == 0:
-        warnings.append("Some CSV frames have no active scope; Replay will use the current P4 active joint mask")
     if data_kind == "joint_actual":
         warnings.append("Joint-angle CSV has no model CRC; Replay can only validate against the current calibrated workspace")
     if missing_requested_value_mask:

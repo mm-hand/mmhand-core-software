@@ -83,8 +83,7 @@ public:
     float holdAngleDeg(uint8_t jointIndex) const;
 
 private:
-    // 750 ms 收绳窗口加上传感器抖动余量，按 10 ms 样本可覆盖约 960 ms。
-    static const uint8_t kHistoryCapacity = 96;
+    static const uint8_t kHistoryCapacity = 128;
 
     struct AngleSample {
         uint32_t timestampMs; ///< 样本时间。
@@ -101,6 +100,8 @@ private:
         bool holdActive;           ///< 是否锁存碰撞保持。
         bool targetInitialized;    ///< lastTargetDeg 是否有效。
         uint32_t candidateStartMs; ///< 当前候选运动段起点。
+        uint32_t armedStartMs;
+        uint32_t configRevision;
         float candidateDirection;  ///< 当前推进方向。
         uint8_t candidateMotionMode; ///< 候选段开始时锁存的物理腱绳方向。
         uint32_t progressWindowMs; ///< 该候选段固定使用的进展窗口。

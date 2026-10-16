@@ -4,10 +4,19 @@ import pytest
 from nicegui import ui, Client
 from nicegui.events import GenericEventArguments
 from desktop.core.hand_backend import HandBackend
-from desktop.ui.web import joint_calibration, motor_calibration, feedback_control, direct_control
-from desktop.ui.web import replay, plots, tactile, diagnostics
+from desktop.ui.web import renumber_motors, renumber_tactile, joint_calibration, motor_calibration, feedback_control, direct_control
+from desktop.ui.web import replay, plots, tactile, diagnostics, control_parameters
 from desktop.ui.web.common import FINGERS, selection
-from desktop.ui.browser_view import build_page, TABS
+from desktop.ui.browser_view import build_page, TABS, SUBTABS
+
+
+def test_unplugged_serial_choice_is_removed_but_active_identity_is_retained():
+    from desktop.ui.browser_view import device_selector_state
+    stopped = dict(connected=False, pending=False, port='COM12')
+    assert device_selector_state({}, 'COM12', stopped) == ({}, None)
+    assert device_selector_state({'COM14': 'S3'}, 'COM12', stopped) == ({'COM14': 'S3'}, None)
+    active = dict(connected=True, pending=False, port='COM12')
+    assert device_selector_state({}, 'COM12', active) == ({'COM12': 'COM12'}, 'COM12')
 
 @pytest.fixture
 def page():
@@ -18,18 +27,21 @@ def page():
     client.delete()
     hand.close_application()
 
-@pytest.mark.parametrize('name', TABS)
+@pytest.mark.parametrize('name', [*SUBTABS['Calibration'], *SUBTABS['Control'], 'Replay', *SUBTABS['Plot'], *SUBTABS['Settings']])
 def test_every_native_page_builds_and_refreshes_unknown_feedback(page, name):
     hand, client = page
     act, load, confirm = Mock(), Mock(), Mock()
     builders = {
-        TABS[0]: lambda: joint_calibration.build(hand, act, load, confirm),
-        TABS[1]: lambda: motor_calibration.build(hand, act, load),
-        TABS[2]: lambda: feedback_control.build(hand, act),
-        TABS[3]: lambda: direct_control.build(hand, act, confirm),
-        TABS[4]: lambda: replay.build(hand, act), TABS[5]: lambda: plots.build(hand, act),
-        TABS[6]: lambda: tactile.build(hand),
-        TABS[7]: lambda: diagnostics.build(hand, act)}
+        'Renumber Motor': lambda: renumber_motors.build(hand, act),
+        'Renumber Tactile': lambda: renumber_tactile.build(hand, act),
+        'Joint Calibration': lambda: joint_calibration.build(hand, act, load, confirm),
+        'Motor Calibration': lambda: motor_calibration.build(hand, act, load),
+        'Feedback Control': lambda: feedback_control.build(hand, act),
+        'Direct Control': lambda: direct_control.build(hand, act, confirm),
+        'Replay': lambda: replay.build(hand, act), 'Curves & Recordings': lambda: plots.build(hand, act),
+        'Tactile': lambda: tactile.build(hand),
+        'Diagnostics': lambda: diagnostics.build(hand, act),
+        'Control Parameters': lambda: control_parameters.build(hand, act)}
     refresh = builders[name]()
     snapshot = hand.application_snapshot()
     for _ in range(3): refresh(snapshot)
@@ -49,6 +61,32 @@ def test_feedback_refresh_keeps_native_number_and_slider_draft_without_send(page
     click = next(e for e in send._event_listeners.values() if e.type == 'click')
     click.handler(None)
     assert act.call_count == 1
+
+
+def test_tactile_batch_editor_groups_all_fingers_and_submits_each_new_id(page):
+    hand, client = page
+    act = Mock()
+    hand.request_tactile_renumber = Mock()
+    refresh = renumber_tactile.build(hand, act)
+    snapshot = hand.application_snapshot()
+    snapshot['id_reset']['tactile'].update(available=True, scanned=True, generation=1,
+        rows=[dict(bus=4,id=1,model=2,points=25),dict(bus=3,id=1,model=2,points=25)])
+    refresh(snapshot)
+    numbers = [element for element in client.elements.values() if isinstance(element, ui.number)]
+    assert len(numbers) == 2 and all(number.value is None for number in numbers)
+    numbers[0].set_value(2)
+    numbers[1].set_value(0)
+    labels = [element.text for element in client.elements.values() if isinstance(element, ui.label)]
+    assert all(finger in labels for finger in ('Thumb','Index','Middle','Ring','Little'))
+    assert any('same ID on one bus' in text for text in labels)
+    rename = next(element for element in client.elements.values()
+                  if isinstance(element, ui.button) and element.text == 'Renumber All')
+    next(event for event in rename._event_listeners.values() if event.type == 'click').handler(None)
+    act.call_args.args[0]()
+    hand.request_tactile_renumber.assert_called_once_with({(4,1):2,(3,1):0})
+    snapshot['id_reset']['tactile']['available'] = False
+    refresh(snapshot)
+    assert not rename.enabled and all(not number.enabled for number in numbers)
 
 
 def test_group_selection_refresh_updates_partial_state_without_selection_commands(page, monkeypatch):
@@ -224,39 +262,54 @@ def test_shell_has_one_stop_default_recording_and_exact_navigation(page):
     build_page(hand)
     tabs = [e._props['name'] for e in client.elements.values() if isinstance(e, ui.tab)]
     buttons = [e for e in client.elements.values() if isinstance(e, ui.button)]
-    assert tabs == TABS == ["Joint Calibration", "Motor Calibration", "Feedback Control", "Direct Control", "Replay", "Plots & Recordings", "Tactile", "Diagnostics"]
+    assert TABS == ['Calibration', 'Control', 'Replay', 'Plot', 'Settings']
+    assert tabs == [*TABS, *SUBTABS['Calibration'], *SUBTABS['Control'], *SUBTABS['Plot'], *SUBTABS['Settings']]
     assert sum('STOP' in e.text for e in buttons) == 1
     assert next(e for e in buttons if 'STOP' in e.text).enabled
     assert 'Save Data: ON' in [e.text for e in buttons]
     assert len([e for e in client.elements.values() if isinstance(e, ui.log)]) == 1
     navigation = next(e for e in client.elements.values() if isinstance(e, ui.tabs))
+    assert navigation.value == 'Calibration'
     panels = next(e for e in client.elements.values() if isinstance(e, ui.tab_panels))
-    toolbar_area = next(e for e in client.elements.values() if 'toolbar-area' in e.classes)
     toolbars = [e for e in client.elements.values() if 'page-toolbar' in e.classes]
-    assert len(toolbars) == len(TABS)
-    assert toolbar_area.parent_slot is panels.parent_slot
-    assert all(toolbar.parent_slot.parent is toolbar_area for toolbar in toolbars)
-    for index, name in enumerate(TABS):
-        navigation.set_value(name)
-        assert [toolbar.visible for toolbar in toolbars] == [i == index for i in range(len(TABS))]
+    assert len(toolbars) == 11
+    workspace = next(e for e in client.elements.values() if isinstance(e, ui.splitter))
+    assert panels.parent_slot is workspace.before
+    assert all(isinstance(toolbar.parent_slot.parent, ui.tab_panel) for toolbar in toolbars)
+    assert {toolbar.parent_slot.parent._props['name'] for toolbar in toolbars} == {
+        'Replay', *(name for names in SUBTABS.values() for name in names)}
+    assert all(next(child for child in toolbar.parent_slot.children
+                    if 'hidden' not in child.classes) is toolbar for toolbar in toolbars)
+    settings_panel = next(e for e in client.elements.values()
+                          if isinstance(e, ui.tab_panel) and e._props['name'] == 'Settings')
+    settings_children = settings_panel.default_slot.children
+    assert isinstance(settings_children[0], ui.tabs)
+    assert isinstance(settings_children[1], ui.tab_panels)
+    navigation.set_value('Control')
+    navigation.set_value('Settings')
+    assert all(isinstance(toolbar.parent_slot.parent, ui.tab_panel) for toolbar in toolbars)
 
 def test_tactile_summary_is_one_force_cell_and_full_uses_real_taxels(page):
     import numpy as np
     import time
     from desktop.core.data_models import FingerTactile, TactileSensor
+    from desktop.core.tactile_geometry import hand_svg
     hand, client = page
     state = hand._controller.current_state
-    state.tactile_data = [FingerTactile(sensors=[TactileSensor(np.zeros((5, 5, 3)), np.zeros(3))])]
+    state.tactile_data = [FingerTactile(sensors=[TactileSensor(np.zeros((4, 13, 3)), np.zeros(3))])]
     state.tactile_module_last_rx_ts[0] = time.time()
     state.tactile_module_valid_mask = 1
     state.tactile_data_level = 'SUMMARY'
     refresh = tactile.build(hand)
     refresh(hand.application_snapshot())
-    chart = next(e for e in client.elements.values() if isinstance(e, ui.echart))
-    assert chart.options['series'][0]['data'] == [[0, 0, 0]]
+    summary = hand_svg(hand.application_snapshot()['tactile']['modules'])
+    assert summary.count('<circle ') == 1
+    assert 'SUMMARY' in summary
     state.tactile_data_level = 'FULL'
     refresh(hand.application_snapshot())
-    assert len(chart.options['series'][0]['data']) == 25
+    full = hand_svg(hand.application_snapshot()['tactile']['modules'])
+    assert full.count('<circle ') == 52
+    assert 'point 52' in full
     state.tactile_module_last_rx_ts[0] -= 1
     refresh(hand.application_snapshot())
-    assert chart.options['series'][0]['data'] == []
+    assert hand_svg(hand.application_snapshot()['tactile']['modules']).count('<circle ') == 0

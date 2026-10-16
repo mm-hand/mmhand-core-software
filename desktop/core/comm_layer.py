@@ -12,6 +12,7 @@ from __future__ import annotations
 import queue
 import threading
 import time
+import struct
 from typing import Dict, List, Optional, Union
 
 import numpy as np
@@ -50,6 +51,7 @@ from .protocol import (
     MOTOR_COUNT,
     PACKET_TYPE_CALIB_DIAG,
     PACKET_TYPE_CONTROL_TRACE,
+    PACKET_TYPE_CONTROL_COMPONENTS,
     PACKET_TYPE_FAULT_STATUS,
     PACKET_TYPE_ENCODER_RAW,
     PACKET_TYPE_JOINT_CALIB_SNAPSHOT,
@@ -82,7 +84,6 @@ from .protocol import (
     build_active_scope_cmd,
     build_calib_load_joint_cmd,
     build_calib_load_limits_cmd,
-    build_calibrate_cmd,
     build_clear_calibration_cmd,
     build_clear_calibration_scope_cmd,
     build_servo_reset_zero_cmd,
@@ -100,7 +101,6 @@ from .protocol import (
     build_task_diag_subscribe_cmd,
     build_control_trace_subscribe_cmd,
     build_rope_init_cmd,
-    build_pause_cmd,
 
     build_restore_multiturn_cmd,
     build_run_feedback_cmd,
@@ -117,6 +117,7 @@ from .protocol import (
     crc16_ccitt,
 )
 from .session_log import log_session
+from .tactile_maintenance import RESULT_TYPE as TACTILE_MAINTENANCE_RESULT, TactileMaintenanceChannel
 
 # String command / HandModel / tuple command.
 SendCmd = Union[str, HandModel, tuple]
@@ -204,6 +205,7 @@ P4_PACKET_KINDS = {
     PACKET_TYPE_JOINT_CALIB_SNAPSHOT: "joint_calibration_snapshot",
     PACKET_TYPE_CALIB_DIAG: "calibration_diagnostic",
     PACKET_TYPE_CONTROL_TRACE: "control_trace",
+    PACKET_TYPE_CONTROL_COMPONENTS: "control_components",
     PACKET_TYPE_TASK_DIAG: "task_diagnostic",
     PACKET_TYPE_TACTILE: "tactile_summary",
     PACKET_TYPE_TACTILE_FULL: "tactile_full",
@@ -265,38 +267,6 @@ def _parse_tactile_diagnostic_packet(payload: bytes) -> Optional[dict]:
     return result if cursor == len(payload) else None
 
 
-def _synthetic_contact_grid(rows: int, cols: int, fx: int, fy: int, fz: int) -> np.ndarray:
-    """Project one resultant force sample into a tactile-looking taxel field."""
-    y, x = np.mgrid[0:rows, 0:cols]
-    cx = (cols - 1) / 2.0
-    cy = (rows - 1) / 2.0
-
-    pressure = float(max(0, fz))
-    if pressure <= 3.0:
-        pressure = 0.0
-
-    if pressure > 0.0:
-        direction_scale = max(24.0, min(96.0, pressure))
-        cx += max(-0.48, min(0.48, float(fx) / direction_scale)) * max(1.0, (cols - 1) / 2.0)
-        cy += max(-0.48, min(0.48, float(fy) / direction_scale)) * max(1.0, (rows - 1) / 2.0)
-
-    normalized = min(1.0, pressure / 180.0)
-    sigma_x = max(0.62, cols * (0.13 + 0.11 * normalized))
-    sigma_y = max(0.62, rows * (0.15 + 0.13 * normalized))
-    core = np.exp(-(((x - cx) ** 2) / (2.0 * sigma_x * sigma_x) + ((y - cy) ** 2) / (2.0 * sigma_y * sigma_y)))
-    skirt = np.exp(-(((x - cx) ** 2) / (2.0 * (sigma_x * 2.2) ** 2) + ((y - cy) ** 2) / (2.0 * (sigma_y * 2.2) ** 2)))
-    weight = core + 0.18 * normalized * skirt
-    max_weight = float(np.max(weight))
-    if max_weight > 1e-9:
-        weight = weight / max_weight
-
-    contact = np.zeros((rows, cols, 3), dtype=float)
-    contact[:, :, 0] = float(fx) * weight
-    contact[:, :, 1] = float(fy) * weight
-    contact[:, :, 2] = pressure * weight
-    return contact
-
-
 def _build_tactile_fingers(groups: List[List[List[int]]]) -> List[FingerTactile]:
     raw_fingers: List[FingerTactile] = []
     for group in groups:
@@ -312,7 +282,9 @@ def _build_tactile_fingers(groups: List[List[List[int]]]) -> List[FingerTactile]
             else:
                 rows, cols = tactile_segment_shape(2)
 
-            contact = _synthetic_contact_grid(rows, cols, int(fx), int(fy), int(fz))
+            # A summary carries one resultant only. Never fabricate a taxel
+            # distribution from it; the view renders a single SUMMARY marker.
+            contact = np.zeros((rows, cols, 3), dtype=float)
             resultant = np.array([float(fx), float(fy), float(fz)], dtype=float)
             sensors.append(TactileSensor(contact_forces=contact, resultant=resultant))
         raw_fingers.append(FingerTactile(sensors=sensors))
@@ -413,9 +385,11 @@ def is_valid_port(port: str) -> bool:
 
 
 class TactileSerialComm:
-    """独立 S3 触觉串口兼容门面，只接收触觉数据，不发送控制命令。"""
+    """独立 S3 触觉串口；维护请求仅走这条直连链路。"""
 
     def __init__(self, port: str, baudrate: int = BAUDRATE):
+        self._link_lock = threading.Lock()
+        self._link = dict(last_valid_rx=0.0, opened_at=0.0, bytes=0, frames=0)
         self.port = (port or "").strip()
         self.baudrate = int(baudrate)
         serial_factory = serial.Serial if serial is not None else None
@@ -431,6 +405,7 @@ class TactileSerialComm:
             log_byte_callback=self._append_firmware_log_byte,
             flush_log_callback=self._flush_firmware_log_text,
         )
+        self._maintenance = TactileMaintenanceChannel()
         self.rx_queue: queue.Queue = queue.Queue(maxsize=20)
         self.running = False
         self._rx_thread: Optional[threading.Thread] = None
@@ -480,7 +455,10 @@ class TactileSerialComm:
                 f"rts={int(bool(getattr(handle, 'rts', False)))}",
             )
             self.running = True
+            with self._link_lock:
+                self._link = dict(last_valid_rx=0.0, opened_at=time.time(), bytes=0, frames=0)
             self._frame_decoder.reset()
+            self._maintenance = TactileMaintenanceChannel()
             self._firmware_text_buffer = bytearray()
             self._last_model = None
             self._clear_queue(self.rx_queue)
@@ -511,6 +489,7 @@ class TactileSerialComm:
 
     def disconnect(self) -> None:
         self.running = False
+        self._maintenance.close()
         try:
             self._transport.close()
         except Exception:
@@ -536,8 +515,16 @@ class TactileSerialComm:
     def is_connected(self) -> bool:
         return bool(self.running and self._transport.is_open)
 
+    def maintenance_request(self, op, selector=0xFF, model=0xFF, new_id=0xFF,
+                            *, timeout=3.0, cancelled=lambda: False):
+        if not self.is_connected():
+            raise ConnectionError('Connect S3 directly by USB before tactile maintenance')
+        return self._maintenance.request(self._transport.write, op, selector, model,
+                                         new_id, timeout, cancelled)
+
     def _mark_serial_offline(self) -> None:
         self.running = False
+        self._maintenance.close()
         try:
             self._transport.close()
         except Exception:
@@ -689,6 +676,8 @@ class TactileSerialComm:
                     packets = self._frame_decoder.feed(chunk)
                     self._rx_diag_total_packets += len(packets)
                     self._rx_diag_bytes += len(chunk)
+                    with self._link_lock:
+                        self._link['bytes'] += len(chunk)
                     model = self._process_tactile_packets(packets)
                     if model:
                         self._put_latest_model(model)
@@ -710,7 +699,11 @@ class TactileSerialComm:
             self._firmware_text_buffer.append(32)
 
     def _flush_firmware_log_text(self) -> None:
+        text = bytes(self._firmware_text_buffer).decode('ascii', errors='replace').strip()
         self._firmware_text_buffer.clear()
+        # Preserve the low-rate CAN health record; keep noisy raw SPI/debug text out.
+        if text.startswith('[S3 CAN] '):
+            log_session('S3 CAN', text[len('[S3 CAN] '):][:240])
 
     @staticmethod
     def _stabilize_tactile_groups(groups: List[List[List[int]]]) -> List[List[List[int]]]:
@@ -739,11 +732,16 @@ class TactileSerialComm:
         emitted = False
 
         for pkt_type, payload in packets:
+            if pkt_type == TACTILE_MAINTENANCE_RESULT:
+                if self._maintenance.feed(payload):
+                    self._mark_valid_link_frame()
+                continue
             if pkt_type == PACKET_TYPE_TACTILE:
                 parsed = parse_tactile_packet(payload)
                 if parsed is None:
                     continue
                 seq, groups, module_valid_mask = parsed
+                self._mark_valid_link_frame()
                 stable_groups = self._stabilize_tactile_groups(groups)
                 first_summary = self._last_tactile_rx_ts <= 0.0
                 self._mark_tactile_summary_received(module_valid_mask)
@@ -776,6 +774,7 @@ class TactileSerialComm:
                 parsed = parse_tactile_full_fragment(payload)
                 if parsed is None:
                     continue
+                self._mark_valid_link_frame()
                 seq, frag_idx, frag_count, chunk, summary_seq, full_crc = parsed
                 accepted = self._accept_tactile_full_fragment(
                     seq,
@@ -823,6 +822,7 @@ class TactileSerialComm:
                 diag = _parse_tactile_diagnostic_packet(payload)
                 if diag is None:
                     continue
+                self._mark_valid_link_frame()
                 now = time.time()
                 model.tactile_diag_version = int(diag["version"])
                 model.tactile_diag_frame_count = int(diag["frame_count"])
@@ -876,6 +876,15 @@ class TactileSerialComm:
             return model
         return None
 
+    def _mark_valid_link_frame(self):
+        with self._link_lock:
+            self._link['last_valid_rx'] = time.time()
+            self._link['frames'] += 1
+
+    def connection_diagnostics(self):
+        with self._link_lock:
+            return dict(self._link)
+
     def _maybe_print_rx_diag(self) -> None:
         now = time.time()
         elapsed = now - self._rx_diag_last_print
@@ -928,6 +937,8 @@ class LowerComputerComm:
 
     def __init__(self, port: str, baudrate: int = BAUDRATE):
         self.port = (port or "").strip()
+        self._control_parameter_condition = threading.Condition()
+        self._control_parameter_result = None
         self.baudrate = baudrate
         serial_factory = serial.Serial if serial is not None else None
         # 五个通信组件各自拥有单一状态，LowerComputerComm 仅负责编排和旧 API 兼容。
@@ -957,6 +968,10 @@ class LowerComputerComm:
         self._rx_thread: Optional[threading.Thread] = None
         self._tx_thread: Optional[threading.Thread] = None
         self._offline_lock = threading.Lock()
+        self._connection_rx_bytes = 0
+        self._connection_rx_packets = 0
+        self._connection_last_rx = 0.0
+        self._connection_error = ''
         self._firmware_text_buffer = bytearray()
         self._rx_diag_last_print = time.time()
         self._rx_diag_total_packets = 0
@@ -993,7 +1008,7 @@ class LowerComputerComm:
             if not is_valid_port(self.port):
                 raise ValueError(f"serial port '{self.port}' is not available")
             if not self.connect():
-                raise RuntimeError(f"Unable to open port '{self.port}'")
+                raise RuntimeError(f"Unable to open port '{self.port}': {self._connection_error or 'serial open failed'}")
 
     def connect(self) -> bool:
         if self._transport.is_open:
@@ -1004,6 +1019,18 @@ class LowerComputerComm:
         if serial is None:
             raise RuntimeError("Missing Python dependency: pyserial. Install it with: python -m pip install pyserial")
         try:
+            self._connection_rx_bytes = 0
+            self._connection_rx_packets = 0
+            self._connection_last_rx = 0.0
+            self._connection_error = ''
+            try:
+                for device in serial.tools.list_ports.comports():
+                    if device.device == self.port:
+                        log_session('COMM', f'identity port={self.port} vid={device.vid} pid={device.pid} '
+                                    f'serial={device.serial_number} location={device.location}')
+                        break
+            except Exception as metadata_error:
+                log_session('COMM', f'port identity unavailable: {metadata_error}')
             if not self._transport.open():
                 return False
             self.running = True
@@ -1011,6 +1038,11 @@ class LowerComputerComm:
             self._frame_decoder.reset()
             self._firmware_text_buffer = bytearray()
             self._state_reducer.reset()
+            from .id_protocol import MaintenanceChannel
+            if hasattr(self, '_maintenance'):
+                self._maintenance.close()
+            self._maintenance = MaintenanceChannel()
+            self._control_parameter_result = None
             self._protocol_compatible = False
             self._ack_tracker.reset()
             self._safety_event_channel.reset()
@@ -1035,6 +1067,7 @@ class LowerComputerComm:
             self.send_command("protocol_hello")
             return True
         except Exception as exc:
+            self._connection_error = f'{type(exc).__name__}: {exc}'
             try:
                 self._transport.close()
             except Exception:
@@ -1158,6 +1191,7 @@ class LowerComputerComm:
                 return
             self._offline_reported = True
             detail = f"{reason}: {exc}" if exc is not None else reason
+            self._connection_error = detail
             log_session("COMM", f"serial offline {detail}")
             print(f"Serial offline: {detail}")
             self.running = False
@@ -1301,6 +1335,9 @@ class LowerComputerComm:
                 chunk = self._transport.read_available()
                 if chunk:
                     packets = self._frame_decoder.feed(chunk)
+                    self._connection_rx_bytes += len(chunk)
+                    self._connection_rx_packets += len(packets)
+                    self._connection_last_rx = time.time()
                     self._update_rx_diag(packets, len(chunk))
                     model = self._process_packets(packets)
                     if model:
@@ -1313,6 +1350,15 @@ class LowerComputerComm:
                 print(f"RX error: {exc}")
                 self._mark_comm_offline("RX error", exc)
                 break
+
+    def connection_diagnostics(self) -> dict:
+        """Lifetime counters for this connection, independent of rate-log resets."""
+        return dict(port=self.port, baudrate=self.baudrate,
+                    rx_bytes=self._connection_rx_bytes, rx_packets=self._connection_rx_packets,
+                    last_rx=self._connection_last_rx, error=self._connection_error,
+                    protocol_compatible=self._protocol_compatible,
+                    rx_thread_alive=bool(self._rx_thread and self._rx_thread.is_alive()),
+                    tx_thread_alive=bool(self._tx_thread and self._tx_thread.is_alive()))
 
     def _append_firmware_log_byte(self, value: int) -> None:
         if value in (9, 10, 13) or 32 <= value <= 126:
@@ -1398,7 +1444,63 @@ class LowerComputerComm:
         sink = getattr(self, "recording_packet_sink", None)
         if sink is not None:
             sink("p4", packets)
-        return self._state_reducer.process_packets(self, packets)
+        normal = []
+        from .id_protocol import MaintenanceChannel
+        if not hasattr(self, '_maintenance'):
+            self._maintenance = MaintenanceChannel()
+        for kind, payload in packets:
+            if kind == protocol_codec.PACKET_TYPE_SERVO_MAINTENANCE:
+                self._maintenance.feed(payload)
+            elif kind == protocol_codec.PACKET_TYPE_CONTROL_PARAMETERS:
+                if len(payload) == 10 and payload[0] == 1:
+                    with self._control_parameter_condition:
+                        self._control_parameter_result = (payload[1], *struct.unpack('>II', payload[2:]))
+                        self._control_parameter_condition.notify_all()
+            else:
+                normal.append((kind, payload))
+        return self._state_reducer.process_packets(self, normal)
+
+    def apply_control_parameters(self, data, *, cancelled=lambda: False, timeout=3.0):
+        from .control_parameters import configuration_frame, configuration_crc
+        wanted = (0, data['revision'], configuration_crc(data))
+        with self._control_parameter_condition:
+            self._control_parameter_result = None
+        if not self.send_command(('maintenance_frame', configuration_frame(data))):
+            raise ConnectionError('P4 parameter transaction could not be queued')
+        deadline = time.monotonic() + timeout
+        with self._control_parameter_condition:
+            while self._control_parameter_result is None:
+                if cancelled() or not self.is_connected():
+                    raise InterruptedError('P4 parameter synchronization cancelled')
+                remaining = deadline - time.monotonic()
+                if remaining <= 0: raise TimeoutError('P4 parameter application result timed out')
+                self._control_parameter_condition.wait(min(remaining, 0.05))
+            actual = self._control_parameter_result
+        if actual != wanted:
+            raise ValueError(f'P4 parameter revision/CRC not applied: {actual}')
+        # Query separately so a queued ACK can never stand in for RAM readback.
+        with self._control_parameter_condition:
+            self._control_parameter_result = None
+        query = bytes((254, 2, protocol_codec.CMD_CONTROL_PARAMETERS_QUERY, 255))
+        if not self.send_command(('maintenance_frame', query)):
+            raise ConnectionError('P4 parameter readback could not be queued')
+        deadline = time.monotonic() + timeout
+        with self._control_parameter_condition:
+            while self._control_parameter_result is None:
+                if cancelled() or not self.is_connected(): raise InterruptedError('Parameter readback cancelled')
+                remaining = deadline - time.monotonic()
+                if remaining <= 0: raise TimeoutError('P4 parameter readback timed out')
+                self._control_parameter_condition.wait(min(remaining, 0.05))
+            if self._control_parameter_result != wanted:
+                raise ValueError('P4 parameter readback differs from requested revision')
+        return wanted[1:]
+
+    def maintenance_request(self, session, operation, bus=0, old_id=0, new_id=0, **kwargs):
+        from .id_protocol import MaintenanceChannel
+        if not hasattr(self, '_maintenance'):
+            self._maintenance = MaintenanceChannel()
+        return self._maintenance.request(lambda frame: self.send_command(('maintenance_frame', frame)),
+                                         protocol_codec.CMD_SERVO_MAINTENANCE, session, operation, bus, old_id, new_id, **kwargs)
 
     @staticmethod
     def _mapped_angle_out_of_workspace(joint_idx: int, value: int, model: HandModel) -> bool:
@@ -1457,15 +1559,20 @@ class LowerComputerComm:
                 model.encoders[i].error = not usable
 
     def send_command(self, cmd: SendCmd) -> bool:
+        packet = self._encode_command(cmd)
+        if packet is None:
+            return False
         if not getattr(self, "_protocol_compatible", False):
-            packet = self._encode_command(cmd)
-            if packet and packet[2] in protocol_codec.COMMANDS_REQUIRING_HANDSHAKE:
+            if packet[2] in protocol_codec.COMMANDS_REQUIRING_HANDSHAKE:
                 log_session("PROTOCOL", "motion/config rejected: protocol or model handshake incomplete")
                 return False
         if not self.is_connected():
             log_session("COMM", f"drop TX while offline cmd={cmd!r}")
             return False
-        if cmd in ("calibrate", "clear_calibration") or (
+        # Clear only this command's previous ACK before it can be transmitted.
+        # Adjacent replies may have identical Windows wall-clock timestamps.
+        self._ack_tracker.prepare_command(packet[2])
+        if cmd == "clear_calibration" or (
             isinstance(cmd, tuple) and len(cmd) == 2 and
             cmd[0] == "clear_calibration_scope"
         ):
@@ -1476,8 +1583,6 @@ class LowerComputerComm:
             "calib_load_joint",
         ):
             self._auto_calib_logger.log("TX", repr(cmd))
-        if cmd == "pause":
-            return build_pause_cmd()
         if cmd == "stop":
             self._enqueue_stop_immediately()
             return True
@@ -1685,10 +1790,10 @@ class LowerComputerComm:
         )
 
     def _encode_command(self, cmd: SendCmd) -> Optional[bytes]:
+        if isinstance(cmd, tuple) and cmd and cmd[0] == 'maintenance_frame':
+            return cmd[1]
         if cmd == "protocol_hello":
             return protocol_codec.build_protocol_hello_cmd()
-        if cmd == "calibrate":
-            return build_calibrate_cmd()
         if isinstance(cmd, tuple) and len(cmd) == 4 and cmd[0] == "active_scope":
             return build_active_scope_cmd(cmd[1], cmd[2], bool(cmd[3]))
         if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "restore_multiturn":
@@ -1756,6 +1861,8 @@ class LowerComputerComm:
             return build_start_cmd()
         if cmd == "run_feedback":
             return build_run_feedback_cmd()
+        if cmd == 'control_release':
+            return protocol_codec._build_command_frame(protocol_codec.CMD_CONTROL_RELEASE)
         if cmd == "stop":
             return build_stop_cmd()
         if cmd == "reset":

@@ -34,7 +34,17 @@ def _write_csv(path, rows):
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(rows)
+        from desktop.core.data_recording.motion_sampler import classify_motion_source
+        current=[]
+        for index, original in enumerate(rows):
+            row=dict(original)
+            source,kind,replayable=classify_motion_source(row.get('source',''),bool(row.get('live_enabled')))
+            row.setdefault('source_kind', source)
+            row.setdefault('frame_kind', kind)
+            row.setdefault('replayable', int(replayable))
+            row.setdefault('stream_id', f'{source}-stream' if kind=='continuous' else f'event-{index}')
+            current.append(row)
+        writer.writerows(current)
 
 
 def test_loader_restores_full_timeline_and_actual_output(tmp_path):
@@ -44,7 +54,7 @@ def test_loader_restores_full_timeline_and_actual_output(tmp_path):
         [
             {
                 "host_time": "2026-07-23 10:00:00.000",
-                "source": "ROS2:/raw_ik_target",
+                "source": "ROS2:/mmhand/joint_angle_deg",
                 "valid": 1,
                 "active_joint_mask": "0x00000003",
                 "command_joint_mask": "0x00000003",
@@ -57,7 +67,7 @@ def test_loader_restores_full_timeline_and_actual_output(tmp_path):
             },
             {
                 "host_time": "2026-07-23 10:00:00.100",
-                "source": "ROS2:/raw_ik_target",
+                "source": "ROS2:/mmhand/joint_angle_deg",
                 "valid": 1,
                 "active_joint_mask": "0x00000003",
                 "command_joint_mask": "0x00000003",
@@ -70,7 +80,7 @@ def test_loader_restores_full_timeline_and_actual_output(tmp_path):
             },
             {
                 "host_time": "2026-07-23 10:00:00.250",
-                "source": "ROS2:/raw_ik_target",
+                "source": "ROS2:/mmhand/joint_angle_deg",
                 "valid": 1,
                 "active_joint_mask": "0x00000003",
                 "command_joint_mask": "0x00000003",
@@ -97,7 +107,7 @@ def test_loader_restores_full_timeline_and_actual_output(tmp_path):
 def test_loader_rejects_timestamp_rollback(tmp_path):
     path = tmp_path / "teleop.csv"
     base = {
-        "source": "ROS2:/raw_ik_target",
+        "source": "ROS2:/mmhand/joint_angle_deg",
         "valid": 1,
         "active_joint_mask": "1",
         "command_joint_mask": "1",
@@ -120,7 +130,7 @@ def test_loader_rejects_timestamp_rollback(tmp_path):
         load_replay_csv(path)
 
 
-def test_loader_reads_legacy_input_csv_without_reintroducing_legacy_writes(tmp_path):
+def test_loader_rejects_legacy_input_csv(tmp_path):
     path = tmp_path / "16_遥操作输入_teleop_input.csv"
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
@@ -140,7 +150,7 @@ def test_loader_reads_legacy_input_csv_without_reintroducing_legacy_writes(tmp_p
             writer.writerow(
                 {
                     "host_time_iso": f"2026-07-23 10:00:00.{milliseconds:03d}",
-                    "source": "ROS2:/raw_ik_target",
+                    "source": "ROS2:/mmhand/joint_angle_deg",
                     "valid": 1,
                     "mapping_id": "mapping",
                     "mapping_version": 3,
@@ -149,18 +159,14 @@ def test_loader_reads_legacy_input_csv_without_reintroducing_legacy_writes(tmp_p
                 }
             )
 
-    trace = load_replay_csv(path)
-
-    assert trace.frame_count == 2
-    assert trace.duration_s == pytest.approx(0.05)
-    assert any("sent_to_backend" in warning for warning in trace.warnings)
-    assert trace.active_joint_mask == (1 << ENCODER_COUNT) - 1
+    with pytest.raises(ValueError):
+        load_replay_csv(path)
 
 
 def test_loader_accepts_external_ros2_continuous_stream(tmp_path):
     path = tmp_path / "07_遥操作总表.csv"
     base = {
-        "source": "ROS2:/raw_ik_target",
+        "source": "ROS2:/mmhand/joint_angle_deg",
         "valid": 1,
         "active_joint_mask": "0x00000003",
         "command_joint_mask": "0x00000003",
@@ -254,7 +260,7 @@ def test_loader_accepts_joint_wide_current_csv(tmp_path):
     assert [frame.target_urdf_deg[0] for frame in trace.frames] == [10.0, 11.0]
 
 
-def test_loader_accepts_sparse_named_target_columns_and_holds_blank_cells(tmp_path):
+def test_loader_rejects_legacy_target_only_columns(tmp_path):
     path = tmp_path / "sparse_targets.csv"
     fieldnames = [
         "host_time",
@@ -291,13 +297,8 @@ def test_loader_accepts_sparse_named_target_columns_and_holds_blank_cells(tmp_pa
             }
         )
 
-    trace = load_replay_csv(path)
-
-    assert trace.active_joint_mask == 0x5
-    assert trace.frames[0].joint_value_mask == 0x5
-    assert trace.frames[1].joint_value_mask == 0x5
-    assert trace.frames[1].target_urdf_deg[0] == 11.0
-    assert trace.frames[1].target_urdf_deg[2] == 20.0
+    with pytest.raises(ValueError):
+        load_replay_csv(path)
 
 
 def test_loader_accepts_joint_current_csv_with_only_one_named_joint(tmp_path):

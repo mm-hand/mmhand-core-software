@@ -340,7 +340,7 @@ def test_collision_hold_does_not_block_ros2_retreat_target():
     assert retreat.sent
     assert backend.ros2_output_armed()
     assert controller.run_requests == 2
-    assert controller.sent[-1][1][0] == pytest.approx(15.0)
+    assert 15.0 <= controller.sent[-1][1][0] < 20.0  # Retreat passes the new One Euro path.
 
 
 def test_estop_revokes_ros2_and_following_frames_cannot_restart_feedback():

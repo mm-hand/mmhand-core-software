@@ -32,7 +32,7 @@ def classify_motion_source(source: str, live: bool) -> Tuple[str, str, bool]:
         return "system_hold", "diagnostic", False
     if "TEST" in upper:
         return "test", "diagnostic", False
-    if "ROS2" in upper or "RAW_IK" in upper or "RAW IK" in upper:
+    if "ROS2" in upper:
         source_kind = "ros2_external"
     else:
         source_kind = "ui_feedback"

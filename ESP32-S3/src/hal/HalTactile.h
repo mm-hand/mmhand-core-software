@@ -64,6 +64,11 @@ public:
     TactileData getData();
     /** @brief 返回最近一次采集诊断快照。 */
     TactileReadDiag getDiagnostics();
+    uint8_t inspectSensor(uint8_t physicalIndex, uint8_t* semanticIndex, uint8_t* model);
+    bool writeSensorId(uint8_t physicalIndex, uint8_t destinationId, bool* writeSent);
+    bool probePhysical(uint8_t physicalIndex);
+    bool verifyPhysicalModel(uint8_t physicalIndex, uint8_t model);
+    bool remapSensor(uint8_t semanticIndex, uint8_t newPhysicalIndex);
 
 private:
     struct SpiReadResult {
@@ -88,6 +93,7 @@ private:
     TactileReadDiag _diag;    ///< 最近采集诊断统计。
     SpiReadResult _lastReadResult; ///< 最近一次SPI读取结果，供分模块统计。
     uint8_t _lastReadAttempts;     ///< 最近一次模块读取实际尝试次数。
+    uint8_t _physicalRoute[TACTILE_GROUP_NUM][TACTILE_SENSOR_PER_GROUP];
 };
 
 // 全局单例对象，任务层直接调用。

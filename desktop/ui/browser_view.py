@@ -9,12 +9,41 @@
 """
 import time
 from nicegui import ui
-from .web import joint_calibration, motor_calibration, feedback_control, direct_control
-from .web import replay, plots, tactile, diagnostics
+from .web import renumber_motors, renumber_tactile, joint_calibration, motor_calibration, feedback_control, direct_control
+from .web import replay, plots, tactile, diagnostics, control_parameters
 from .web.common import show
 
-TABS = ['Joint Calibration', 'Motor Calibration', 'Feedback Control', 'Direct Control',
-        'Replay', 'Plots & Recordings', 'Tactile', 'Diagnostics']
+TABS = ['Calibration', 'Control', 'Replay', 'Plot', 'Settings']
+SUBTABS = {
+    'Calibration': ['Joint Calibration', 'Motor Calibration'],
+    'Control': ['Feedback Control', 'Direct Control'],
+    'Plot': ['Curves & Recordings', 'Tactile'],
+    'Settings': ['Renumber Motor', 'Renumber Tactile', 'Control Parameters', 'Diagnostics'],
+}
+def status_background(value):
+    status = str(value).upper()
+    if status in ('FAILED', 'FAULT', 'ERROR', 'ACTIVE', 'HOLD', 'MISSING', 'STOPPED'):
+        return '#fecaca'
+    if status in ('READY', 'KNOWN', 'CLEAR', 'SUCCESS', 'OFF', 'ARMED'):
+        return '#bbf7d0'
+    if status in ('RUNNING', 'CALIBRATING', 'CONTROLLING'):
+        return '#bfdbfe'
+    if status in ('WARN', 'WARNING', 'PENDING', 'SYNCING'):
+        return '#fde68a'
+    return '#e2e8f0'
+
+
+def device_selector_state(choices, selected, connection):
+    """Retain an active connection's identity, never resurrect an unplugged port."""
+    options = dict(choices)
+    active = connection['connected'] or connection['pending']
+    port = connection['port'] if active else None
+    if port and port not in options:
+        options[port] = port
+    value = port or (selected if selected in options else None)
+    return options, value
+
+
 CSS = '''
 body {background:#F5F7FA;color:#1e293b}
 .nicegui-content {padding:0;gap:0;height:100dvh;overflow:hidden}
@@ -23,9 +52,11 @@ body {background:#F5F7FA;color:#1e293b}
 .connection-bar .q-field {font-size:12px}
 .connection-bar .q-field__control,.connection-bar .q-field__marginal {height:32px;min-height:32px}
 .status-bar {min-height:32px;padding:4px 12px;background:#eef2f7;gap:14px;flex-shrink:0}
+.status-chip {padding:4px 8px;border-radius:5px;color:#1e293b;font-weight:500;white-space:nowrap}
 .console-tabs {height:36px;min-height:36px;background:white;flex-shrink:0}
 .console-tabs .q-tab {min-height:36px;padding:0 12px;font-size:12px}
-.toolbar-area {width:100%;padding:8px 12px;background:white;flex-shrink:0}
+.console-subtabs {height:36px;min-height:36px;background:white;flex-shrink:0}
+.console-subtabs .q-tab {min-height:36px;padding:0 12px;font-size:12px}
 .page-panels {flex:1;min-height:0;overflow:auto;width:100%;background:transparent}
 .page-panels .q-tab-panel {padding:12px;display:flex;flex-direction:column;gap:12px}
 .page-toolbar {width:100%;display:flex;align-items:center;justify-content:flex-start;flex-wrap:nowrap;gap:8px;overflow-x:auto;flex-shrink:0}
@@ -35,11 +66,18 @@ body {background:#F5F7FA;color:#1e293b}
 .finger-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 .q-card {border-radius:10px;box-shadow:0 1px 4px #182b4410;padding:12px;gap:8px}
 .joint-row {border-top:1px solid #e8edf3;padding-top:8px}
-.system-log {height:120px;background:white;border-top:1px solid #dce3eb;padding:6px 12px;flex-shrink:0;gap:4px}
-.system-log .nicegui-log {flex:1;width:100%;font:11px ui-monospace,monospace;color:#475569}
+.console-workspace {flex:1;min-height:0;width:100%}
+.console-workspace > .q-splitter__before {display:flex;flex-direction:column;min-height:0}
+.console-workspace > .q-splitter__separator {height:8px;background:#e2e8f0;cursor:row-resize}
+.log-resize-grip {width:40px;height:3px;border-radius:2px;background:#94a3b8}
+.system-log {height:100%;min-height:0;background:white;padding:6px 12px;gap:4px;overflow:hidden}
+.system-log .nicegui-log {flex:1;min-height:0;width:100%;font:11px ui-monospace,monospace;color:#475569}
 .q-btn {text-transform:none;border-radius:6px;font-size:12px}
 .tactile-grid {display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
-@media(max-width:1439px) {.finger-grid {grid-template-columns:1fr}.system-log {height:96px}}
+.renumber-motors-layout {display:grid;grid-template-columns:minmax(260px,1fr) minmax(0,2fr);gap:16px}
+.renumber-motors-diagram {width:100%;max-width:720px;height:clamp(180px,calc(100dvh - 430px),380px);align-self:center}
+@media(max-width:1000px) {.renumber-motors-layout {grid-template-columns:1fr}}
+@media(max-width:1439px) {.finger-grid {grid-template-columns:1fr}}
 @media(max-width:1000px) {.connection-bar {flex-wrap:wrap}.tactile-layout,.diagnostic-layout {flex-wrap:wrap!important}}
 '''
 
@@ -84,6 +122,8 @@ def build_page(hand):
         dialog.open()
     with ui.dialog() as importer, ui.card().classes('w-[600px] max-w-full'):
         ui.label('Load Joint & Motor Calibration').classes('font-semibold')
+        storage = ui.label().classes('text-sm whitespace-pre-wrap break-all')
+        ui.label('Joint calibration endpoints are saved automatically after verification. Motor calibration results and multi-turn anchors are saved after each successful joint. Failed joints do not replace successful results.').classes('text-sm')
         async def upload(event):
             preview_token[0] = None
             import_info.set_text('Validating…'); load.set_enabled(False)
@@ -99,6 +139,8 @@ def build_page(hand):
     def open_import():
         hand.clear_calibration_preview()
         preview_token[0] = None
+        paths = hand.application_snapshot(include_curves=False)['calibration_storage']
+        storage.set_text(f"Current device save path: {paths['current']}\nDefault data directory: {paths['data_dir']}\nEarlier default snapshot: {paths['default']}")
         import_info.set_text('Choose a calibration file to validate.'); load.set_enabled(False)
         importer.open()
     with ui.element('div').classes('console-shell'):
@@ -112,41 +154,52 @@ def build_page(hand):
                     state = hand.application_snapshot(include_curves=False)['connections'][name]
                     act(lambda: hand.request_disconnect(tactile=name == 's3') if state['connected'] else hand.request_connect(selectors[name].value or '', tactile=name == 's3'))
                 buttons[name] = ui.button('Connect', on_click=connection).props('dense outline')
-                ages[name] = ui.label('—ms').classes('text-xs whitespace-nowrap')
+                ages[name] = ui.label('Rx age: —').classes('text-xs whitespace-nowrap')
                 with ages[name]: ui.tooltip('Time since the latest data received on this connection, in milliseconds.')
             ui.space()
             save = ui.button('Save Data: ON', on_click=lambda: act(lambda: hand.request_recording(not hand.application_snapshot(include_curves=False)['recording']['enabled']))).props('dense outline')
             ui.button('■ STOP', on_click=lambda: act(hand.stop_motion), color='negative').props('dense').classes('font-bold px-5')
         with ui.row().classes('status-bar items-center w-full'):
-            badges = {name: ui.label().classes('text-xs cursor-pointer') for name in ['System', 'Calibration', 'Overload', 'Collision', 'Multi-turn']}
+            badges = {name: ui.label().classes('status-chip text-xs cursor-pointer') for name in ['System', 'Calibration', 'Overload', 'Collision', 'Multi-turn']}
         with ui.tabs(value=TABS[0]).classes('console-tabs w-full').props('dense no-caps active-color=primary outside-arrows mobile-arrows') as tabs:
             for name in TABS: ui.tab(name)
-        for badge in badges.values(): badge.on('click', lambda: tabs.set_value('Diagnostics'))
-        toolbar_area = ui.element('div').classes('toolbar-area')
+        for badge in badges.values(): badge.on('click', lambda: tabs.set_value('Settings'))
         refreshers = {}
-        with ui.tab_panels(tabs, value=TABS[0], animated=False).classes('page-panels').props('keep-alive') as panels:
-            with ui.tab_panel(TABS[0]): refreshers[TABS[0]] = joint_calibration.build(hand, act, open_import, confirm)
-            with ui.tab_panel(TABS[1]): refreshers[TABS[1]] = motor_calibration.build(hand, act, open_import)
-            with ui.tab_panel(TABS[2]): refreshers[TABS[2]] = feedback_control.build(hand, act)
-            with ui.tab_panel(TABS[3]): refreshers[TABS[3]] = direct_control.build(hand, act, confirm)
-            with ui.tab_panel(TABS[4]): refreshers[TABS[4]] = replay.build(hand, act)
-            with ui.tab_panel(TABS[5]): refreshers[TABS[5]] = plots.build(hand, act)
-            with ui.tab_panel(TABS[6]): refreshers[TABS[6]] = tactile.build(hand)
-            with ui.tab_panel(TABS[7]): refreshers[TABS[7]] = diagnostics.build(hand, act)
-        toolbars = {}
-        for panel in panels.default_slot.children:
-            for child in list(panel.default_slot.children):
-                if 'page-toolbar' in child.classes:
-                    child.move(toolbar_area)
-                    toolbars[panel._props['name']] = child
-        def switch_toolbar():
-            for name, toolbar in toolbars.items():
-                toolbar.set_visibility(name == tabs.value)
-        tabs.on_value_change(lambda _: switch_toolbar())
-        switch_toolbar()
-        with ui.column().classes('system-log w-full'):
-            ui.label('System Log').classes('text-xs font-semibold')
-            output = ui.log(max_lines=2000)
+        subtabs = {}
+        with ui.splitter(horizontal=True, reverse=True, value=18, limits=(10, 70)).classes('console-workspace') as workspace:
+            with workspace.before:
+                with ui.tab_panels(tabs, value=TABS[0], animated=False).classes('page-panels').props('keep-alive') as panels:
+                    for group in TABS:
+                        with ui.tab_panel(group).classes('w-full'):
+                            if group == 'Replay':
+                                refreshers['Replay'] = replay.build(hand, act)
+                                continue
+                            with ui.tabs(value=SUBTABS[group][0]).classes('console-subtabs w-full').props('dense no-caps active-color=primary') as child_tabs:
+                                for name in SUBTABS[group]: ui.tab(name)
+                            subtabs[group] = child_tabs
+                            with ui.tab_panels(child_tabs, value=SUBTABS[group][0], animated=False).classes('w-full').props('keep-alive'):
+                                for name in SUBTABS[group]:
+                                    with ui.tab_panel(name):
+                                        if name == 'Joint Calibration': refreshers[name] = joint_calibration.build(hand, act, open_import, confirm)
+                                        elif name == 'Motor Calibration': refreshers[name] = motor_calibration.build(hand, act, open_import)
+                                        elif name == 'Feedback Control': refreshers[name] = feedback_control.build(hand, act)
+                                        elif name == 'Direct Control': refreshers[name] = direct_control.build(hand, act, confirm)
+                                        elif name == 'Curves & Recordings': refreshers[name] = plots.build(hand, act)
+                                        elif name == 'Tactile': refreshers[name] = tactile.build(hand)
+                                        elif name == 'Renumber Motor': refreshers[name] = renumber_motors.build(hand, act)
+                                        elif name == 'Renumber Tactile': refreshers[name] = renumber_tactile.build(hand, act)
+                                        elif name == 'Diagnostics': refreshers[name] = diagnostics.build(hand, act)
+                                        elif name == 'Control Parameters': refreshers[name] = control_parameters.build(hand, act)
+            with workspace.separator:
+                with ui.element('div').classes('log-resize-grip'):
+                    ui.tooltip('Drag up or down to resize System Log')
+            with workspace.after:
+                with ui.column().classes('system-log w-full'):
+                    ui.label('System Log').classes('text-xs font-semibold')
+                    output = ui.log(max_lines=2000)
+        def current_leaf():
+            group = tabs.value or TABS[0]
+            return group if group == 'Replay' else (subtabs[group].value or SUBTABS[group][0])
     last_heavy = [0.0]
     def refresh():
         heavy = time.monotonic() - last_heavy[0] >= 0.2
@@ -154,21 +207,19 @@ def build_page(hand):
         refresh_calibration_alerts(snapshot)
         choices = {d['port']: f"{d['port']} · {d['description']}" for d in snapshot['devices']}
         for name, state in snapshot['connections'].items():
-            selector, options = selectors[name], dict(choices)
-            for port in (selector.value, state['port']):
-                if port and port not in options: options[port] = port
-            if selector.options != options: selector.set_options(options)
-            if state['connected'] and state['port']: selector.set_value(state['port'])
+            selector = selectors[name]
+            options, value = device_selector_state(choices, selector.value, state)
+            if selector.options != options: selector.set_options(options, value=value)
+            elif selector.value != value: selector.set_value(value)
             selector.set_enabled(not state['connected'] and not state['pending'])
             buttons[name].set_text(state['label'])
             buttons[name].set_enabled(not state['pending'] and (state['connected'] or bool(selector.value)) and not snapshot['busy'])
-            ages[name].set_text(('—' if state['age_ms'] is None else str(state['age_ms'])) + 'ms')
+            ages[name].set_text(state['data_status'] + ' · Rx age: ' + ('—' if state['age_ms'] is None else str(state['age_ms']) + ' ms'))
         for name, value in snapshot['badges'].items():
             display_name = 'Motor multi-turn position' if name == 'Multi-turn' else name
             display_value = 'UNKNOWN' if name == 'Multi-turn' and value == 'MISSING' else value
             badges[name].set_text(f'{display_name}: {display_value}')
-            color = '#16a34a' if value in ('Ready', 'KNOWN', 'CLEAR', 'SUCCESS') else '#dc2626' if value in ('ACTIVE', 'FAILED') else '#ea880c' if value in ('HOLD', 'MISSING', 'WARN') else '#64748b'
-            badges[name].style(f'color:{color}')
+            badges[name].style(f'background-color:{status_background(value)}')
         save.set_text('Save Data: ON' if snapshot['recording']['enabled'] else 'Save Data: OFF')
         preview = snapshot['import_preview']
         if preview and importer.value and preview['token'] != preview_token[0]:
@@ -178,8 +229,8 @@ def build_page(hand):
         events = hand.log_since(log_sequence[0])
         for line in events['lines']: output.push(line)
         log_sequence[0] = events['sequence']
-        current = tabs.value or TABS[0]
-        if heavy or current not in ('Plots & Recordings', 'Tactile'): refreshers[current](snapshot)
+        current = current_leaf()
+        if heavy or current not in ('Curves & Recordings', 'Tactile'): refreshers[current](snapshot)
         if heavy: last_heavy[0] = time.monotonic()
     refresh()
     ui.timer(0.1, refresh)

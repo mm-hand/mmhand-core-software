@@ -1,5 +1,6 @@
 """Manual capture uses current asynchronous GUI operations and retains confirmed endpoints."""
 import time
+import threading
 from unittest.mock import Mock
 import pytest
 from desktop.core.hand_backend import HandBackend
@@ -40,7 +41,8 @@ def test_wrap_pair_and_subsequent_single_endpoint_save(capture):
     writer.assert_not_called()
     state.encoders[0].raw_sensor = 200
     assert run(hand, 'max')
-    writer.assert_called_once_with(0, 16000, 200)
+    assert writer.call_count == 1 and writer.call_args.args == (0, 16000, 200)
+    assert writer.call_args.kwargs['cancelled']() is False
     state.encoders[0].raw_sensor = 400
     assert run(hand, 'max')
     assert writer.call_args.args == (0, 16000, 400)
@@ -78,3 +80,31 @@ def test_install_failure_retains_confirmed_pair_for_explicit_set(capture):
     writer.return_value = True
     assert run(hand, 'max')
     assert writer.call_count == 2
+
+
+def test_single_click_waits_for_a_fresh_raw_frame(capture):
+    hand,state,writer=capture
+    state.encoder_raw_last_rx_ts=time.time()-1
+    def feedback():
+        time.sleep(.03)
+        state.encoders[0].raw_sensor=1234
+        state.encoder_raw_last_rx_ts=time.time()
+    thread=threading.Thread(target=feedback); thread.start()
+    assert run(hand,'min')
+    thread.join()
+    assert hand._manual_drafts[0]['min']==1234
+    writer.assert_not_called()
+
+
+def test_stop_during_save_is_visible_to_write_callback(capture):
+    hand,state,writer=capture
+    hand._manual_drafts[0]=dict(min=100,max=200,direction=1,status='DRAFT')
+    state.encoders[0].raw_sensor=200
+    def saving(*_args,**kwargs):
+        assert not kwargs['cancelled']()
+        hand.stop_motion()
+        assert kwargs['cancelled']()
+        return False
+    writer.side_effect=saving
+    assert not run(hand,'max')
+    assert hand._manual_drafts[0]['status']=='CANCELLED'

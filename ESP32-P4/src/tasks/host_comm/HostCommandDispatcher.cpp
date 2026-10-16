@@ -34,6 +34,8 @@
 #include "../../safety/SafetyEventReporter.h"
 #include "../../system/ports/DirectTargetResult.h"
 #include "HostCommandRouter.h"
+#include "../servo_bus/ServoMaintenance.h"
+#include "../../control/ControlParameters.h"
 
 #include <math.h>
 #include <string.h>
@@ -43,6 +45,17 @@ using namespace p4::host;
 namespace p4::host {
 
 namespace {
+
+void sendControlParameterResult(uint8_t status)
+{
+    const auto applied = mmhand::control::readParameters();
+    uint8_t packet[14] = {PROTOCOL_HEADER, 12, PACKET_TYPE_CONTROL_PARAMETERS, 1, status};
+    size_t offset = 5;
+    appendU32BigEndian(packet, &offset, applied.revision);
+    appendU32BigEndian(packet, &offset, applied.crc);
+    packet[offset++] = PROTOCOL_TAIL;
+    FW_SERIAL_WRITE(packet, offset);
+}
 
 bool servoRebaseZeroPending(const SystemRuntimeContext* sharedData)
 {
@@ -137,6 +150,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
 
     const uint8_t cmd = frame[0];
     const uint32_t nowMs = p4::platform::time::monotonicMillis();
+    HostSerialPort::markCommand(nowMs);
     const uint32_t previousHeartbeat = sharedAtomicLoad(&sharedData->host_rx_heartbeat_ms);
     if (previousHeartbeat == 0 || (uint32_t)(nowMs - previousHeartbeat) >
             mmhand::config::safety::kHostControlLeaseTimeoutMs) {
@@ -161,6 +175,43 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         return;
     }
 
+    if (cmd == CMD_CONTROL_PARAMETERS_QUERY) {
+        sendControlParameterResult(mmhand::control::parametersConfigured() ? 0 : 3);
+        return;
+    }
+    if (cmd == CMD_CONTROL_PARAMETERS_SET) {
+        const bool idle = !sharedAtomicLoad(&sharedData->control_enabled) &&
+            sharedAtomicLoad(&sharedData->servo_target_owner) == SERVO_TARGET_OWNER_NONE &&
+            (sharedData->system_state == SYSTEM_STATE_UNCONTROLLABLE ||
+             sharedData->system_state == SYSTEM_STATE_IDLE ||
+             sharedData->system_state == SYSTEM_STATE_READY ||
+             sharedData->system_state == SYSTEM_STATE_RECOVERY_REQUIRED);
+        const uint8_t result = !idle || servoMaintenanceBlocksCommands() ? 2 :
+            mmhand::control::applyParameterPayload(frame + 1, frameLen - 1) ? 0 : 1;
+        sendControlParameterResult(result);
+        sendProtoAckPacket(cmd, sharedData->system_state, result == 0 ?
+            PROTO_ACK_STATUS_OK : result == 2 ? PROTO_ACK_STATUS_UNSUPPORTED_MODE : PROTO_ACK_STATUS_INVALID_DATA);
+        return;
+    }
+    if ((cmd == CMD_RUN_FEEDBACK || cmd == CMD_START || cmd == CMD_MOTOR_POS_ABS ||
+         cmd == CMD_MOTOR_POS_ABS_ONE || cmd == CMD_ANGLE_CTRL || cmd == CMD_ANGLE_CTRL_MASKED) &&
+        !mmhand::control::parametersConfigured()) {
+        sendProtoAckPacket(cmd, sharedData->system_state, PROTO_ACK_STATUS_INVALID_DATA);
+        return;
+    }
+
+    if (cmd == CMD_SERVO_MAINTENANCE) {
+        const bool queued = frameLen == 13 && submitServoMaintenance(frame + 1);
+        sendProtoAckPacket(cmd, sharedData->system_state, queued ? PROTO_ACK_STATUS_QUEUED : PROTO_ACK_STATUS_UNSUPPORTED_MODE);
+        return;
+    }
+    if (cmd == CMD_STOP) cancelServoMaintenance();
+    if (servoMaintenanceBlocksCommands() && cmd != CMD_STOP && cmd != CMD_HOST_HEARTBEAT &&
+        cmd != CMD_STATE_SYNC_REQUEST && cmd != CMD_MANUAL_ENCODER_QUERY &&
+        cmd != CMD_TASK_DIAG_SUBSCRIBE && cmd != CMD_CONTROL_DIAGNOSTICS) {
+        sendProtoAckPacket(cmd, sharedData->system_state, PROTO_ACK_STATUS_UNSUPPORTED_MODE);
+        return;
+    }
     if (servoRebaseZeroPending(sharedData) &&
         commandConflictsWithServoRebaseZero(cmd)) {
         sendProtoAckPacket(cmd, sharedData->system_state,
@@ -220,16 +271,16 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         }
         return;
     }
-    if (cmd == CMD_CONTROL_TRACE_SUBSCRIBE)
+    if (cmd == CMD_CONTROL_DIAGNOSTICS)
     {
         const uint8_t enabled = frame[1];
-        if (enabled > 1) {
-            sendProtoAckPacket(CMD_CONTROL_TRACE_SUBSCRIBE,
+        if (enabled > 1 || frame[2] == 0 || frame[2] > 100) {
+            sendProtoAckPacket(CMD_CONTROL_DIAGNOSTICS,
                                sharedData->system_state,
                                PROTO_ACK_STATUS_INVALID_DATA);
         } else {
-            setHostControlTraceSubscribed(enabled != 0);
-            sendProtoAckPacket(CMD_CONTROL_TRACE_SUBSCRIBE,
+            setHostControlTraceSubscribed(enabled != 0, frame[2]);
+            sendProtoAckPacket(CMD_CONTROL_DIAGNOSTICS,
                                sharedData->system_state,
                                PROTO_ACK_STATUS_OK);
         }
@@ -270,14 +321,21 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         return;
     }
 
-    if (cmd == CMD_CALIBRATE)
+    if (cmd == CMD_CONTROL_RELEASE)
     {
-        // 保留旧命令编号和帧长度，明确拒绝已迁至上位机的固件标定入口。
-        sendProtoAckPacket(CMD_CALIBRATE,
-                           sharedData->system_state,
-                           PROTO_ACK_STATUS_UNSUPPORTED_MODE);
+        const uint8_t state = sharedData->system_state;
+        const bool ordinary = state == SYSTEM_STATE_RUN_DIRECT || state == SYSTEM_STATE_RUN_FEEDBACK;
+        const bool idle = state == SYSTEM_STATE_UNCONTROLLABLE || state == SYSTEM_STATE_IDLE ||
+                          state == SYSTEM_STATE_READY || state == SYSTEM_STATE_RECOVERY_REQUIRED;
+        const bool accepted = (ordinary || idle) &&
+            (sharedData->servo_target_owner == SERVO_TARGET_OWNER_NONE ||
+             sharedData->servo_target_owner == SERVO_TARGET_OWNER_CONTROL) &&
+            !servoRebaseZeroPending(sharedData) && !servoMaintenanceBlocksCommands() &&
+            postSystemEvent(sharedData, SYSTEM_EVENT_CONTROL_RELEASE);
+        sendProtoAckPacket(cmd, state, accepted ? PROTO_ACK_STATUS_QUEUED : PROTO_ACK_STATUS_UNSUPPORTED_MODE);
         return;
     }
+
 
     if (cmd == CMD_START)
     {
@@ -316,13 +374,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                                sharedData->system_state,
                                PROTO_ACK_STATUS_QUEUED);
         }
-        return;
-    }
-
-    if (cmd == CMD_PAUSE)
-    {
-        postSystemEvent(sharedData, SYSTEM_EVENT_PAUSE);
-        sendProtoAckPacket(CMD_PAUSE, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
         return;
     }
 
@@ -559,20 +610,23 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                 status = PROTO_ACK_STATUS_INVALID_DATA;
             } else {
                 // 只覆盖快照声明的电机，保留其余关节已经加载或刚标定的 ABS 限位。
-                SharedSafetyGuard guard;
-                const uint32_t previousValid =
-                    sharedAtomicLoad(&sharedData->motor_abs_limit_valid_bitmap);
-                for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
-                    if ((updateMask & (1UL << ch)) == 0) {
-                        continue;
+                uint32_t appliedValidMask = 0;
+                {
+                    SharedSafetyGuard guard;
+                    const uint32_t previousValid =
+                        sharedAtomicLoad(&sharedData->motor_abs_limit_valid_bitmap);
+                    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+                        if ((updateMask & (1UL << ch)) == 0) {
+                            continue;
+                        }
+                        sharedData->motor_abs_limit_min[ch] = loadedMin[ch];
+                        sharedData->motor_abs_limit_max[ch] = loadedMax[ch];
                     }
-                    sharedData->motor_abs_limit_min[ch] = loadedMin[ch];
-                    sharedData->motor_abs_limit_max[ch] = loadedMax[ch];
+                    appliedValidMask =
+                        (previousValid & ~updateMask) | (validMask & updateMask);
+                    sharedAtomicStore(&sharedData->motor_abs_limit_valid_bitmap,
+                                      appliedValidMask);
                 }
-                const uint32_t appliedValidMask =
-                    (previousValid & ~updateMask) | (validMask & updateMask);
-                sharedAtomicStore(&sharedData->motor_abs_limit_valid_bitmap,
-                                  appliedValidMask);
                 FW_LOG_INFO_PRINTF(
                     "[UPPER] CALIB_LOAD_LIMITS update=0x%08lX valid=0x%08lX\r\n",
                     (unsigned long)updateMask,
@@ -806,8 +860,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
             sharedData->servo_target_owner != SERVO_TARGET_OWNER_NONE ||
             sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
             sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
-            sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING ||
-            sharedData->system_state == SYSTEM_STATE_PAUSED;
+            sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING;
 
         if (motionActive) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;

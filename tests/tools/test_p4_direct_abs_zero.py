@@ -199,7 +199,7 @@ static void run(const std::string& name) {
         else if (reason == "motion_enabled") f.runtime.control_enabled = 1;
         else if (reason == "owner") f.runtime.servo_target_owner = SERVO_TARGET_OWNER_CONTROL;
         else if (reason == "motion_state") f.runtime.system_state = SYSTEM_STATE_RUN_DIRECT;
-        else if (reason == "paused_state") f.runtime.system_state = SYSTEM_STATE_PAUSED;
+        else if (reason == "retired_state") f.runtime.system_state = 7;
         else if (reason == "zero_pending") ++f.runtime.servo_rebase_zero_request_token;
         else if (reason == "restore_pending") ++f.runtime.restore_multi_turn_request_token;
         else if (reason == "reset_pending") f.runtime.servo_reset_zero_status = SERVO_RESET_ZERO_STATUS_RUNNING;
@@ -338,7 +338,9 @@ def direct_zero_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path,
     dispatcher = (P4_SRC / "tasks/host_comm/HostCommandDispatcher.cpp").read_text(encoding="utf-8")
     service = (P4_SRC / "tasks/servo_bus/ServoBusService.cpp").read_text(encoding="utf-8")
     gates_start = dispatcher.index("    if (generatedCommandRequiresHandshake(cmd)")
-    gates_end = dispatcher.index("    if (cmd == CMD_HOST_HEARTBEAT)", gates_start)
+    handshake_end = dispatcher.index("    if (cmd == CMD_CONTROL_PARAMETERS_QUERY)", gates_start)
+    pending_start = dispatcher.index("    if (servoRebaseZeroPending(sharedData)", handshake_end)
+    pending_end = dispatcher.index("    if (cmd == CMD_HOST_HEARTBEAT)", pending_start)
     contexts = "\n".join(_braced(service, "struct " + name + " {") + ";"
                          for name in ("ServoHotplugPendingSync", "ServoHotplugRecoveryAnchors",
                                       "ServoOnlineRecoveryContext"))
@@ -348,7 +350,8 @@ def direct_zero_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path,
         .replace("/* PRODUCTION_PENDING_FUNCTIONS */",
                  _braced(dispatcher, "bool servoRebaseZeroPending(") + "\n" +
                  _braced(dispatcher, "bool commandConflictsWithServoRebaseZero("))
-        .replace("/* PRODUCTION_DISPATCH_GATES */", dispatcher[gates_start:gates_end])
+        .replace("/* PRODUCTION_DISPATCH_GATES */", dispatcher[gates_start:handshake_end] +
+                 dispatcher[pending_start:pending_end])
         .replace("/* PRODUCTION_ZERO_BRANCH */",
                  _braced(dispatcher, "if (cmd == CMD_SERVO_REBASE_ZERO || cmd == CMD_MOTOR_ABS_ZERO)"))
         .replace("/* PRODUCTION_ZERO_CONTEXT */",
@@ -374,7 +377,7 @@ def direct_zero_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path,
 
 SCENARIOS = (
     "reject_handshake", "reject_direct_pending", "reject_motion_enabled", "reject_owner",
-    "reject_motion_state", "reject_paused_state", "reject_zero_pending", "reject_restore_pending",
+    "reject_motion_state", "reject_retired_state", "reject_zero_pending", "reject_restore_pending",
     "reject_reset_pending", "reject_recovery_busy", "reject_mutex", "reject_empty",
     "reject_mask_range", "reject_offline", "reject_route", "reject_short", "reject_long",
     "pending_blocks_motion", "selected_motor", "f0_compatible", "partial_failure", "route_lost",

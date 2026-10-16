@@ -9,6 +9,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+struct HostSerialStatistics {
+    uint32_t rxBytes, txBytes, shortWrites, busResets;
+    uint32_t lastRxMs, lastTxMs, lastCommandMs, commands;
+    uint32_t zeroWrites, maxWriteUs;
+};
+
 class HostSerialPort {
 public:
     using RxWakeHandler = void (*)(void* context);
@@ -18,6 +24,8 @@ public:
     static void setRxWakeHandler(RxWakeHandler handler, void* context);
     /** 原子取走自上次读取以来累计的 UART 接收错误位；0 表示没有硬件层错误。 */
     static uint32_t takeRxErrorFlags();
+    static HostSerialStatistics statistics();
+    static void markCommand(uint32_t nowMs);
     static int available();
     static int readByte();
     static size_t write(const uint8_t* data, size_t length);

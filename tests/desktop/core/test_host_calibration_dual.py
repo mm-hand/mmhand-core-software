@@ -177,6 +177,16 @@ def test_thumb_scope_has_no_four_finger_read_mask():
     assert dual.build_dynamic_workspace_motor_mask(io, [16, 20]) == 0
 
 
+def test_unselected_online_unknown_finger_is_neither_required_nor_moved():
+    io = FakeIO()
+    io.selected_joint_mask = 1 << 8
+    io.unknown = sum(1 << motor for motor in config.joint_motors(12))
+    assert dual.build_dynamic_workspace_motor_mask(io, [8]) == sum(
+        1 << motor for motor in config.joint_motors(8))
+    assert dual.build_dual_workspace_plan(io, 8) == []
+    assert not io.commands
+
+
 @pytest.mark.parametrize("joint", [joint for joint in range(21)
                                   if joint not in dual.WORKSPACE_DUAL_JOINTS])
 def test_non_workspace_joint_needs_no_helper_feedback_or_plan(joint):

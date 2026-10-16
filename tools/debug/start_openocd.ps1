@@ -30,9 +30,11 @@ Write-Host "Keep this terminal open while debugging; press Ctrl+C to stop OpenOC
 # connect and rejects the connection outright when that probe fails.
 & $OpenOcdExe `
     -s $OpenOcdScripts `
+    -c "set ESP_FLASH_SIZE 0" `
     -f $OpenOcdBoardCfg `
     @adapterArgs `
-    -c "gdb_memory_map disable"
+    -c "gdb_memory_map disable" `
+    -f (Join-Path $PSScriptRoot "esp_debug_cleanup.tcl")
 
 if ($LASTEXITCODE -ne 0) {
     throw "OpenOCD exited with code $LASTEXITCODE"

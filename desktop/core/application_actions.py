@@ -20,7 +20,7 @@ import threading
 import time
 from uuid import uuid4
 
-from desktop.paths import RUN_DATA_DIR
+from desktop.paths import RUN_DATA_DIR, DATA_DIR, CALIB_LOAD_SNAPSHOT_PATH
 from .angle_mapping import get_spec
 from .calibration_diagnostics import (
     format_calibration_diagnostic, format_calibration_warning, format_calibration_batch_summary,
@@ -28,13 +28,18 @@ from .calibration_diagnostics import (
 from .data_recording.recorder import DataSessionRecorder
 from .host_calibration.config import default_encoder_direction, joint_motors, shorten_sign
 from .session_log import log_session, session_log_since
+from .communication.connection_diagnostics import describe_connection_failure
 from .console_snapshot import enrich_snapshot, motor_quality
+from .id_actions import IdResetActions
+from .control_parameters import ControlParameterStore
 from .protocol import (
     ControlMode, ENCODER_COUNT, MOTOR_COUNT, DUAL_TENDON_JOINT_INDICES, SYSTEM_STATE_UNCONTROLLABLE,
     SYSTEM_STATE_IDLE, SYSTEM_STATE_READY, SYSTEM_STATE_RUN_DIRECT,
     SYSTEM_STATE_RUN_FEEDBACK, SYSTEM_STATE_ROPE_INIT_RUNNING,
     SYSTEM_STATE_RECOVERY_REQUIRED,
     STATE_SYNC_ALL,
+    CMD_RESET, CMD_CONTROL_RELEASE, PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED,
+    SERVO_TARGET_OWNER_CONTROL,
 )
 
 
@@ -60,10 +65,13 @@ def validate_manual_pair(minimum: int, maximum: int, direction: int) -> int:
     return span
 
 
-class ApplicationActions:
+class ApplicationActions(IdResetActions):
     """HandBackend 的应用能力；复用同一控制器和标定事务。"""
 
     def _init_application_actions(self):
+        self._init_id_reset()
+        self._control_parameters = ControlParameterStore()
+        self._control_parameter_sync = 'INVALID' if self._control_parameters.error else 'PENDING'
         self._application_lock = threading.RLock()
         self._application_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='mmhand-operation')
         self._application_epoch = 0
@@ -71,8 +79,9 @@ class ApplicationActions:
         self._application_connect = None
         self._application_operations = deque(maxlen=64)
         self._manual_drafts = {}
+        self._manual_capture_status = {}
         self._manual_saved_pairs = {}
-        self._selected_joints = (0,)
+        self._selected_joints = ()
         self._devices = ()
         self._discovery_error = ''
         self._application_closed = False
@@ -83,13 +92,15 @@ class ApplicationActions:
         self._replay_service = None
         self._curve_history = deque(maxlen=1800)
         self._curve_stamp = None
+        self._component_history = deque(maxlen=1800)
+        self._component_stamp = None
         self._recorder = DataSessionRecorder()
         self._recording_error = ''
         self._last_operation_message = 'Select a device to connect. Startup does not authorize motion.'
         self._calibration_operation_id = None
         self._estop_requested_at = 0.0
         self._direct_sequence = 0
-        self._selected_motors = (0,)
+        self._selected_motors = ()
         self._displayed_motor_abs_zero_generations = [0] * MOTOR_COUNT
         self._save_data = True
         self._record_full_tactile = False
@@ -104,6 +115,65 @@ class ApplicationActions:
         self._joint_transactions = {}
         self._import_scope = 0
         self.register_calibration_workflow_callback(self._application_calibration_event)
+
+    def control_parameter_snapshot(self):
+        return self._control_parameters.snapshot()
+
+    def _update_input_filter(self):
+        from .teleop_input import InputFilterConfig, TeleopInputFilter
+        with self._ros2_output_lock:
+            self._ros2_input_filter = TeleopInputFilter(
+                count=ENCODER_COUNT,
+                config=InputFilterConfig(**self._control_parameters.snapshot()['ros2_input']))
+
+    def request_save_control_parameters(self, proposed):
+        try:
+            self._control_parameters.save(proposed)
+            self._control_parameter_sync = 'PENDING'
+            return OperationResult(True, None, 'Parameters saved; P4 synchronization pending until idle')
+        except (OSError, ValueError, TypeError) as exc:
+            return OperationResult(False, None, str(exc))
+
+    def request_restore_control_defaults(self):
+        try:
+            self._control_parameters.restore_defaults()
+            self._control_parameter_sync = 'PENDING'
+            return OperationResult(True, None, 'Default parameters restored; P4 synchronization pending until idle')
+        except (OSError, ValueError, TypeError) as exc:
+            return OperationResult(False, None, str(exc))
+
+    def _synchronize_control_parameters(self, epoch):
+        if self._control_parameters.error:
+            self._control_parameter_sync = 'INVALID'
+            return False, self._control_parameters.error
+        self._control_parameter_sync = 'SYNCING'
+        try:
+            data = self.control_parameter_snapshot()
+            self.comm.apply_control_parameters(data, cancelled=lambda: epoch != self._application_epoch)
+            if epoch != self._application_epoch:
+                self._control_parameter_sync = 'PENDING'
+                return False, 'Parameter synchronization cancelled by STOP'
+            if data['revision'] != self.control_parameter_snapshot()['revision']:
+                self._control_parameter_sync = 'PENDING'
+                return False, 'Parameters changed during synchronization; apply the new revision first'
+            self._control_parameter_sync = f"APPLIED revision {data['revision']} / {data['crc32']:08X}"
+            self._update_input_filter()
+            return True, 'P4 control parameters applied and read back'
+        except Exception as exc:
+            self._control_parameter_sync = f'FAILED: {exc}'
+            return False, str(exc)
+
+    def _schedule_control_parameter_sync(self):
+        if (self._control_parameter_sync != 'PENDING' or not self.is_comm_connected()
+                or not getattr(self.comm, '_protocol_compatible', False)): return
+        state = self.get_state_snapshot()
+        if (self._application_busy or not self._fresh_application_state() or
+                state.control_enabled or state.servo_target_owner or
+                state.system_state not in (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE, SYSTEM_STATE_READY, SYSTEM_STATE_RECOVERY_REQUIRED)):
+            return
+        self._control_parameter_sync = 'SYNCING'
+        result = self.submit_operation('Apply Control Parameters', self._synchronize_control_parameters)
+        if not result.accepted: self._control_parameter_sync = 'PENDING'
 
     def open_application(self, *, discover=None, replay_service=None):
         """进程级启动；页面刷新不调用此方法。"""
@@ -125,6 +195,7 @@ class ApplicationActions:
                             self._discovery_error = ''
                     except Exception as exc:
                         with self._application_lock:
+                            self._devices = ()
                             self._discovery_error = f'Device discovery failed: {exc}'
                     comm = self.tactile_comm
                     if comm is not None and self.tactile_port and not self.is_tactile_serial_connected() and time.time() >= self._next_tactile_reconnect_ts:
@@ -134,6 +205,7 @@ class ApplicationActions:
                         except Exception as exc:
                             log_session('COMM', f'S3 reconnect failed: {exc}')
                     self._reconcile_recording()
+                    self._schedule_control_parameter_sync()
                     self._application_stop.wait(0.2)
 
             self._discovery_thread = threading.Thread(target=poll, name='mmhand-devices', daemon=True)
@@ -144,7 +216,7 @@ class ApplicationActions:
             if self._application_closed:
                 return
             self._application_closed = True
-        self.stop_motion(emergency=True)
+        self.stop_motion(emergency=True, source='application shutdown')
         self._application_stop.set()
         if self._discovery_thread:
             self._discovery_thread.join(timeout=2)
@@ -170,6 +242,14 @@ class ApplicationActions:
             self._ros_available = bool(available)
             self._ros_reason = str(reason)
 
+    def calibration_storage_paths(self):
+        try:
+            current = self._controller.calibration_snapshot_path
+        except (ValueError, RuntimeError):
+            current = CALIB_LOAD_SNAPSHOT_PATH
+        return dict(current=str(current), default=str(CALIB_LOAD_SNAPSHOT_PATH),
+                    data_dir=str(DATA_DIR))
+
 
 
     def request_task_diagnostics(self, enabled):
@@ -190,6 +270,13 @@ class ApplicationActions:
     def _application_observe(self, state):
         stamp = (state.encoder_mapped_p4_time_ms, state.servo_feedback_p4_time_ms)
         with self._application_lock:
+            trace_stamp = (state.control_trace_p4_time_ms, state.control_trace_sequence)
+            if state.has_control_trace and trace_stamp != self._component_stamp:
+                self._component_stamp = trace_stamp
+                self._component_history.append(dict(host_time=time.time(), p4_time_ms=trace_stamp[0],
+                    sequence=trace_stamp[1], components=deepcopy(state.control_trace_components),
+                    detail=deepcopy(state.control_trace_detail), commands=list(state.control_trace_motor_command_abs),
+                    mask=state.control_trace_motor_command_mask))
             if stamp != self._curve_stamp and state.has_sensor_data:
                 self._curve_stamp = stamp
                 now = time.time()
@@ -294,8 +381,10 @@ class ApplicationActions:
 
     @staticmethod
     def _mapped_feedback_fresh(state):
+        # SYSTEM_STATUS can precede a newly sampled angle by one heartbeat.
+        delta = ((state.p4_time_ms - state.encoder_mapped_p4_time_ms + 0x80000000) & 0xffffffff) - 0x80000000
         return (state.has_sensor_data and 0 <= time.time() - state.encoder_mapped_last_rx_ts <= 0.6
-                and (state.p4_time_ms - state.encoder_mapped_p4_time_ms) & 0xffffffff <= 600)
+                and abs(delta) <= 600)
 
     def _wait_application(self, predicate, epoch, timeout=3.0):
         deadline = time.monotonic() + timeout
@@ -315,7 +404,18 @@ class ApplicationActions:
                 if tactile:
                     self.disconnect_tactile_serial()
                 return False, 'Connection cancelled'
+            if ok and not tactile and not self._wait_application(
+                    lambda state: self._fresh_application_state() and state.protocol_compatible,
+                    epoch, 10):
+                comm = self.comm
+                getter = getattr(comm, 'connection_diagnostics', None)
+                diagnostics = getter() if callable(getter) else {'port': str(port)}
+                log_session('COMM', f'P4 connection failed observations={diagnostics}')
+                message = describe_connection_failure(diagnostics)
+                self.disconnect(stop_lower=False)
+                return False, message + ' No device reset or motor enable was performed.'
             if not tactile:
+                self._control_parameter_sync = 'INVALID' if self._control_parameters.error else 'PENDING'
                 saved_pairs = {}
                 try:
                     from .calibration_snapshot import parse_mask
@@ -326,17 +426,29 @@ class ApplicationActions:
                 except (OSError, ValueError, KeyError):
                     pass
                 with self._application_lock:
+                    self._selected_joints = ()
+                    self._selected_motors = ()
+                    self._curve_history.clear()
+                    self._component_history.clear()
+                    self._curve_stamp = self._component_stamp = None
                     self._manual_drafts.clear()
                     self._motor_transactions.clear()
                     self._joint_transactions.clear()
                     self._manual_saved_pairs = saved_pairs
-            return bool(ok), 'S3 connected' if ok and tactile else 'P4 connected; waiting for valid status' if ok else 'Connection failed. Check the device and port availability.'
+            if ok:
+                return True, 'S3 connected' if tactile else 'P4 connected; valid protocol status received'
+            detail = ('Check the device and port availability.' if tactile else
+                      self._controller.last_sync_status)
+            return False, f'Connection failed on {port}: {detail}'
 
         return self.submit_operation('Connect S3' if tactile else 'Connect P4', connect,
                                      requires_device=False, p4_connection=not tactile)
 
     def request_disconnect(self, *, tactile=False):
-        self.stop_motion()
+        self.stop_motion(source='disconnect S3' if tactile else 'disconnect P4')
+        with self._application_lock:
+            self._selected_joints = ()
+            self._selected_motors = ()
 
         def disconnect(_):
             while self._calibration_workflow.is_host_calibration_active() or self._calibration_workflow.is_import_active():
@@ -364,57 +476,154 @@ class ApplicationActions:
             changed = chosen != self._selected_joints
             busy = bool(self._application_busy or self._calibration_workflow.is_host_calibration_active())
         if changed and (busy or self.is_started() or self.ros2_output_armed()):
-            self.stop_motion()
+            self.stop_motion(source='joint selection changed during an active operation')
         with self._application_lock:
             self._selected_joints = chosen
         return OperationResult(True, None, 'Scope updated; the active operation was cancelled' if changed and busy else 'Scope updated')
 
+    def _prepare_control_switch(self, epoch):
+        state = self.get_state_snapshot()
+        if self._estop_requested_at:
+            return False, 'Clear Faults explicitly before enabling after STOP'
+        allowed = (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE, SYSTEM_STATE_READY,
+                   SYSTEM_STATE_RECOVERY_REQUIRED, SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK)
+        if state.system_state not in allowed or state.servo_target_owner not in (0, SERVO_TARGET_OWNER_CONTROL):
+            return False, 'A maintenance or recovery operation owns the device'
+        if not state.control_enabled and not state.servo_target_owner:
+            return self._synchronize_control_parameters(epoch)
+        with self._application_lock:
+            if epoch != self._application_epoch:
+                return False, 'Control switch cancelled'
+            self.request_ros_input(False)
+            self.cancel_replay_motion('control mode switch')
+            self.invalidate_joint_commands()
+            self.invalidate_direct_commands()
+            sent_at = time.time()
+            if not self.comm.send_command('control_release'):
+                return False, 'Control handover was not queued'
+        ack = self.comm.wait_for_ack(CMD_CONTROL_RELEASE, timeout_s=1, received_after=sent_at)
+        if not ack or ack[2] not in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED):
+            return False, 'P4 did not acknowledge control handover'
+        confirmed = self._wait_application(lambda s: self._fresh_application_state()
+            and s.system_status_last_rx_ts > ack[3] and not s.control_enabled and not s.servo_target_owner
+            and s.system_state in allowed[:4], epoch)
+        return self._synchronize_control_parameters(epoch) if confirmed else (False, 'P4 did not release the old control owner')
+
     def request_enable(self):
         joints = self._selected_joints
+        if not joints:
+            return OperationResult(False, None, 'Select joints before enabling')
+        return self.submit_operation('Enable', lambda epoch: self._enable_selected_joints(joints, epoch))
 
-        def enable(epoch):
+    def _enable_selected_joints(self, joints, epoch):
+        state = self.get_state_snapshot()
+        switched, message = self._prepare_control_switch(epoch)
+        if not switched:
+            return False, message
+        mask = sum(1 << j for j in joints)
+        motors = sum(1 << m for j in joints for m in joint_motors(j))
+        if not mask or not self.set_active_scope(motors, mask, True):
+            return False, 'Scope setup failed. Check online devices, feedback and calibration.'
+        with self._application_lock:
+            if epoch != self._application_epoch:
+                return False, 'Enable cancelled'
+            self.invalidate_direct_commands()
+            self.set_control_mode(ControlMode.JOINT_ANGLE)
+            started = time.time()
+            self.start()
+        # START prepares a stopped P4. Motion ownership is granted only
+        # when the paired joint target and RUN_FEEDBACK are submitted.
+        ok = self._wait_application(
+            lambda s: self.is_comm_connected() and s.protocol_compatible
+            and s.has_system_status_data
+            and s.system_state in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY)
+            and not s.control_enabled and not s.servo_target_owner
+            and s.control_mode == ControlMode.JOINT_ANGLE.value
+            and s.has_active_scope_status
+            and s.active_motor_mask == motors and s.active_joint_mask == mask
+            and s.require_can_feedback
+            and 0 <= time.time() - s.system_status_last_rx_ts <= 0.6
+            and s.system_status_last_rx_ts > started,
+            epoch, 5,
+        )
+        if not ok:
             state = self.get_state_snapshot()
-            if (state.control_enabled or state.servo_target_owner
-                    or state.system_state not in (SYSTEM_STATE_UNCONTROLLABLE,
-                                                  SYSTEM_STATE_IDLE, SYSTEM_STATE_READY,
-                                                  SYSTEM_STATE_RECOVERY_REQUIRED)):
-                return False, 'Stop active motion before preparing joint control'
-            mask = sum(1 << j for j in joints)
-            motors = sum(1 << m for j in joints for m in joint_motors(j))
-            if not mask or not self.set_active_scope(motors, mask, True):
-                return False, 'Scope setup failed. Check online devices, feedback and calibration.'
-            with self._application_lock:
-                if epoch != self._application_epoch:
-                    return False, 'Enable cancelled'
-                self.invalidate_direct_commands()
-                self.set_control_mode(ControlMode.JOINT_ANGLE)
-                started = time.time()
-                self.start()
-            # START prepares a stopped P4. Motion ownership is granted only
-            # when the paired joint target and RUN_FEEDBACK are submitted.
-            ok = self._wait_application(
-                lambda s: self.is_comm_connected() and s.protocol_compatible
-                and s.has_system_status_data
-                and s.system_state in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY)
-                and not s.control_enabled and not s.servo_target_owner
-                and s.control_mode == ControlMode.JOINT_ANGLE.value
-                and s.has_active_scope_status
-                and s.active_motor_mask == motors and s.active_joint_mask == mask
-                and s.require_can_feedback
-                and 0 <= time.time() - s.system_status_last_rx_ts <= 0.6
-                and s.system_status_last_rx_ts > started,
-                epoch, 5,
-            )
-            return ok, 'P4 preparation confirmed. Check device state and calibration before proceeding.' if ok else 'Enable was not confirmed. Check the P4 rejection reason.'
+            details = []
+            if state.has_connectivity_status:
+                for motor in range(MOTOR_COUNT):
+                    if motors & (1 << motor):
+                        if not state.servo_online_bitmap & (1 << motor):
+                            details.append(f'M{motor:02d} is offline')
+                        elif state.multi_turn_unknown_bitmap & (1 << motor):
+                            details.append(f'M{motor:02d} multi-turn position is unknown; recover its position before enabling')
+            missing_manual = mask & ~state.manual_reference_valid_bitmap
+            missing_auto = mask & ~state.auto_calibration_valid_bitmap
+            if missing_manual:
+                details.append(f'Manual calibration missing for joint mask 0x{missing_manual:06X}')
+            if missing_auto:
+                details.append(f'Motor calibration missing for joint mask 0x{missing_auto:06X}')
+            return False, 'Enable preparation was not confirmed. ' + ('; '.join(details) if details else 'Check the P4 rejection reason; clear a latched STOP explicitly with Clear Faults.')
+        state = self.get_state_snapshot()
+        if not self._mapped_feedback_fresh(state):
+            return False, 'Enable blocked: current joint-angle feedback is stale or unavailable'
+        values = list(state.target_angles)
+        for joint in joints:
+            if state.encoders[joint].angle_error:
+                return False, f'Enable blocked: J{joint:02d} has no valid calibrated angle'
+            value = state.encoders[joint].current_angle_deg
+            if not math.isfinite(value):
+                return False, f'Enable blocked: J{joint:02d} current angle is invalid'
+            values[joint] = value
+        guarded, blocked, clamped, message = self._apply_joint_workspace_guard(
+            state, values, source='Enable', command_joint_mask=mask)
+        if blocked or clamped:
+            return False, 'Enable blocked: holding the current pose would require clamping. ' + (message or '')
+        with self._application_lock:
+            if epoch != self._application_epoch:
+                return False, 'Enable cancelled'
+            # The ACK may take a second. Capture again immediately before
+            # granting motion so a moved joint is never pulled to an old pose.
+            state = self.get_state_snapshot()
+            if not self._mapped_feedback_fresh(state):
 
-        return self.submit_operation('Enable', enable)
+                return False, 'Enable blocked: current joint-angle feedback became stale'
+            values = list(state.target_angles)
+            for joint in joints:
+                encoder = state.encoders[joint]
+                if encoder.angle_error or not math.isfinite(encoder.current_angle_deg):
 
-    def stop_motion(self, *, emergency=False):
+                    return False, f'Enable blocked: J{joint:02d} current angle is invalid'
+                values[joint] = encoder.current_angle_deg
+            guarded, blocked, clamped, message = self._apply_joint_workspace_guard(
+                state, values, source='Enable', command_joint_mask=mask)
+            if blocked or clamped:
+
+                return False, 'Enable blocked: current pose is outside the permitted workspace. ' + (message or '')
+            result = self.send_joint_targets(guarded, source='Enable', live=True, command_joint_mask=mask)
+        if not result.sent or result.clamped:
+
+            return False, result.message or 'Current-pose hold was not sent'
+        confirmed = self._wait_application(
+            lambda s: s.system_state == SYSTEM_STATE_RUN_FEEDBACK and s.control_enabled
+            and s.servo_target_owner == SERVO_TARGET_OWNER_CONTROL
+            and s.active_joint_mask == mask and s.active_motor_mask == motors
+            and 0 <= time.time() - s.system_status_last_rx_ts <= 0.6,
+            epoch, 3)
+        if not confirmed and epoch == self._application_epoch:
+            self.stop_motion(source="enable confirmation failed")
+
+        return confirmed, 'Selected joints enabled; closed-loop holding the current pose' if confirmed else 'P4 did not enter closed-loop hold; inspect its rejection reason'
+
+
+    def stop_motion(self, *, emergency=False, source='global STOP'):
         # 不排在任何阻塞事务之后；新操作仍须等旧 worker 收尾。
         with self._application_lock:
             self._application_epoch += 1
             self._estop_requested_at = time.time()
-            self._last_operation_message = 'Stop requested; waiting for P4 confirmation'
+            self._last_operation_message = f'Stop requested ({source}); waiting for P4 confirmation'
+            for joint, transaction in list(self._motor_transactions.items()):
+                if transaction == 'CALIBRATING':
+                    self._motor_transactions[joint] = 'FAILED'
         self.stop()
         self.cancel_calibration_workflow()
         if self._replay_service:
@@ -430,11 +639,27 @@ class ApplicationActions:
                 if epoch != self._application_epoch:
                     return False, 'Fault clear cancelled'
                 self.reset()
-            ok = self._wait_application(lambda s: s.system_status_last_rx_ts > sent_at
-                                        and not s.system_fault_bitmap and not s.control_enabled, epoch)
-            if ok:
+            ack = self.comm.wait_for_ack(CMD_RESET, timeout_s=1, received_after=sent_at)
+            if not ack or ack[2] not in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED):
+                return False, 'P4 did not acknowledge RESET. STOP remains pending; check the connection and Diagnostics.'
+            # Live offline/unknown-position faults can immediately recur after
+            # RESET. They do not mean the explicit STOP request is still latched.
+            ok = self._wait_application(lambda s: self.is_comm_connected()
+                                        and s.has_system_status_data
+                                        and s.system_status_last_rx_ts > ack[3]
+                                        and 0 <= time.time() - s.system_status_last_rx_ts <= 0.6
+                                        and not s.control_enabled and not s.servo_target_owner, epoch)
+            if not ok:
+                return False, 'RESET acknowledged, but a fresh stationary P4 status was not confirmed. Check Diagnostics.'
+            with self._application_lock:
+                if epoch != self._application_epoch:
+                    return False, 'Fault clear cancelled by a new STOP'
                 self._estop_requested_at = 0
-            return ok, 'Recoverable faults cleared. Motion has not been restored automatically.' if ok else 'Fault clear was not confirmed. Check Diagnostics.'
+            state = self.get_state_snapshot()
+            if state.system_fault_bitmap:
+                return True, (f'RESET acknowledged; live hardware faults remain (0x{state.system_fault_bitmap:08X}). '
+                              'Check Diagnostics and the selected scope. Motion remains disabled.')
+            return True, 'RESET acknowledged; motion remains disabled. Enable explicitly after checking device readiness.'
         return self.submit_operation('Clear Faults', reset)
 
     def request_pose(self, targets, *, joint_mask=None):
@@ -479,16 +704,50 @@ class ApplicationActions:
         if joint not in range(ENCODER_COUNT) or endpoint not in ('min', 'max'):
             return OperationResult(False, None, 'Invalid Manual capture arguments')
 
+        clicked_state = self.get_state_snapshot()
+        capture_connection = self._controller.get_servo_abs_zero_generation_state()[-1]
+
+        def valid_raw(state):
+            encoder = state.encoders[joint]
+            return (state.has_encoder_raw_data and not encoder.raw_error
+                    and not state.encoder_fault_bitmap & (1 << joint)
+                    and state.encoder_online_bitmap & (1 << joint)
+                    and 0 <= time.time() - state.encoder_raw_last_rx_ts <= 0.3
+                    and ((state.p4_time_ms - state.encoder_raw_p4_time_ms) & 0xFFFFFFFF) <= 300
+                    and 0 <= encoder.raw_sensor < 16384)
+
+        def status(message):
+            with self._application_lock:
+                self._manual_capture_status[joint] = message
+            log_session('MANUAL', f'J{joint:02d} {endpoint}: {message}')
+
+        valid_at_click = valid_raw(clicked_state)
+
         def capture(epoch):
-            state = self.get_state_snapshot()
+            state = clicked_state
+            status('Capturing…')
+            if capture_connection != self._controller.get_servo_abs_zero_generation_state()[-1]:
+                return False, 'P4 connection changed; capture the endpoint again.'
+            if not valid_at_click:
+                status('Waiting for fresh feedback…')
+                deadline = time.monotonic() + 1.0
+                while time.monotonic() < deadline and epoch == self._application_epoch:
+                    state = self.get_state_snapshot()
+                    if (valid_raw(state) or state.encoder_fault_bitmap & (1 << joint)
+                            or not state.encoder_online_bitmap & (1 << joint)
+                            or state.has_encoder_raw_data and state.encoders[joint].raw_error):
+                        break
+                    time.sleep(0.01)
             encoder = state.encoders[joint]
             p4_age = (state.p4_time_ms - state.encoder_raw_p4_time_ms) & 0xFFFFFFFF
             if (not state.has_encoder_raw_data or encoder.raw_error or state.encoder_fault_bitmap & (1 << joint)
                     or not state.encoder_online_bitmap & (1 << joint)
-                    or not 0 <= time.time() - state.encoder_raw_last_rx_ts <= 0.3
+                    or (not valid_at_click and not 0 <= time.time() - state.encoder_raw_last_rx_ts <= 0.3)
                     or p4_age > 300 or not 0 <= encoder.raw_sensor < 16384):
                 return False, f'J{joint:02d} raw feedback is invalid or stale. Check the encoder before capturing.'
-            if state.control_enabled or state.servo_target_owner or state.system_state == SYSTEM_STATE_ROPE_INIT_RUNNING:
+            current = self.get_state_snapshot()
+            if (state.control_enabled or state.servo_target_owner or state.system_state == SYSTEM_STATE_ROPE_INIT_RUNNING
+                    or current.control_enabled or current.servo_target_owner or current.system_state == SYSTEM_STATE_ROPE_INIT_RUNNING):
                 return False, 'Press STOP and wait until P4 is stationary before capturing Manual endpoints.'
             if not state.has_manual_reference_encoder_directions:
                 return False, 'P4 encoder installation direction is unavailable. Wait for valid device status.'
@@ -504,9 +763,20 @@ class ApplicationActions:
                 draft.update({endpoint: int(encoder.raw_sensor), 'direction': direction, 'status': 'DRAFT'})
                 pair = deepcopy(draft)
             if 'min' not in pair or 'max' not in pair:
+                status(f'{endpoint.title()} captured; other endpoint required')
                 return True, f'J{joint:02d} {endpoint} draft captured. The other endpoint is missing; nothing has been saved.'
+            status('Saving / verifying…')
             return self._save_manual_draft(joint, epoch)
-        return self.submit_operation(f'J{joint:02d} Set {endpoint}', capture, scope=f'J{joint:02d}')
+
+        def reported_capture(epoch):
+            try:
+                ok, message = capture(epoch)
+            except Exception as exc:
+                status(f'Failed: {exc}')
+                raise
+            status(message)
+            return ok, message
+        return self.submit_operation(f'J{joint:02d} Set {endpoint}', reported_capture, scope=f'J{joint:02d}')
 
     def _save_manual_draft(self, joint, epoch):
         with self._application_lock:
@@ -519,13 +789,14 @@ class ApplicationActions:
             return False, f'J{joint:02d} not saved: {exc}'
         if epoch != self._application_epoch:
             return False, 'Manual save cancelled'
-        ok = self.set_manual_encoder_reference(joint, pair['min'], pair['max'])
+        ok = self.set_manual_encoder_reference(joint, pair['min'], pair['max'],
+                                               cancelled=lambda: epoch != self._application_epoch)
         stage = getattr(self._controller, 'last_manual_write_phase', 'INSTALL_FAILED')
         with self._application_lock:
             self._manual_drafts[joint]['status'] = 'CANCELLED' if epoch != self._application_epoch else 'SAVED' if ok else stage
             if ok and epoch == self._application_epoch:
                 self._manual_saved_pairs[joint] = (pair['min'], pair['max'])
-        return ok, (f'J{joint:02d} Manual saved; automatic calibration must be repeated' if ok else
+        return ok, (f'J{joint:02d} joint calibration saved; motor calibration is still needed.' if ok else
                     f'J{joint:02d} Manual was not fully saved ({stage}); draft retained. Retry explicitly.')
 
 
@@ -614,6 +885,10 @@ class ApplicationActions:
             operation_id = self._calibration_operation_id
             if not operation_id:
                 return
+            if event.phase == 'joint_started':
+                for j in range(ENCODER_COUNT):
+                    if event.joint_mask & (1 << j):
+                        self._motor_transactions[j] = 'CALIBRATING'
             if event.phase == 'phase_complete':
                 state = self.get_state_snapshot()
                 for j in range(ENCODER_COUNT):
@@ -630,6 +905,9 @@ class ApplicationActions:
                     if failed & (1 << j):
                         self._motor_transactions[j] = 'FAILED'
             if event.phase == 'calibration_complete':
+                for j, value in list(self._motor_transactions.items()):
+                    if value == 'CALIBRATING':
+                        self._motor_transactions[j] = 'FAILED' if not event.ok else 'PENDING'
                 records = [record for record in (event.details.get('records') or [])
                            if isinstance(record, dict)]
                 terminal = event.details.get('terminal_status', event.phase)
@@ -674,7 +952,7 @@ class ApplicationActions:
         if any(m not in range(MOTOR_COUNT) for m in chosen):
             return OperationResult(False, None, 'Motor selection is out of range')
         if chosen != self._selected_motors and (self.is_started() or self._application_busy):
-            self.stop_motion()
+            self.stop_motion(source='motor selection changed during an active operation')
         self._selected_motors = chosen
         return OperationResult(True, None, 'Motor scope updated')
 
@@ -688,8 +966,13 @@ class ApplicationActions:
         return self.submit_operation('Motor Targets', lambda epoch: self._application_direct(values, epoch), scope=' / '.join(f'M{m:02d}' for m in values))
 
     def request_direct_enable(self):
+        if not self._selected_motors:
+            return OperationResult(False, None, 'Select motors before enabling')
         mask = sum(1 << m for m in self._selected_motors)
         def enable(epoch):
+            switched, message = self._prepare_control_switch(epoch)
+            if not switched:
+                return False, message
             from .motor_mapping import MOTOR_TO_JOINT_INDEX
             joints = sum(1 << j for j in {MOTOR_TO_JOINT_INDEX[m] for m in self._selected_motors})
             if not self.set_active_scope(mask, joints, False):
@@ -697,7 +980,9 @@ class ApplicationActions:
             with self._application_lock:
                 if not mask or epoch != self._application_epoch:
                     return False, 'Select motors; enable was not submitted'
-                ok, message, _ = self.enable_direct_hold(mask)
+            ok, message, _ = self.enable_direct_hold(mask)
+            if not ok and epoch == self._application_epoch:
+                self.stop_motion(source='direct enable confirmation failed')
             return ok, message
         return self.submit_operation('Enable Direct Control', enable)
 
@@ -811,12 +1096,6 @@ class ApplicationActions:
         return self.submit_operation('Set Motor ABS Zero', zero,
                                      scope=' / '.join(f'M{m:02d}' for m in chosen))
 
-    def request_pause(self):
-        with self._application_lock:
-            self._application_epoch += 1
-        self.pause()
-        log_session('APP', 'Pause requested')
-        return OperationResult(True, None, 'Pause requested')
 
     def request_tendon_step(self, tighten):
         from .motor_mapping import motor_abs_after_tendon_action
@@ -881,7 +1160,7 @@ class ApplicationActions:
             state = self.get_state_snapshot()
             if not preview or self._application_busy or not self._fresh_application_state():
                 return OperationResult(False, None, 'Import requires a validated file and fresh, idle P4 connection')
-            if state.control_enabled or state.servo_target_owner or state.system_state not in (0, 1, 5, 7, 9):
+            if state.control_enabled or state.servo_target_owner or state.system_state not in (0, 1, 5, 9):
                 return OperationResult(False, None, 'Stop motion before loading calibration')
             operation_id = uuid4().hex[:12]
             from .calibration_snapshot import parse_mask
@@ -935,7 +1214,7 @@ class ApplicationActions:
         with self._application_lock:
             if epoch != self._application_epoch:
                 return False, 'Direct control cancelled'
-            ok, message, _ = self.enable_direct_hold(mask)
+        ok, message, _ = self.enable_direct_hold(mask)
         if not ok:
             return False, message
         state = self.get_state_snapshot()
@@ -960,12 +1239,17 @@ class ApplicationActions:
 
 
     def request_replay_start(self):
+        joints = self._selected_joints
+        if not joints:
+            return OperationResult(False, None, 'Select joints explicitly before playing a motion')
         def start(epoch):
             with self._application_lock:
                 if epoch != self._application_epoch:
                     return False, 'Playback cancelled'
                 if not self._replay_service:
                     return False, 'Replay is not running'
+            enabled, message = self._enable_selected_joints(joints, epoch)
+            if not enabled: return False, message
             result = self._replay_service.send(expected_application_epoch=epoch)
             if epoch != self._application_epoch:
                 self._replay_service.stop('Playback startup cancelled')
@@ -1042,6 +1326,8 @@ class ApplicationActions:
         (zero_generations, zero_feedback_ms, zero_device_ids,
          zero_connections, connection_generation) = self._controller.get_servo_abs_zero_generation_state()
         state = self.get_state_snapshot()
+        control_parameters = self.control_parameter_snapshot()
+        storage_paths = self.calibration_storage_paths()
         connection_unchanged = (self._controller.get_servo_abs_zero_generation_state()[-1]
                                 == connection_generation)
         device_id = self._controller.servo_abs_zero_device_id(state)
@@ -1060,6 +1346,8 @@ class ApplicationActions:
             device = 'Stopped'
         elif host_active:
             device = 'Calibrating'
+        elif state.system_fault_bitmap:
+            device = 'Fault'
         elif state.control_enabled and state.servo_target_owner and state.system_state in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK):
             device = 'Controlling'
         elif state.system_state == SYSTEM_STATE_READY:
@@ -1121,7 +1409,10 @@ class ApplicationActions:
                 self._finish_application_operation(self._calibration_operation_id, False, 'Calibration cancelled; completed joints preserved')
                 self._calibration_operation_id = None
             snapshot = {
+                'calibration_storage': storage_paths,
                 'communication': communication, 'device': device, 'problems': problems,
+                'control_parameters': control_parameters,
+                'control_parameter_sync': self._control_parameter_sync,
                 'message': self._last_operation_message, 'busy': busy, 'selected_joints': list(self._selected_joints),
                 'devices': [asdict(d) for d in self._devices], 'discovery_error': self._discovery_error,
                 'operations': deepcopy(list(self._application_operations)), 'joints': joints,
@@ -1135,6 +1426,7 @@ class ApplicationActions:
                 'ros': {'available': self._ros_available, 'enabled': self.ros2_output_armed(), 'reason': ros_reason},
                 'recording': {'running': self._recorder.is_running(), 'path': self._recorder.path or self._recording_path},
                 'curves': deepcopy(list(self._curve_history)) if include_curves else [],
+                'control_components': deepcopy(list(self._component_history)) if include_curves else [],
                 'replay': asdict(self._replay_service.status()) if self._replay_service else {},
                 'calibration': {'status': state.calib_status, 'results': deepcopy(state.joint_calib_results),
                                 'warning': warning, 'diagnostic': format_calibration_diagnostic(state)},
@@ -1147,4 +1439,6 @@ class ApplicationActions:
                             'age_ms': int((now - state.tactile_last_rx_ts) * 1000) if state.tactile_last_rx_ts else None,
                             'forces': [[s.resultant.tolist() for s in finger.sensors] for finger in state.tactile_data]},
             }
+            snapshot['id_reset'] = self.id_reset_snapshot(fresh=fresh and connection_unchanged,
+                                                         connection_generation=connection_generation)
             return enrich_snapshot(self, state, snapshot, now, fresh)

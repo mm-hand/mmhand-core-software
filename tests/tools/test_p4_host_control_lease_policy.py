@@ -66,8 +66,8 @@ int main()
 
     // Unsigned subtraction keeps the watchdog correct across millis() wrap.
     assert(isHostControlLeaseFresh(5, UINT32_MAX - 5));
-    // PAUSE may resume only through START; direct and feedback entry remain rejected.
-    assert(p4::system::canAcceptStart(SYSTEM_STATE_PAUSED));
+    // Removed state value7 must reject every control entry.
+    assert(!p4::system::canAcceptStart(7));
     assert(!p4::system::canAcceptRunDirect(7));
     assert(!p4::system::canAcceptRunFeedback(7));
     // Firmware calibration has no admission API; it runs exclusively in the host.

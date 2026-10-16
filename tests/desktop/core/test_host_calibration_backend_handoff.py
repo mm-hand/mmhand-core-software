@@ -236,7 +236,6 @@ _USER_OUTPUT_CASES = [
     ("enable_direct_hold", (1,), (False, "host calibration is active", [])),
     ("set_control_mode", (ControlMode.JOINT_ANGLE,), None),
     ("invalidate_joint_commands", (), 0),
-    ("resume", (), None),
     ("set_motor_positions_absolute", ([0] * MOTOR_COUNT,), None),
     ("set_single_motor_position_absolute", (0, 1000), None),
     ("request_run_feedback", (), False),
@@ -282,20 +281,13 @@ def test_manual_prepare_cannot_reset_coordinate_system_during_host_calibration(b
     controller_call.assert_not_called()
 
 
-def test_pause_cancels_host_worker_and_resume_stays_blocked_until_cleanup_finishes(backend):
-    backend._controller.pause = MagicMock()
-    backend._controller.resume = MagicMock()
+def test_stop_cancels_host_worker_and_pause_resume_are_removed(backend):
+    backend._controller.stop = MagicMock()
     assert _begin(backend)
-
-    backend.pause()
-    backend.resume()
-
+    backend.stop_motion()
     assert backend._calibration_workflow.cancel_requests == 1
-    backend._controller.pause.assert_called_once_with()
-    backend._controller.resume.assert_not_called()
-    backend._calibration_workflow.active = False
-    backend.resume()
-    backend._controller.resume.assert_called_once_with()
+    backend._controller.stop.assert_called_once_with()
+    assert not hasattr(backend, 'pause') and not hasattr(backend, 'resume')
 
 
 def test_direct_user_target_waiting_at_submission_cannot_enter_host_transaction(backend):

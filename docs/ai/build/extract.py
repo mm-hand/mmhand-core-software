@@ -76,7 +76,7 @@ def python_function(sources: Sources, path: str, name: str) -> dict | None:
 def function_graph(sources: Sources, graph_id: str, items: list[dict]) -> dict:
     titles = {
         "connect": ("连接与状态同步", "Connection and state sync"),
-        "control": ("使能、暂停、停止与复位", "Enable, pause, stop and reset"),
+        "control": ("使能、停止与复位", "Enable, stop and reset"),
         "device_check": ("Device Check 与手动端点", "Device Check and manual endpoints"),
         "joint_channels": ("Joint Channels 负反馈", "Joint Channels feedback"),
         "motor_channels": ("Motor Channels 直控", "Motor Channels direct control"),
@@ -351,12 +351,8 @@ def wire_command_paths(sources: Sources, graphs: list[dict], states: dict) -> No
          "postSystemEvent(sharedData, SYSTEM_EVENT_START)"),
         ("control", "step_2", "CMD_STOP", "SYSTEM_EVENT_STOP", 'send_command("stop")',
          "requestEmergencyStop(sharedData)"),
-        ("control", "step_3", "CMD_PAUSE", "SYSTEM_EVENT_PAUSE", 'send_command("pause")',
-         "postSystemEvent(sharedData, SYSTEM_EVENT_PAUSE)"),
-        ("control", "step_4", "CMD_RESET", "SYSTEM_EVENT_RESET", 'send_command("reset")',
+        ("control", "step_3", "CMD_RESET", "SYSTEM_EVENT_RESET", 'send_command("reset")',
          "postSystemEvent(sharedData, SYSTEM_EVENT_RESET)"),
-        ("calibration", "step_1", "CMD_CALIBRATE", "SYSTEM_EVENT_CALIBRATE", 'send_command("calibrate")',
-         "postSystemEvent(sharedData, SYSTEM_EVENT_CALIBRATE)"),
     ]
     for graph_id, action, command, event, send, dispatch in specs:
         g = by_id[graph_id]
@@ -431,16 +427,6 @@ def p4_tasks(sources: Sources) -> tuple[dict, dict]:
                                         "Period comes from task entry; inspect references for queues and shared data.")})
         add_edge(g, "p4", name, "创建任务", "creates task", refs[:1])
         count += 1
-    # Calibration task is started on demand rather than in SystemAssembly.
-    calib = configured_path(sources, "p4.calibration_task")
-    if calib in sources.paths["mmhand"]:
-        refs = maybe_line(sources, "mmhand", calib, "autoCalibrationTask") or [sources.evidence("mmhand", calib, 1)]
-        add_node(g, "autoCalibrationTask", "自动标定任务（按需）", "Calibration task (on demand)",
-                 kind="task", evidence=refs,
-                 details={"period": [row.strip() for row in sources.lines("mmhand", calib)
-                                     if "pdMS_TO_TICKS" in row][:6]})
-        add_edge(g, "p4", "autoCalibrationTask", "按需启动", "starts on demand", refs)
-        count += 1
     task_edges = [
         ("hostCommTask", "systemStateTask", "postSystemEvent + systemStateWake", "命令事件", "command event",
          configured_path(sources, "p4.dispatcher"), "sharedData->systemStateWake.notify"),
@@ -508,10 +494,9 @@ def desktop_architecture(sources: Sources) -> dict:
     g = graph("arch_desktop", "桌面端与 ROS2", "Desktop and ROS2", "architecture", "architecture_overview")
     specs = [
         ("entry", "启动入口", "Application entry", configured_path(sources, "desktop.entry"), "def main"),
-        ("ui", "Qt 界面", "Qt UI", configured_path(sources, "desktop.ui"), "class "),
+        ("ui", "浏览器界面", "Browser UI", configured_path(sources, "desktop.ui"), "def build_page"),
         ("backend", "HandBackend 门面", "HandBackend facade", configured_path(sources, "desktop.backend"), "class HandBackend"),
         ("protocol", "主串口协议", "Main serial protocol", configured_path(sources, "desktop.protocol"), "def _build_command_frame"),
-        ("raw_ik", "原始 IK 订阅节点", "Raw IK subscriber", configured_path(sources, "desktop.raw_ik"), "create_subscription("),
         ("joint_targets", "关节目标订阅节点", "Joint-target subscriber", configured_path(sources, "desktop.joint_targets"), "create_subscription("),
         ("replay", "回放控制", "Replay control", configured_path(sources, "desktop.replay"), "class "),
     ]
@@ -525,7 +510,6 @@ def desktop_architecture(sources: Sources) -> dict:
     ids = {n["id"] for n in g["nodes"]}
     for a, b, zh, en in [
         ("entry", "ui", "启动", "starts"), ("ui", "backend", "用户命令", "user commands"),
-        ("raw_ik", "backend", "21 路目标", "21 joint targets"),
         ("joint_targets", "backend", "21 路目标", "21 joint targets"),
         ("replay", "backend", "定时目标", "timed targets"),
         ("backend", "protocol", "编码命令", "encodes commands"),
@@ -587,14 +571,14 @@ def ros_graph(sources: Sources) -> dict:
               "architecture", "architecture_overview")
     config = configured_path(sources, "teleop.config", "teleop")
     publisher = configured_path(sources, "teleop.publisher", "teleop")
-    subscriber = configured_path(sources, "desktop.raw_ik")
+    subscriber = configured_path(sources, "desktop.joint_targets")
     add_node(g, "teleop", "mmhand_teleop 发布节点", "mmhand_teleop publisher",
              evidence=maybe_line(sources, "teleop", publisher, 'create_node("mmhand_teleop")'))
-    add_node(g, "raw", "/raw_ik_target · Float32MultiArray", "/raw_ik_target · Float32MultiArray",
+    add_node(g, "raw", "/mmhand/joint_angle_deg · Float32MultiArray", "/mmhand/joint_angle_deg · Float32MultiArray",
              kind="protocol", evidence=maybe_line(sources, "teleop", config, 'ROBOT_TOPIC ='),
              details={"text": label("21 个 J00–J20，单位 degree；消息由 RosOutput.joints 发布。",
                                    "21 J00–J20 values in degrees; published by RosOutput.joints.")})
-    add_node(g, "desktop", "桌面 Raw IK 订阅节点", "Desktop Raw IK subscriber",
+    add_node(g, "desktop", "桌面关节角订阅节点", "Desktop joint-angle subscriber",
              evidence=maybe_line(sources, "mmhand", subscriber, "create_subscription("))
     add_edge(g, "teleop", "raw", "发布", "publishes",
              maybe_line(sources, "teleop", publisher, "self.robot_publisher ="))
@@ -628,8 +612,8 @@ def architecture_graphs(sources: Sources) -> tuple[list[dict], dict]:
     add_edge(root, "s3", "desktop", "独立触觉串口", "separate tactile serial",
              maybe_line(sources, "mmhand", configured_path(sources, "desktop.entry"), "--tactile-port"))
     add_edge(root, "p4", "servos", "舵机总线", "servo buses", servo_ref)
-    add_edge(root, "ros", "desktop", "/raw_ik_target", "/raw_ik_target",
-             maybe_line(sources, "mmhand", configured_path(sources, "desktop.raw_ik"), "create_subscription("))
+    add_edge(root, "ros", "desktop", "/mmhand/joint_angle_deg", "/mmhand/joint_angle_deg",
+             maybe_line(sources, "mmhand", configured_path(sources, "desktop.joint_targets"), "create_subscription("))
     p4, p4_count = p4_tasks(sources)
     s3, s3_count = s3_tasks(sources)
     serial, protocol_count = serial_graphs(sources)

@@ -26,8 +26,6 @@ CALIB_WARN_NONE = 0x00
 CALIB_WARN_AUTO_MIN_OFFSET = 0x01
 CALIB_WARN_AUTO_MAX_SHORTFALL = 0x02
 CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH = 0x04
-# Compatibility alias for callers that still import the original name.
-CALIB_WARN_AUTO_SPAN_RANGE = CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH
 
 TASK_RUNTIME_UPPER_COMM = 0
 TASK_RUNTIME_STATE_MACHINE = 1
@@ -52,7 +50,6 @@ SYSTEM_STATE_RUN_FEEDBACK = 2
 SYSTEM_STATE_CALIBRATION_RUNNING = 4
 SYSTEM_STATE_READY = 5
 SYSTEM_STATE_RUN_DIRECT = 6
-SYSTEM_STATE_PAUSED = 7
 SYSTEM_STATE_ROPE_INIT_RUNNING = 8
 SYSTEM_STATE_RECOVERY_REQUIRED = 9
 
@@ -133,17 +130,6 @@ CALIB_DIAG_REASON_MULTITURN_TRUST_FAILED = 32
 CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT = 33
 CALIB_DIAG_REASON_DUAL_EXCHANGE_STALLED = 34
 
-# 已发布旧固件/历史日志兼容值；新固件不得重新使用这些编号。
-CALIB_DIAG_REASON_LEGACY_CAN_FEEDBACK_TIMEOUT = 2
-CALIB_DIAG_REASON_LEGACY_SERVO_FEEDBACK_TIMEOUT = 3
-CALIB_DIAG_REASON_LEGACY_TELEMETRY_TIMEOUT = 4
-CALIB_DIAG_REASON_LEGACY_TURN_UNKNOWN = 7
-CALIB_DIAG_REASON_LEGACY_LOAD_NOT_REACHED = 9
-CALIB_DIAG_REASON_LEGACY_ANGLE_NOT_MOVING = 10
-CALIB_DIAG_REASON_LEGACY_WRONG_DIRECTION = 11
-CALIB_DIAG_REASON_LEGACY_ZERO_RETURN_TIMEOUT = 12
-CALIB_DIAG_REASON_LEGACY_INTERNAL_ERROR = 19
-
 CALIB_DIAG_PHASE_NONE = 0
 CALIB_DIAG_PHASE_INIT = 1
 CALIB_DIAG_PHASE_FIND_MAX = 2
@@ -173,9 +159,9 @@ TACTILE_GROUP_COUNT = 5
 TACTILE_SENSOR_PER_GROUP = 3
 TACTILE_AXIS_COUNT = 3
 TACTILE_SUMMARY_BYTES = TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP * TACTILE_AXIS_COUNT
-TACTILE_TIP_TAXELS = 25
-TACTILE_PAD_TAXELS = 52
-TACTILE_SENSOR_TAXEL_COUNTS = (TACTILE_PAD_TAXELS, TACTILE_TIP_TAXELS, TACTILE_TIP_TAXELS)
+TACTILE_TIP_TAXELS = 52
+TACTILE_PAD_TAXELS = 25
+TACTILE_SENSOR_TAXEL_COUNTS = (TACTILE_TIP_TAXELS, TACTILE_PAD_TAXELS, TACTILE_PAD_TAXELS)
 TACTILE_FULL_BYTES = TACTILE_GROUP_COUNT * sum(TACTILE_SENSOR_TAXEL_COUNTS) * TACTILE_AXIS_COUNT
 TACTILE_FULL_PACKET_MAGIC = b"T2"
 
@@ -184,10 +170,7 @@ def tendon_lut_field(result: dict, field_name: str, default=None):
     """读取当前唯一的 Tendon LUT 字段，不再兼容旧键名。"""
     return result.get(field_name, default)
 HAND_PROFILE = "v2"
-VALID_MOTOR_COUNT_V1 = 22
-VALID_MOTOR_MASK_V1 = (1 << VALID_MOTOR_COUNT_V1) - 1
-VALID_MOTOR_MASK_V2 = (1 << MOTOR_COUNT) - 1
-VALID_MOTOR_MASK = VALID_MOTOR_MASK_V2 if HAND_PROFILE.lower() == "v2" else VALID_MOTOR_MASK_V1
+VALID_MOTOR_MASK = (1 << MOTOR_COUNT) - 1
 
 
 def directed_encoder_delta(from_raw: int, to_raw: int, direction: int) -> Optional[int]:
@@ -257,7 +240,7 @@ def parse_sensor_packet(payload: bytes) -> Tuple[List[int], List[bool]]:
     """Parse 21 raw magnetic encoder counts from the firmware sensor packet."""
     angles: List[int] = []
     errors: List[bool] = []
-    if len(payload) < ENCODER_COUNT * 2:
+    if len(payload) != ENCODER_COUNT * 2:
         return angles, errors
 
     for i in range(ENCODER_COUNT):
@@ -272,134 +255,59 @@ def parse_sensor_packet(payload: bytes) -> Tuple[List[int], List[bool]]:
 
 
 def parse_proto_ack(payload: bytes) -> Optional[Tuple[int, int, int]]:
-    if len(payload) < 3:
+    if len(payload) != 3:
         return None
     return payload[0], payload[1], payload[2]
 
 
 def parse_system_status_packet(payload: bytes) -> Optional[tuple]:
-    if len(payload) < 13:
+    if len(payload) != 173:
         return None
     system_state = payload[0]
     control_enabled = payload[1]
     servo_target_owner = payload[2]
     control_mode = payload[3]
     calib_status = payload[4]
-    system_fault_bitmap = struct.unpack(">I", payload[5:9])[0]
-    state_transition_count = struct.unpack(">I", payload[9:13])[0]
-    multi_turn_unknown_bitmap = struct.unpack(">I", payload[13:17])[0] if len(payload) >= 17 else 0
-    has_active_scope_status = len(payload) >= 26
-    active_motor_mask = struct.unpack(">I", payload[17:21])[0] if has_active_scope_status else 0
-    active_joint_mask = struct.unpack(">I", payload[21:25])[0] if has_active_scope_status else 0
-    require_can_feedback = payload[25] if has_active_scope_status else 0
-    has_connectivity_status = len(payload) >= 35
-    servo_online_bitmap = struct.unpack(">I", payload[26:30])[0] if has_connectivity_status else 0
-    encoder_online_bitmap = struct.unpack(">I", payload[30:34])[0] if has_connectivity_status else 0
-    can_link_online = payload[34] if has_connectivity_status else 0
-    has_encoder_health_status = len(payload) >= 43
-    encoder_warn_bitmap = struct.unpack(">I", payload[35:39])[0] if has_encoder_health_status else 0
-    encoder_fault_bitmap = struct.unpack(">I", payload[39:43])[0] if has_encoder_health_status else 0
-    has_manual_reference_status = len(payload) >= 56
-    manual_reference_valid_bitmap = (
-        struct.unpack(">I", payload[43:47])[0] if has_manual_reference_status else 0
-    )
-    manual_reference_crc = (
-        struct.unpack(">I", payload[47:51])[0] if has_manual_reference_status else 0
-    )
-    manual_reference_revision = (
-        struct.unpack(">I", payload[51:55])[0] if has_manual_reference_status else 0
-    )
-    manual_reference_committed = (
-        payload[55] if has_manual_reference_status else 0
-    )
-    has_manual_commit_status = len(payload) >= 61
-    auto_calibration_valid_bitmap = (
-        struct.unpack(">I", payload[56:60])[0] if has_manual_commit_status else 0
-    )
-    manual_reference_commit_status = payload[60] if has_manual_commit_status else 0
-    has_motion_result_status = len(payload) >= 84
-    rope_init_status = payload[61] if has_motion_result_status else ROPE_INIT_STATUS_IDLE
-    rope_init_reason = payload[62] if has_motion_result_status else ROPE_INIT_REASON_NONE
-    rope_init_sequence = (
-        struct.unpack(">I", payload[63:67])[0] if has_motion_result_status else 0
-    )
-    rope_init_joint_mask = (
-        struct.unpack(">I", payload[67:71])[0] if has_motion_result_status else 0
-    )
-    rope_init_timestamp_ms = (
-        struct.unpack(">I", payload[71:75])[0] if has_motion_result_status else 0
-    )
-    pending_direct_generation = (
-        struct.unpack(">I", payload[75:79])[0] if has_motion_result_status else 0
-    )
-    applied_direct_generation = (
-        struct.unpack(">I", payload[79:83])[0] if has_motion_result_status else 0
-    )
-    direct_reject_reason = payload[83] if has_motion_result_status else 0
-    has_calibration_warning_status = len(payload) >= 130
-    calibration_warning_bitmap = (
-        struct.unpack(">I", payload[84:88])[0]
-        if has_calibration_warning_status else 0
-    )
-    calibration_auto_min_offset_counts = (
-        [
-            struct.unpack(">h", payload[88 + 2 * i:90 + 2 * i])[0]
-            for i in range(ENCODER_COUNT)
-        ]
-        if has_calibration_warning_status else [0] * ENCODER_COUNT
-    )
-    has_feedback_admission_status = len(payload) >= 136
-    feedback_admission_sequence = (
-        struct.unpack(">I", payload[130:134])[0]
-        if has_feedback_admission_status else 0
-    )
-    feedback_admission_status = (
-        payload[134] if has_feedback_admission_status else FEEDBACK_ADMISSION_IDLE
-    )
-    feedback_reject_reason = (
-        payload[135] if has_feedback_admission_status else FEEDBACK_REJECT_NONE
-    )
-    has_feedback_collision_status = len(payload) >= 148
-    feedback_collision_hold_bitmap = (
-        struct.unpack(">I", payload[136:140])[0]
-        if has_feedback_collision_status else 0
-    )
-    feedback_collision_transition_count = (
-        struct.unpack(">I", payload[140:144])[0]
-        if has_feedback_collision_status else 0
-    )
-    feedback_collision_armed_bitmap = (
-        struct.unpack(">I", payload[144:148])[0]
-        if has_feedback_collision_status else 0
-    )
-    has_servo_reset_zero_status = len(payload) >= 173
-    servo_turn_overflow_bitmap = (
-        struct.unpack(">I", payload[148:152])[0]
-        if has_servo_reset_zero_status else 0
-    )
-    servo_reset_zero_request_token = (
-        struct.unpack(">I", payload[152:156])[0]
-        if has_servo_reset_zero_status else 0
-    )
-    servo_reset_zero_result_token = (
-        struct.unpack(">I", payload[156:160])[0]
-        if has_servo_reset_zero_status else 0
-    )
-    servo_reset_zero_success_mask = (
-        struct.unpack(">I", payload[160:164])[0]
-        if has_servo_reset_zero_status else 0
-    )
-    servo_reset_zero_failed_mask = (
-        struct.unpack(">I", payload[164:168])[0]
-        if has_servo_reset_zero_status else 0
-    )
-    servo_reset_zero_invalidated_joint_mask = (
-        struct.unpack(">I", payload[168:172])[0]
-        if has_servo_reset_zero_status else 0
-    )
-    servo_reset_zero_status = (
-        payload[172] if has_servo_reset_zero_status else 0
-    )
+    system_fault_bitmap = struct.unpack('>I', payload[5:9])[0]
+    state_transition_count = struct.unpack('>I', payload[9:13])[0]
+    multi_turn_unknown_bitmap = struct.unpack('>I', payload[13:17])[0]
+    active_motor_mask = struct.unpack('>I', payload[17:21])[0]
+    active_joint_mask = struct.unpack('>I', payload[21:25])[0]
+    require_can_feedback = payload[25]
+    servo_online_bitmap = struct.unpack('>I', payload[26:30])[0]
+    encoder_online_bitmap = struct.unpack('>I', payload[30:34])[0]
+    can_link_online = payload[34]
+    encoder_warn_bitmap = struct.unpack('>I', payload[35:39])[0]
+    encoder_fault_bitmap = struct.unpack('>I', payload[39:43])[0]
+    manual_reference_valid_bitmap = struct.unpack('>I', payload[43:47])[0]
+    manual_reference_crc = struct.unpack('>I', payload[47:51])[0]
+    manual_reference_revision = struct.unpack('>I', payload[51:55])[0]
+    manual_reference_committed = payload[55]
+    auto_calibration_valid_bitmap = struct.unpack('>I', payload[56:60])[0]
+    manual_reference_commit_status = payload[60]
+    rope_init_status = payload[61]
+    rope_init_reason = payload[62]
+    rope_init_sequence = struct.unpack('>I', payload[63:67])[0]
+    rope_init_joint_mask = struct.unpack('>I', payload[67:71])[0]
+    rope_init_timestamp_ms = struct.unpack('>I', payload[71:75])[0]
+    pending_direct_generation = struct.unpack('>I', payload[75:79])[0]
+    applied_direct_generation = struct.unpack('>I', payload[79:83])[0]
+    direct_reject_reason = payload[83]
+    calibration_warning_bitmap = struct.unpack('>I', payload[84:88])[0]
+    calibration_auto_min_offset_counts = [struct.unpack('>h', payload[88 + 2 * i:90 + 2 * i])[0] for i in range(ENCODER_COUNT)]
+    feedback_admission_sequence = struct.unpack('>I', payload[130:134])[0]
+    feedback_admission_status = payload[134]
+    feedback_reject_reason = payload[135]
+    feedback_collision_hold_bitmap = struct.unpack('>I', payload[136:140])[0]
+    feedback_collision_transition_count = struct.unpack('>I', payload[140:144])[0]
+    feedback_collision_armed_bitmap = struct.unpack('>I', payload[144:148])[0]
+    servo_turn_overflow_bitmap = struct.unpack('>I', payload[148:152])[0]
+    servo_reset_zero_request_token = struct.unpack('>I', payload[152:156])[0]
+    servo_reset_zero_result_token = struct.unpack('>I', payload[156:160])[0]
+    servo_reset_zero_success_mask = struct.unpack('>I', payload[160:164])[0]
+    servo_reset_zero_failed_mask = struct.unpack('>I', payload[164:168])[0]
+    servo_reset_zero_invalidated_joint_mask = struct.unpack('>I', payload[168:172])[0]
+    servo_reset_zero_status = payload[172]
     return (
         system_state,
         control_enabled,
@@ -412,22 +320,22 @@ def parse_system_status_packet(payload: bytes) -> Optional[tuple]:
         active_motor_mask,
         active_joint_mask,
         require_can_feedback,
-        has_active_scope_status,
+        True,
         servo_online_bitmap,
         encoder_online_bitmap,
         can_link_online,
-        has_connectivity_status,
+        True,
         encoder_warn_bitmap,
         encoder_fault_bitmap,
-        has_encoder_health_status,
+        True,
         manual_reference_valid_bitmap,
         manual_reference_crc,
         manual_reference_revision,
         manual_reference_committed,
-        has_manual_reference_status,
+        True,
         auto_calibration_valid_bitmap,
         manual_reference_commit_status,
-        has_manual_commit_status,
+        True,
         rope_init_status,
         rope_init_reason,
         rope_init_sequence,
@@ -436,7 +344,7 @@ def parse_system_status_packet(payload: bytes) -> Optional[tuple]:
         pending_direct_generation,
         applied_direct_generation,
         direct_reject_reason,
-        has_motion_result_status,
+        True,
         servo_turn_overflow_bitmap,
         servo_reset_zero_request_token,
         servo_reset_zero_result_token,
@@ -444,18 +352,18 @@ def parse_system_status_packet(payload: bytes) -> Optional[tuple]:
         servo_reset_zero_failed_mask,
         servo_reset_zero_invalidated_joint_mask,
         servo_reset_zero_status,
-        has_servo_reset_zero_status,
+        True,
         feedback_admission_sequence,
         feedback_admission_status,
         feedback_reject_reason,
-        has_feedback_admission_status,
+        True,
         feedback_collision_armed_bitmap,
         feedback_collision_hold_bitmap,
         feedback_collision_transition_count,
-        has_feedback_collision_status,
+        True,
         calibration_warning_bitmap,
         calibration_auto_min_offset_counts,
-        has_calibration_warning_status,
+        True,
     )
 
 
@@ -494,55 +402,20 @@ def parse_servo_logical_range_packet(
 
 
 def parse_manual_encoder_reference_packet(payload: bytes) -> Optional[dict]:
-    """Parse a full or partial Manual Min/Max snapshot stored by P4."""
-    if not payload or payload[0] not in (1, 2, 3):
+    """Parse only the current v3 Manual snapshot, including all encoder directions."""
+    if len(payload) != 124 or payload[0] != 3:
         return None
-    version = int(payload[0])
-    required = 1 + 4 + 4 + 4 + 1 + ENCODER_COUNT * 4
-    if version >= 2:
-        required += 5
-    if version >= 3:
-        required += ENCODER_COUNT
-    if len(payload) < required:
+    valid_bitmap, reference_crc, revision = struct.unpack_from('>III', payload, 1)
+    auto_valid_bitmap = struct.unpack_from('>I', payload, 14)[0]
+    directions = list(struct.unpack_from('>21b', payload, 103))
+    if any(value not in (-1, 1) for value in directions):
         return None
-
-    valid_bitmap = struct.unpack(">I", payload[1:5])[0]
-    reference_crc = struct.unpack(">I", payload[5:9])[0]
-    revision = struct.unpack(">I", payload[9:13])[0]
-    committed = bool(payload[13])
-    offset = 14
-    auto_valid_bitmap = 0
-    commit_status = 0
-    if version >= 2:
-        auto_valid_bitmap = struct.unpack(">I", payload[offset:offset + 4])[0]
-        offset += 4
-        commit_status = int(payload[offset])
-        offset += 1
-    min_raw: List[int] = []
-    max_raw: List[int] = []
-    for _ in range(ENCODER_COUNT):
-        min_raw.append(struct.unpack(">H", payload[offset:offset + 2])[0])
-        max_raw.append(struct.unpack(">H", payload[offset + 2:offset + 4])[0])
-        offset += 4
-    encoder_directions: List[int] = [0] * ENCODER_COUNT
-    if version >= 3:
-        encoder_directions = [
-            -1 if struct.unpack(">b", payload[offset + joint:offset + joint + 1])[0] < 0 else 1
-            for joint in range(ENCODER_COUNT)
-        ]
-    return {
-        "version": version,
-        "valid_bitmap": valid_bitmap,
-        "reference_crc": reference_crc,
-        "revision": revision,
-        "committed": committed,
-        "auto_valid_bitmap": auto_valid_bitmap,
-        "commit_status": commit_status,
-        "min_raw": min_raw,
-        "max_raw": max_raw,
-        "encoder_directions": encoder_directions,
-        "has_encoder_directions": version >= 3,
-    }
+    endpoints = struct.unpack_from('>42H', payload, 19)
+    return dict(version=3, valid_bitmap=valid_bitmap, reference_crc=reference_crc,
+                revision=revision, committed=bool(payload[13]),
+                auto_valid_bitmap=auto_valid_bitmap, commit_status=payload[18],
+                min_raw=list(endpoints[::2]), max_raw=list(endpoints[1::2]),
+                encoder_directions=directions, has_encoder_directions=True)
 
 
 def _unpack_float_be(data: bytes) -> float:
@@ -551,117 +424,94 @@ def _unpack_float_be(data: bytes) -> float:
 
 def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
     """解析当前 V4 快照；P4 上行体在装配告警后附带设备时间戳。"""
-    if len(payload) not in (189, 202, 206):
+    if len(payload) != 202:
         return None
     idx = 0
     joint = payload[idx]
     idx += 1
     if joint >= ENCODER_COUNT:
         return None
-
-    result = {
-        "joint": int(joint),
-        "success": bool(payload[idx]),
-    }
+    result = {'joint': int(joint), 'success': bool(payload[idx])}
     idx += 1
-    result["angleMax"] = _unpack_float_be(payload[idx:idx + 4])
+    result['angleMax'] = _unpack_float_be(payload[idx:idx + 4])
     idx += 4
-    for key in ("startEncoder", "tightEncoder", "zeroEncoder", "encoderSpan"):
-        result[key] = struct.unpack(">i", payload[idx:idx + 4])[0]
+    for key in ('startEncoder', 'tightEncoder', 'zeroEncoder', 'encoderSpan'):
+        result[key] = struct.unpack('>i', payload[idx:idx + 4])[0]
         idx += 4
-    for key in ("startServoAbs", "tightServoAbs", "zeroServoAbs"):
-        result[key] = struct.unpack(">i", payload[idx:idx + 4])[0]
+    for key in ('startServoAbs', 'tightServoAbs', 'zeroServoAbs'):
+        result[key] = struct.unpack('>i', payload[idx:idx + 4])[0]
         idx += 4
-    for key in ("startDeg", "tightDeg", "totalDeg"):
+    for key in ('startDeg', 'tightDeg', 'totalDeg'):
         result[key] = _unpack_float_be(payload[idx:idx + 4])
         idx += 4
-    result["scaled"] = bool(payload[idx])
+    result['scaled'] = bool(payload[idx])
     idx += 1
-    result["encoderDirection"] = -1 if struct.unpack(">b", payload[idx:idx + 1])[0] < 0 else 1
+    result['encoderDirection'] = -1 if struct.unpack('>b', payload[idx:idx + 1])[0] < 0 else 1
     idx += 1
-    result["tendonLutValid"] = bool(payload[idx])
+    result['tendonLutValid'] = bool(payload[idx])
     idx += 1
-    result["tendonLutCount"] = int(payload[idx])
+    result['tendonLutCount'] = int(payload[idx])
     idx += 1
-    result["tendonLutMotor"] = [int(payload[idx]), int(payload[idx + 1])]
+    result['tendonLutMotor'] = [int(payload[idx]), int(payload[idx + 1])]
     idx += 2
-    result["tendonLutAngleStartDeg"] = _unpack_float_be(payload[idx:idx + 4])
+    result['tendonLutAngleStartDeg'] = _unpack_float_be(payload[idx:idx + 4])
     idx += 4
-    result["tendonLutAngleStepDeg"] = _unpack_float_be(payload[idx:idx + 4])
+    result['tendonLutAngleStepDeg'] = _unpack_float_be(payload[idx:idx + 4])
     idx += 4
     motor_abs: List[List[int]] = []
     for _actuator in range(TENDON_LUT_ACTUATOR_COUNT):
-        anchor = struct.unpack(">i", payload[idx:idx + 4])[0]
+        anchor = struct.unpack('>i', payload[idx:idx + 4])[0]
         idx += 4
         row: List[int] = []
         for _sample in range(TENDON_LUT_MAX_SAMPLES):
-            encoded = struct.unpack(">h", payload[idx:idx + 2])[0]
+            encoded = struct.unpack('>h', payload[idx:idx + 2])[0]
             idx += 2
             row.append(anchor + encoded)
         motor_abs.append(row)
-    result["tendonLutMotorAbs"] = motor_abs
-
-    result["mappingVersion"] = int(payload[idx])
+    result['tendonLutMotorAbs'] = motor_abs
+    result['mappingVersion'] = int(payload[idx])
     idx += 1
-    result["angleMin"] = _unpack_float_be(payload[idx:idx + 4])
+    result['angleMin'] = _unpack_float_be(payload[idx:idx + 4])
     idx += 4
-    result["urdfConfigCrc"] = struct.unpack(">I", payload[idx:idx + 4])[0]
+    result['urdfConfigCrc'] = struct.unpack('>I', payload[idx:idx + 4])[0]
     idx += 4
-    result["autoMinRaw"] = struct.unpack(">H", payload[idx:idx + 2])[0]
+    result['autoMinRaw'] = struct.unpack('>H', payload[idx:idx + 2])[0]
     idx += 2
-    result["autoMaxRaw"] = struct.unpack(">H", payload[idx:idx + 2])[0]
+    result['autoMaxRaw'] = struct.unpack('>H', payload[idx:idx + 2])[0]
     idx += 2
-    result["manualReferenceCrc"] = struct.unpack(">I", payload[idx:idx + 4])[0]
+    result['manualReferenceCrc'] = struct.unpack('>I', payload[idx:idx + 4])[0]
     idx += 4
-    result["currentMinDeg"] = _unpack_float_be(payload[idx:idx + 4])
+    result['currentMinDeg'] = _unpack_float_be(payload[idx:idx + 4])
     idx += 4
-    result["currentMaxDeg"] = _unpack_float_be(payload[idx:idx + 4])
+    result['currentMaxDeg'] = _unpack_float_be(payload[idx:idx + 4])
     idx += 4
-    result["hasManualScaledV4Fields"] = True
-
-    result["assemblyWarningReason"] = CALIB_WARN_NONE
-    result["autoMinOffsetCounts"] = 0
-    result["autoMaxShortfallCounts"] = 0
-    result["assemblyAutoSpanCounts"] = 0
-    result["assemblyManualSpanCounts"] = 0
-    result["assemblyUrdfSpanCounts"] = 0
-    result["assemblySpanDifferenceCounts"] = 0
-    result["hasAssemblyWarningFields"] = False
-    result["hasAssemblySpanComparisonFields"] = False
-    if len(payload) >= 202:
-        result["assemblyWarningReason"] = int(payload[idx])
-        idx += 1
-        result["autoMinOffsetCounts"] = struct.unpack(
-            ">h", payload[idx:idx + 2]
-        )[0]
-        idx += 2
-        result["autoMaxShortfallCounts"] = struct.unpack(
-            ">h", payload[idx:idx + 2]
-        )[0]
-        idx += 2
-        result["assemblyAutoSpanCounts"] = struct.unpack(
-            ">H", payload[idx:idx + 2]
-        )[0]
-        idx += 2
-        result["assemblyManualSpanCounts"] = struct.unpack(
-            ">H", payload[idx:idx + 2]
-        )[0]
-        idx += 2
-        result["assemblyUrdfSpanCounts"] = struct.unpack(
-            ">H", payload[idx:idx + 2]
-        )[0]
-        idx += 2
-        result["assemblySpanDifferenceCounts"] = struct.unpack(
-            ">H", payload[idx:idx + 2]
-        )[0]
-        idx += 2
-        result["hasAssemblyWarningFields"] = True
-        result["hasAssemblySpanComparisonFields"] = True
-    # 固件上行包在 202-byte V4 数据体后追加 P4 单调时钟；下发体没有该字段。
-    result["deviceTimestampMs"] = None
-    if len(payload) == 206:
-        result["deviceTimestampMs"] = struct.unpack(">I", payload[idx:idx + 4])[0]
-        idx += 4
+    result['hasManualScaledV4Fields'] = True
+    result['assemblyWarningReason'] = CALIB_WARN_NONE
+    result['autoMinOffsetCounts'] = 0
+    result['autoMaxShortfallCounts'] = 0
+    result['assemblyAutoSpanCounts'] = 0
+    result['assemblyManualSpanCounts'] = 0
+    result['assemblyUrdfSpanCounts'] = 0
+    result['assemblySpanDifferenceCounts'] = 0
+    result['hasAssemblyWarningFields'] = False
+    result['hasAssemblySpanComparisonFields'] = False
+    result['assemblyWarningReason'] = int(payload[idx])
+    idx += 1
+    result['autoMinOffsetCounts'] = struct.unpack('>h', payload[idx:idx + 2])[0]
+    idx += 2
+    result['autoMaxShortfallCounts'] = struct.unpack('>h', payload[idx:idx + 2])[0]
+    idx += 2
+    result['assemblyAutoSpanCounts'] = struct.unpack('>H', payload[idx:idx + 2])[0]
+    idx += 2
+    result['assemblyManualSpanCounts'] = struct.unpack('>H', payload[idx:idx + 2])[0]
+    idx += 2
+    result['assemblyUrdfSpanCounts'] = struct.unpack('>H', payload[idx:idx + 2])[0]
+    idx += 2
+    result['assemblySpanDifferenceCounts'] = struct.unpack('>H', payload[idx:idx + 2])[0]
+    idx += 2
+    result['hasAssemblyWarningFields'] = True
+    result['hasAssemblySpanComparisonFields'] = True
+    result['deviceTimestampMs'] = None
     return result
 
 
@@ -770,6 +620,29 @@ def parse_task_diag_packet(payload: bytes) -> Optional[dict]:
     )
     for name in io_names:
         result[name] = [read_u32() for _ in range(4)]
+    return result
+
+
+def parse_control_components_packet(payload: bytes) -> Optional[dict]:
+    """Same-cycle raw PI/reversal components, before final output constraints."""
+    if len(payload) != 210 or payload[0] != 1 or not 1 <= payload[5] <= 100:
+        return None
+    return dict(sequence=struct.unpack_from('>I', payload, 1)[0], divisor=payload[5],
+                proportional_counts=list(struct.unpack_from('>27h', payload, 6)),
+                integral_counts=list(struct.unpack_from('>27h', payload, 60)),
+                reversal_counts=list(struct.unpack_from('>27h', payload, 114)),
+                slow_deg=[None if value == 32767 else value / 100.0
+                          for value in struct.unpack_from('>21h', payload, 168)])
+
+
+def parse_control_detail_packet(payload: bytes) -> Optional[dict]:
+    if len(payload) != 240:
+        return None
+    result = dict(zip(('sequence', 'servo_timestamp', 'control_dt_us', 'servo_valid_mask',
+                       'recovery_applied_mask', 'p4_trace_dropped'), struct.unpack_from('>6I', payload)))
+    result.update(actual_abs=list(struct.unpack_from('>27i', payload, 24)),
+                  pid_counts=list(struct.unpack_from('>27h', payload, 132)),
+                  recovery_counts=list(struct.unpack_from('>27h', payload, 186)))
     return result
 
 
@@ -993,15 +866,14 @@ def parse_direct_target_result_packet(
 
 
 def parse_fault_status_packet(payload: bytes) -> Optional[Tuple[int, List[Optional[int]]]]:
-    if len(payload) < 4:
+    if len(payload) != 4 + MOTOR_COUNT * 2:
         return None
     fault_bitmap = struct.unpack(">I", payload[:4])[0]
     trigger_loads: List[Optional[int]] = [None] * MOTOR_COUNT
-    if len(payload) >= 4 + MOTOR_COUNT * 2:
-        offset = 4
-        for i in range(MOTOR_COUNT):
-            trigger_loads[i] = struct.unpack(">h", payload[offset:offset + 2])[0]
-            offset += 2
+    offset = 4
+    for i in range(MOTOR_COUNT):
+        trigger_loads[i] = struct.unpack(">h", payload[offset:offset + 2])[0]
+        offset += 2
     return fault_bitmap, trigger_loads
 
 
@@ -1067,21 +939,7 @@ def parse_tactile_full_fragment(
             full_crc,
         )
 
-    if len(payload) < 4:
-        return None
-    seq = payload[0]
-    frag_idx = payload[1]
-    frag_count = payload[2]
-    chunk_len = payload[3]
-    if frag_count <= 0 or frag_idx >= frag_count:
-        return None
-    if len(payload) != 4 + chunk_len:
-        return None
-    return seq, frag_idx, frag_count, bytes(payload[4:4 + chunk_len]), None, None
-
-
-def build_calibrate_cmd() -> bytes:
-    return _build_command_frame(CMD_CALIBRATE)
+    return None
 
 
 def build_start_cmd() -> bytes:
@@ -1147,8 +1005,6 @@ def build_run_feedback_cmd() -> bytes:
 
 
 
-def build_pause_cmd() -> bytes:
-    return _build_command_frame(CMD_PAUSE, b"")
 
 
 def build_restore_multiturn_cmd(active_motor_mask: int, motor_abs: List[int]) -> bytes:
@@ -1369,9 +1225,11 @@ def build_task_diag_subscribe_cmd(enabled: bool) -> bytes:
     return _build_command_frame(CMD_TASK_DIAG_SUBSCRIBE, bytes([1 if enabled else 0]))
 
 
-def build_control_trace_subscribe_cmd(enabled: bool) -> bytes:
+def build_control_trace_subscribe_cmd(enabled: bool, divisor: int = 5) -> bytes:
     """仅在数据记录期间开启同一 P4 时钟的控制跟踪流。"""
-    return _build_command_frame(CMD_CONTROL_TRACE_SUBSCRIBE, bytes([1 if enabled else 0]))
+    if isinstance(divisor, bool) or int(divisor) != divisor or not 1 <= divisor <= 100:
+        raise ValueError("Control trace divisor must be 1..100")
+    return _build_command_frame(CMD_CONTROL_DIAGNOSTICS, bytes([1 if enabled else 0, divisor]))
 
 
 def build_manual_encoder_single_cmd(joint: int, min_raw: int, max_raw: int) -> bytes:

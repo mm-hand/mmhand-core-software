@@ -2,6 +2,7 @@
 #include "HalSensorSpi.h"
 
 #include <SPI.h>
+#include <Preferences.h>
 #include <cstring>
 
 namespace {
@@ -21,6 +22,8 @@ constexpr uint16_t kDelaySelectSettleUs = 80;
 constexpr uint8_t kSummaryReadAttempts = 2;
 constexpr uint8_t kFullReadAttempts = 1;
 constexpr uint16_t kRetryDelayUs = 200;
+// Page ID 0/1/2 is manufacturer selector 1/2/3, identical to dest_id.
+constexpr uint8_t kPhysicalSlotBits[3] = {0x01, 0x02, 0x03};
 
 struct SensorPattern {
     bool enabled;  ///< 是否扫描该物理模块。
@@ -150,6 +153,9 @@ HalTactile::HalTactile()
       _lastReadResult{TactileReadFailReason::None, 0, 0, 0},
       _lastReadAttempts(0) {
     memset(_data, 0, sizeof(TactileData));
+    for (uint8_t group = 0; group < TACTILE_GROUP_NUM; ++group)
+        for (uint8_t sensor = 0; sensor < TACTILE_SENSOR_PER_GROUP; ++sensor)
+            _physicalRoute[group][sensor] = kSensorPatterns[group][sensor].pattern;
 }
 
 /** @brief 在10秒启动等待前释放所有触觉路由，避免同时选中多个模块。 */
@@ -173,6 +179,19 @@ void HalTactile::prepareBootSelectPins() {
 void HalTactile::begin() {
     prepareBootSelectPins();
     _spiReady = setupSPI();
+    Preferences preferences;
+    if (preferences.begin("pax-route-v2", true)) {
+        for (uint8_t group = 0; group < TACTILE_GROUP_NUM; ++group) {
+            char key[4]; snprintf(key, sizeof(key), "g%u", group);
+            const uint8_t slots = preferences.getUChar(key, 0x06);
+            const uint8_t a = slots & 3, b = (slots >> 2) & 3, c = (slots >> 4) & 3;
+            if (a >= 3 || b >= 3 || c >= 3 || a == b || a == c || b == c) continue;
+            _physicalRoute[group][0] = makeSelectorPattern(group, kPhysicalSlotBits[a]);
+            _physicalRoute[group][1] = makeSelectorPattern(group, kPhysicalSlotBits[b]);
+            _physicalRoute[group][2] = makeSelectorPattern(group, kPhysicalSlotBits[c]);
+        }
+        preferences.end();
+    }
     if (!_spiReady) {
         Serial.println("[Tactile] SPI init failed");
     }
@@ -192,6 +211,94 @@ uint8_t HalTactile::crc8(const uint8_t* data, uint32_t len) {
         crc = kCrc8Table[crc ^ *data++];
     }
     return crc;
+}
+
+bool HalTactile::probePhysical(uint8_t physicalIndex) {
+    if (physicalIndex >= TACTILE_MODULE_NUM) return false;
+    const uint8_t group = physicalIndex / 3, slot = physicalIndex % 3;
+    uint8_t sample[3] = {};
+    return readRegisters(makeSelectorPattern(group, kPhysicalSlotBits[slot]),
+                         kForceSummaryAddr, sample, sizeof(sample));
+}
+
+bool HalTactile::verifyPhysicalModel(uint8_t physicalIndex, uint8_t model) {
+    if (physicalIndex >= TACTILE_MODULE_NUM || (model != 1 && model != 2)) return false;
+    uint8_t full[TACTILE_SENSOR0_TAXELS * TACTILE_AXIS_COUNT] = {};
+    return readRegisters(makeSelectorPattern(physicalIndex / 3, kPhysicalSlotBits[physicalIndex % 3]),
+                         kForceDistributionAddr, full, model == 1 ? 156 : 75);
+}
+
+uint8_t HalTactile::inspectSensor(uint8_t found, uint8_t* semanticIndex, uint8_t* model) {
+    if (found >= TACTILE_MODULE_NUM || !probePhysical(found)) return 0;
+    const uint8_t group = found / 3;
+    const uint8_t pattern = makeSelectorPattern(group, kPhysicalSlotBits[found % 3]);
+    uint8_t semantic = 0xFF;
+    for (uint8_t slot = 0; slot < 3; ++slot)
+        if (_physicalRoute[group][slot] == pattern) semantic = group * 3 + slot;
+    if (semantic == 0xFF) return 0xFF;
+    // The verified physical installation registry fixes the module model.
+    const uint8_t registeredModel = semantic % 3 == 0 ? 1 : 2;
+    if (!verifyPhysicalModel(found, registeredModel)) return 0xFF;
+    if (semanticIndex) *semanticIndex = semantic;
+    if (model) *model = registeredModel;
+    return 1;
+}
+
+bool HalTactile::writeSensorId(uint8_t physicalIndex, uint8_t destinationId, bool* writeSent) {
+    if (writeSent) *writeSent = false;
+    if (!_spiReady || !_spi || physicalIndex >= TACTILE_MODULE_NUM || destinationId < 1 || destinationId > 3)
+        return false;
+    const uint8_t group = physicalIndex / 3;
+    const uint8_t pattern = makeSelectorPattern(group, kPhysicalSlotBits[physicalIndex % 3]);
+    uint8_t unlock[7] = {0x7A, 0x01, 0x00, 0x01, 0x00, 0xA1, 0};
+    uint8_t rename[7] = {0x7E, 0x23, 0x00, 0x01, 0x00, destinationId, 0};
+    unlock[6] = crc8(unlock, 6);
+    rename[6] = crc8(rename, 6);
+    auto send = [&](uint8_t* frame) {
+        setAllSelectPinsHigh(); setSelectorPattern(pattern);
+        delayMicroseconds(kDelayCsHoldUs);
+        spi_transaction_t transaction = {};
+        transaction.length = 7 * 8U;
+        transaction.tx_buffer = frame;
+        const bool ok = spi_device_transmit(_spi, &transaction) == ESP_OK;
+        delayMicroseconds(kDelayCsHoldUs); setAllSelectPinsHigh();
+        return ok;
+    };
+    if (!send(unlock)) return false;
+    delay(2);
+    const bool sent = send(rename);
+    if (writeSent) *writeSent = sent;
+    return sent;
+}
+
+bool HalTactile::remapSensor(uint8_t semanticIndex, uint8_t newPhysicalIndex) {
+    if (semanticIndex >= TACTILE_MODULE_NUM || newPhysicalIndex >= TACTILE_MODULE_NUM ||
+        semanticIndex / 3 != newPhysicalIndex / 3) return false;
+    const uint8_t group = semanticIndex / 3, slot = semanticIndex % 3;
+    const uint8_t oldPattern = _physicalRoute[group][slot];
+    const uint8_t newPattern = makeSelectorPattern(group, kPhysicalSlotBits[newPhysicalIndex % 3]);
+    uint8_t displaced = slot;
+    for (uint8_t other = 0; other < 3; ++other)
+        if (_physicalRoute[group][other] == newPattern) displaced = other;
+    uint8_t proposed[3] = {_physicalRoute[group][0], _physicalRoute[group][1], _physicalRoute[group][2]};
+    proposed[slot] = newPattern;
+    proposed[displaced] = oldPattern;
+    uint8_t packed = 0;
+    for (uint8_t semantic = 0; semantic < 3; ++semantic) {
+        uint8_t physical = 0xFF;
+        for (uint8_t candidate = 0; candidate < 3; ++candidate)
+            if (proposed[semantic] == makeSelectorPattern(group, kPhysicalSlotBits[candidate]))
+                physical = candidate;
+        if (physical >= 3) return false;
+        packed |= physical << (2 * semantic);
+    }
+    Preferences preferences;
+    if (!preferences.begin("pax-route-v2", false)) return false;
+    char key[4]; snprintf(key, sizeof(key), "g%u", group);
+    const bool saved = preferences.putUChar(key, packed) == 1;
+    preferences.end();
+    if (saved) memcpy(_physicalRoute[group], proposed, sizeof(proposed));
+    return saved;
 }
 
 /** @brief 将所有地址/使能线恢复为非选中状态，并等待硬件稳定。 */
@@ -304,7 +411,7 @@ bool HalTactile::readSensorSummary(uint8_t groupIndex, uint8_t sensorIndex, uint
         return false;
     }
 
-    const SensorPattern cfg = kSensorPatterns[groupIndex][sensorIndex];
+    const SensorPattern cfg = {kSensorPatterns[groupIndex][sensorIndex].enabled, _physicalRoute[groupIndex][sensorIndex]};
     if (!cfg.enabled) {
         memset(globalOut, 0, TACTILE_AXIS_COUNT);
         if (rawOut) {
@@ -358,7 +465,7 @@ bool HalTactile::readSensorForces(uint8_t groupIndex, uint8_t sensorIndex, uint8
         return false;
     }
 
-    const SensorPattern cfg = kSensorPatterns[groupIndex][sensorIndex];
+    const SensorPattern cfg = {kSensorPatterns[groupIndex][sensorIndex].enabled, _physicalRoute[groupIndex][sensorIndex]};
     if (!cfg.enabled) {
         memset(forcesOut, 0, forcesLen);
         return false;
@@ -439,8 +546,8 @@ void HalTactile::update() {
             default:
                 break;
         }
-        nextDiag.lastFailedPattern = kSensorPatterns[moduleIndex / TACTILE_SENSOR_PER_GROUP]
-            [moduleIndex % TACTILE_SENSOR_PER_GROUP].pattern;
+        nextDiag.lastFailedPattern = _physicalRoute[moduleIndex / TACTILE_SENSOR_PER_GROUP]
+            [moduleIndex % TACTILE_SENSOR_PER_GROUP];
         nextDiag.lastFailStatus = _lastReadResult.status;
         nextDiag.lastFailRecvCrc = _lastReadResult.recvCrc;
         nextDiag.lastFailCalcCrc = _lastReadResult.calcCrc;

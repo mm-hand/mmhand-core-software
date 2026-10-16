@@ -159,7 +159,7 @@ def test_second_result_query_recovers_original_transaction_without_new_write(con
     assert controller.comm.send_command.call_args_list.count(call(("servo_rebase_zero", 3))) == 1
 
 
-@pytest.mark.parametrize("change", ["stop", "pause", "owner", "device", "connection"])
+@pytest.mark.parametrize("change", ["stop", "owner", "device", "connection"])
 def test_cancellation_or_safety_change_after_result_prevents_next_write(controller, change):
     scripted_ack(controller, [1])
     capture = controller._service_servo_rebase_zero_capture
@@ -168,8 +168,6 @@ def test_cancellation_or_safety_change_after_result_prevents_next_write(controll
         capture(state)
         if change == "stop":
             controller.stop()
-        elif change == "pause":
-            controller.pause()
         elif change == "owner":
             controller.current_state.servo_target_owner = 1
         elif change == "device":

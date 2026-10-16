@@ -6,6 +6,7 @@
  * 这里负责“何时收发”和跨任务状态同步，后续还会继续拆出恢复管理器。
  */
 #include "ServoBusService.h"
+#include "ServoMaintenance.h"
 
 #include <string.h>
 
@@ -1122,6 +1123,21 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
         return false;
     }
     const uint32_t nowMs = input.nowMs;
+    if (servoMaintenanceBlocksCommands()) g_servoRuntime.feedbackCycle.abort();
+    const bool maintenanceHeld=stepServoMaintenance(sharedData, nowMs);
+    const uint32_t changedIds=takeServoMaintenanceChangedMask();
+    if(changedIds) {
+        g_servoRuntime.hotplugRecoveryAnchors.validMask &= ~changedIds;
+        g_servoRuntime.sessionRebasedMask &= ~changedIds;
+        for(uint8_t motor=0;motor<SERVO_TOTAL_NUM;++motor) if(changedIds & (1UL<<motor)) {
+            g_servoRuntime.hotplugRecoveryAnchors.pending[motor]=ServoHotplugPendingSync{};
+            if(g_servoRuntime.onlineRecovery.activeChannel==motor) {
+                g_servoRuntime.onlineRecovery.activeChannel=0xFF;
+                g_servoRuntime.onlineRecovery.torqueOffComplete=false;
+            }
+        }
+    }
+    if (maintenanceHeld) return true;
     ServoRuntimeContext& runtime = g_servoRuntime;
     const uint32_t loopStartMs = nowMs;
     auto& lastEmergencyStopToken = runtime.lastEmergencyStopToken;
