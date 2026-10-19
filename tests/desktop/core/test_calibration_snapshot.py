@@ -63,6 +63,63 @@ def test_empty_auto_snapshot_is_not_loadable():
     )
 
 
+def two_finger_snapshot(path):
+    payload = merge_snapshot(None, _current_payload(11, _result(11, 14)),
+                             updated_joint_mask=1 << 11)
+    payload = merge_snapshot(payload, _current_payload(15, _result(15, 19)),
+                             updated_joint_mask=1 << 15)
+    atomic_write_snapshot(path, payload)
+    return update_snapshot_multiturn_anchors(
+        path, motor_mask=(1 << 14) | (1 << 19),
+        logical_abs=[8192 + m for m in range(MOTOR_COUNT)],
+        raw=[m for m in range(MOTOR_COUNT)])
+
+
+@pytest.mark.parametrize('action', ['unchanged', 'changed', 'clear', 'release'])
+def test_scoped_manual_and_release_preserve_other_finger_after_reconnect(tmp_path, action):
+    path = tmp_path / 'hand.mmcal.json'
+    before = two_finger_snapshot(path)
+    mins, maxs = [0] * ENCODER_COUNT, [0] * ENCODER_COUNT
+    mins[15], maxs[15] = 100, 5000
+    if action == 'release':
+        invalidate_calibration_snapshot_scope(path, motor_mask=1 << 19,
+            joint_mask=1 << 15, reason='manual_prepare')
+    else:
+        if action == 'changed':
+            maxs[15] = 5100
+        if action == 'clear':
+            mins[15] = maxs[15] = 0
+        update_manual_snapshot(path, valid_mask=0 if action == 'clear' else 1 << 15,
+            min_raw=mins, max_raw=maxs, updated_joint_mask=1 << 15)
+    after = read_snapshot(path)
+    for field, index in [('joint_calib_results', 11), ('manual_reference_min_raw', 11),
+                         ('manual_reference_max_raw', 11), ('motor_abs_limit_min', 14),
+                         ('motor_abs_limit_max', 14), ('multiturn_anchor_logical_abs', 14),
+                         ('multiturn_anchor_raw', 14)]:
+        assert after[field][index] == before[field][index], field
+    for field, bit in [('manual_reference_valid_bitmap', 1 << 11),
+                       ('motor_abs_limit_valid_bitmap', 1 << 14),
+                       ('multiturn_anchor_valid_bitmap', 1 << 14)]:
+        assert parse_mask(after[field]) & bit == parse_mask(before[field]) & bit
+    if action == 'unchanged':
+        assert after['joint_calib_results'] == before['joint_calib_results']
+        assert parse_mask(after['updated_joint_mask']) == 0
+    else:
+        assert after['joint_calib_results'][15] is None
+        assert not parse_mask(after['motor_abs_limit_valid_bitmap']) & (1 << 19)
+        assert not parse_mask(after['multiturn_anchor_valid_bitmap']) & (1 << 19)
+
+
+def test_full_manual_replace_still_removes_missing_entries(tmp_path):
+    path = tmp_path / 'hand.mmcal.json'
+    two_finger_snapshot(path)
+    update_manual_snapshot(path, valid_mask=0, min_raw=[0] * ENCODER_COUNT,
+                           max_raw=[0] * ENCODER_COUNT)
+    after = read_snapshot(path)
+    assert parse_mask(after['manual_reference_valid_bitmap']) == 0
+    assert after['joint_calib_results'] == [None] * ENCODER_COUNT
+
+
 def test_partial_recalibration_preserves_unaffected_joint_and_limits():
     previous = merge_snapshot(
         None,

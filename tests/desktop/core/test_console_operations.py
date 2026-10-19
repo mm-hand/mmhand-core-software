@@ -1,4 +1,6 @@
 """Console transactions, cancellation and recording lifecycle with simulated hardware."""
+
+from _clock_helpers import stamp
 import threading
 import time
 from unittest.mock import Mock
@@ -46,12 +48,14 @@ def joint_preparation_device(hand, monkeypatch, *, ready_state=SYSTEM_STATE_READ
         state.require_can_feedback = require_can
         state.control_mode = ControlMode.JOINT_ANGLE.value
         state.system_status_last_rx_ts = time.time()
+        stamp(state, 'system_status_last_rx_ts')
         return True
 
     scope_writer = Mock(side_effect=scope)
     monkeypatch.setattr(controller, 'set_active_scope', scope_writer)
     state.has_sensor_data = True
     state.encoder_mapped_last_rx_ts = time.time()
+    stamp(state, 'encoder_mapped_last_rx_ts')
     state.encoder_mapped_p4_time_ms = state.p4_time_ms
     for encoder in state.encoders:
         encoder.angle_error = False
@@ -68,6 +72,7 @@ def joint_preparation_device(hand, monkeypatch, *, ready_state=SYSTEM_STATE_READ
             state.servo_target_owner = 0
             if fault != 'old_status':
                 state.system_status_last_rx_ts = time.time()
+                stamp(state, 'system_status_last_rx_ts')
             if fault == 'wrong_motor_scope':
                 state.active_motor_mask ^= 1 << 26
             elif fault == 'wrong_joint_scope':
@@ -94,11 +99,13 @@ def joint_preparation_device(hand, monkeypatch, *, ready_state=SYSTEM_STATE_READ
             state.system_state = SYSTEM_STATE_READY
             state.servo_target_owner = 0; state.control_enabled = False
             state.system_status_last_rx_ts = received + .000001
+            stamp(state, 'system_status_last_rx_ts')
         if sent and isinstance(command, tuple) and command[0] == 'joint_target_run_masked':
             state.system_state = SYSTEM_STATE_RUN_FEEDBACK
             state.control_enabled = True
             state.servo_target_owner = 1
             state.system_status_last_rx_ts = time.time()
+            stamp(state, 'system_status_last_rx_ts')
         return sent
 
     monkeypatch.setattr(comm, 'send_command', reply)
@@ -166,6 +173,7 @@ def test_joint_enable_rechecks_current_pose_after_parameter_sync(hand, monkeypat
             state.encoders[3].raw = 512
         elif after_ack == 'stale':
             state.encoder_mapped_last_rx_ts = time.time() - 2
+            stamp(state, 'encoder_mapped_last_rx_ts')
         elif after_ack == 'invalid':
             state.encoders[3].angle_error = True
         else:
@@ -206,6 +214,7 @@ def test_mapped_angle_freshness_accepts_heartbeat_skew_and_clock_wrap(
     state.p4_time_ms = status_ms
     state.encoder_mapped_p4_time_ms = sample_ms
     state.encoder_mapped_last_rx_ts = time.time() - age
+    stamp(state, 'encoder_mapped_last_rx_ts')
     assert hand._mapped_feedback_fresh(state) is expected
 
 
@@ -240,6 +249,31 @@ def test_joint_ready_requires_matching_persisted_pair(hand):
     assert hand.application_snapshot()['joints'][0]['joint_quality'] == ['UNKNOWN']
 
 
+def test_saved_manual_not_loaded_in_p4_is_distinguished_from_missing(hand):
+    hand._manual_saved_pairs[11] = (12000, 11000)
+    rows = hand.application_snapshot()['joints']
+    assert rows[11]['persistence'] == 'Saved in JSON; not loaded in P4'
+    assert not rows[11]['manual_valid']
+    assert rows[10]['persistence'] == 'RAM / JSON unknown'
+
+
+def test_clear_manual_selected_passes_only_selected_json_scope(hand, monkeypatch):
+    hand._selected_joints = (12, 13)
+    state = hand._controller.current_state
+    state.manual_reference_min_raw = [100] * 21
+    state.manual_reference_max_raw = [5000] * 21
+    hand._manual_saved_pairs[11] = (100, 5000)
+    monkeypatch.setattr(hand, 'query_manual_encoder_references', lambda: True)
+    writer = Mock(return_value=True)
+    monkeypatch.setattr(hand, 'set_manual_encoder_references', writer)
+    item = wait_operation(hand, hand.request_clear_manual())
+    assert item['status'] == 'SUCCESS'
+    assert writer.call_args.kwargs == {'updated_joint_mask': (1 << 12) | (1 << 13)}
+    assert writer.call_args.args[0][11:14] == [100, 0, 0]
+    assert writer.call_args.args[1][11:14] == [5000, 0, 0]
+    assert hand._manual_saved_pairs[11] == (100, 5000)
+
+
 @pytest.mark.parametrize('faults', [0, 0x50, 0x51])
 def test_clear_faults_releases_host_stop_even_when_live_hardware_faults_recur(hand, monkeypatch, faults):
     comm, _ = joint_preparation_device(hand, monkeypatch)
@@ -251,6 +285,7 @@ def test_clear_faults_releases_host_stop_even_when_live_hardware_faults_recur(ha
     def reset_ack(*args, **kwargs):
         received = time.time()
         state.system_status_last_rx_ts = received + 0.000001
+        stamp(state, 'system_status_last_rx_ts')
         return (206, 0, 2, received)
 
     monkeypatch.setattr(comm, 'wait_for_ack', reset_ack)
@@ -306,11 +341,13 @@ def test_overload_uses_fresh_fault_packet_instead_of_inferred_load(hand):
     state = hand._controller.current_state
     state.has_fault_status_data = state.has_servo_route_status = True
     state.fault_status_last_rx_ts = time.time()
+    stamp(state, 'fault_status_last_rx_ts')
     state.servo_overload_fault[0] = True
     assert hand.application_snapshot()['badges']['Overload'] == 'ACTIVE'
     state.servo_overload_fault[0] = False
     assert hand.application_snapshot()['badges']['Overload'] == 'CLEAR'
     state.fault_status_last_rx_ts = time.time() - 1
+    stamp(state, 'fault_status_last_rx_ts')
     assert hand.application_snapshot()['badges']['Overload'] == 'UNKNOWN'
 
 def test_manual_transaction_blocks_other_motion_owners(hand):

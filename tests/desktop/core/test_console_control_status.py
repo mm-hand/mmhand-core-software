@@ -1,4 +1,6 @@
 """Control badges reflect confirmed P4 execution, independently of UI selection."""
+
+from _clock_helpers import stamp
 import time
 import pytest
 from test_application_actions import hand
@@ -60,6 +62,7 @@ def test_unavailable_confirmation_displays_unknown_in_both_pages(hand, monkeypat
         state.has_active_scope_status = False
     elif missing == 'stale':
         state.system_status_last_rx_ts = time.time() - 1
+        stamp(state, 'system_status_last_rx_ts')
     else:
         monkeypatch.setattr(hand, 'is_comm_connected', lambda: False)
     snapshot = hand.application_snapshot()

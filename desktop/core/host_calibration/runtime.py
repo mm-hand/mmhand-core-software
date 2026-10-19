@@ -21,7 +21,7 @@ from ..angle_mapping import get_spec, urdf_manual_scaled_mapping_metadata
 from ..calibration_snapshot import (
     CalibrationSnapshotStore, update_snapshot_multiturn_anchors,
 )
-from ..data_models import HandModel
+from ..data_models import HandModel, resolve_joint_workspace_range
 from ..communication.feedback_history import (
     FeedbackCursor, FeedbackHistoryError, TimestampedFeedbackHistory,
 )
@@ -43,14 +43,18 @@ from ..protocol import (
 )
 from ..session_log import log_session
 from .config import (
-    default_encoder_direction, joint_motors, kEncoderRecoveryStableSamples,
+    default_auto_calibration_params,
+    default_encoder_direction, joint_motors, finger_aa_joint, shorten_sign,
+    motor_apply_tendon_delta, kEncoderRecoveryStableSamples,
     kEncoderRecoveryTimeoutMs, kEncoderTrustedSampleMaxAgeMs,
     kFeedbackReadyServoTimeoutMs, kServoRecoveryStableSamples,
     kServoRecoveryTimeoutMs, kHostTargetResultTimeoutMs, kHostRebaseFeedbackTimeoutMs,
     kOverloadLoadThreshold, load_magnitude,
     kTendonFitSampleStepDeg,
 )
-from .math import TendonRawFitBuffer, encoder_count_to_deg, wrap_encoder_delta
+from .math import (TendonRawFitBuffer, encoder_count_to_deg, wrap_encoder_delta,
+                   map_manual_scaled_encoder_to_urdf)
+from .finish import dual_lut_targets
 from .time_alignment import TimeAlignmentError, align_feedback
 
 
@@ -85,6 +89,9 @@ class HostCalibrationIO:
         self._motion_scope = self.selected_motor_mask
         self._limits = {}
         self._committed_joint_results = {}
+        self._aa_hold = None
+        self._aa_drift = (None, 0)
+        self.control_loss_reason = ''
         self._lut_sampling_windows = {}
         self._lut_sampling_diagnostics = {}
         self.lut_sampling_error = ''
@@ -97,6 +104,7 @@ class HostCalibrationIO:
         self._rebase_zero_applied = False
         self._rebase_windows = []
         self._target_token = None
+        self._session_finished = False
         self._saved_mode = controller.get_control_mode()
 
     def cancel(self):
@@ -119,52 +127,57 @@ class HostCalibrationIO:
         self._cancel.wait(max(0, milliseconds) / 1000.0)
 
     def owns_control(self):
-        if (self._cancel.is_set() or self.cancel_check() or
-                self.controller.comm is None or
-                self.controller._host_calibration_io is not self):
-            return False
-        state = self._state()
-        if (not state.has_system_status_data or
-                time.time() - state.system_status_last_rx_ts > 1.0):
-            return False
-        if self._motion_started:
-            scope = self._motion_scope
-            faults = state.system_fault_bitmap & ~SYSTEM_FAULT_CALIBRATION
-            if not (scope & ~state.servo_online_bitmap):
-                faults &= ~SYSTEM_FAULT_SERVO_OFFLINE
-            if not (scope & state.multi_turn_unknown_bitmap):
-                faults &= ~SYSTEM_FAULT_MULTITURN_UNKNOWN
-            if faults or scope & state.servo_route_conflict_bitmap:
-                return False
-            if (state.system_state == SYSTEM_STATE_RUN_DIRECT and
-                    state.control_enabled and state.servo_target_owner == 1):
-                return True
-            # 普通直控到位会自动回到静止态；自己的同步写成功回执仍有效。
-            # 外部 STOP 则进入 UNCONTROLLABLE，不能据此继续校准。
-            return (state.system_state in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY,
-                    SYSTEM_STATE_RECOVERY_REQUIRED) and not state.control_enabled and
-                    state.servo_target_owner == 0 and
-                    state.direct_target_token == self._target_token and
-                    state.direct_target_status == 2)
-        return state.system_state in (
-            SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE,
-            SYSTEM_STATE_READY, SYSTEM_STATE_RECOVERY_REQUIRED,
-        ) and not state.control_enabled and state.servo_target_owner == 0
+        reason = ''
+        if (self._cancel.is_set() or self.cancel_check() or self.controller.comm is None
+                or self.controller._host_calibration_io is not self):
+            reason = 'session cancelled, replaced or disconnected'
+        else:
+            state = self._state()
+            age = time.monotonic() - state.received_at('system_status_last_rx_ts')
+            if not state.has_system_status_data or age > 1.0:
+                reason = f'system status stale or missing (age={age:.3f}s)'
+            elif self._motion_started:
+                scope = self._motion_scope
+                faults = state.system_fault_bitmap & ~SYSTEM_FAULT_CALIBRATION
+                if not (scope & ~state.servo_online_bitmap):
+                    faults &= ~SYSTEM_FAULT_SERVO_OFFLINE
+                if not (scope & state.multi_turn_unknown_bitmap):
+                    faults &= ~SYSTEM_FAULT_MULTITURN_UNKNOWN
+                if faults or scope & state.servo_route_conflict_bitmap:
+                    reason = f'faults=0x{faults:X}, route conflicts=0x{scope & state.servo_route_conflict_bitmap:X}'
+                elif (state.system_state == SYSTEM_STATE_RUN_DIRECT and
+                      state.control_enabled and state.servo_target_owner == 1):
+                    return True
+                elif not (state.system_state in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY,
+                        SYSTEM_STATE_RECOVERY_REQUIRED) and not state.control_enabled and
+                        state.servo_target_owner == 0 and state.direct_target_token == self._target_token
+                        and state.direct_target_status == 2):
+                    reason = (f'state={state.system_state}, owner={state.servo_target_owner}, '
+                              f'token={state.direct_target_token}/{self._target_token}, result={state.direct_target_status}')
+            elif (state.system_state not in (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE,
+                    SYSTEM_STATE_READY, SYSTEM_STATE_RECOVERY_REQUIRED)
+                    or state.control_enabled or state.servo_target_owner):
+                reason = f'not stopped: state={state.system_state}, owner={state.servo_target_owner}'
+        if reason:
+            if reason != self.control_loss_reason:
+                log_session('HOST_CALIB', f'control lost: {reason}')
+            self.control_loss_reason = reason
+        return not reason
 
     @staticmethod
     def _age(state, timestamp, received_at):
         if not received_at:
             return float('inf')
-        now = time.time()
+        now = time.monotonic()
         host_age = max(0.0, (now - received_at) * 1000)
         if state.has_p4_time:
             # p4_time_ms 是最近一个包的时间；任务诊断/安全事件可携带历史时间。
             # SYSTEM_STATUS 携带当前设备时间，配合其接收时刻估计现在的样本年龄。
             reference = state.p4_time_ms
             elapsed = 0.0
-            if state.has_system_status_data and state.system_status_last_rx_ts:
+            if state.has_system_status_data and state.received_at('system_status_last_rx_ts'):
                 reference = state.system_status_p4_time_ms
-                elapsed = max(0.0, (now - state.system_status_last_rx_ts) * 1000)
+                elapsed = max(0.0, (now - state.received_at('system_status_last_rx_ts')) * 1000)
             delta = (reference - timestamp) & 0xFFFFFFFF
             if delta >= 0x80000000:
                 delta -= 0x100000000
@@ -174,7 +187,7 @@ class HostCalibrationIO:
     def snapshot(self):
         state = self._state()
         age = self._age(state, state.servo_feedback_p4_time_ms,
-                        state.servo_abs_last_rx_ts)
+                        state.received_at('servo_abs_last_rx_ts'))
         return {
             'servo_feedback_age_ms': age,
             'servo_online_bitmap': state.servo_online_bitmap,
@@ -196,7 +209,7 @@ class HostCalibrationIO:
         state = self._state()
         bit = 1 << joint
         age = self._age(state, getattr(state, 'encoder_raw_p4_time_ms', 0),
-                        state.encoder_raw_last_rx_ts)
+                        state.received_at('encoder_raw_last_rx_ts'))
         if (not state.has_encoder_raw_data or age > kEncoderTrustedSampleMaxAgeMs
                 or not state.can_link_online or not (state.encoder_online_bitmap & bit)
                 or state.encoder_fault_bitmap & bit or state.encoders[joint].raw_error):
@@ -212,7 +225,7 @@ class HostCalibrationIO:
         if (not state.has_servo_angle_data or
                 not state.servo_online_bitmap & (1 << motor) or
                 self._age(state, state.servo_feedback_p4_time_ms,
-                          state.servo_abs_last_rx_ts) > kFeedbackReadyServoTimeoutMs):
+                          state.received_at('servo_abs_last_rx_ts')) > kFeedbackReadyServoTimeoutMs):
             return None
         return int(state.servo_angles[motor])
 
@@ -227,7 +240,7 @@ class HostCalibrationIO:
         state = self._state()
         if (not state.servo_telem_online[motor] or self._age(
                 state, getattr(state, 'servo_telem_p4_time_ms', 0),
-                getattr(state, 'servo_telem_last_rx_ts', 0)) > kFeedbackReadyServoTimeoutMs):
+                state.received_at('servo_telem_last_rx_ts')) > kFeedbackReadyServoTimeoutMs):
             return None
         return int(state.servo_load[motor])
 
@@ -361,7 +374,161 @@ class HostCalibrationIO:
                 if actual is None:
                     return None
                 targets[motor] = actual
+        if self._aa_hold:
+            aa, result, center, fixed = self._aa_hold
+            try:
+                state, angle = self._finger_aa_feedback(aa, result)
+                stamp = state.encoder_raw_p4_time_ms
+                last, count = self._aa_drift
+                if stamp != last:
+                    count = count + 1 if abs(angle - center) > 3.0 else 0
+                    self._aa_drift = (stamp, count)
+                if count >= 3:
+                    raise ValueError(f'AA drifted from midpoint {center:.2f} deg (actual {angle:.2f})')
+            except ValueError as exc:
+                self.motion_publish_error = f'J{aa:02d}: {exc}'
+                self.trace('AA_MIDPOINT_FAILED', aa, reason=str(exc))
+                return None
+            targets.update(fixed)
         return targets
+
+    @staticmethod
+    def finger_aa_motor_mask(joints):
+        aas = {finger_aa_joint(j) for j in joints} - {None}
+        return sum(1 << m for aa in aas for m in joint_motors(aa))
+
+    def _finger_aa_plan(self, aa):
+        state = self._state()
+        result = self.calibration_result(aa)
+        if result is not None:
+            state.joint_calib_results[aa] = result
+            result['hasManualScaledV4Fields'] = True
+            state.auto_calibration_valid_bitmap |= 1 << aa
+        else:
+            result = state.joint_calib_results[aa]
+        workspace = resolve_joint_workspace_range(state, aa, *self.urdf_limits(aa),
+                                                  4, self.urdf_config_crc())
+        if not workspace.ready:
+            raise ValueError(f'load or calibrate AA first: {workspace.reason}')
+        if not state.has_manual_reference_encoder_directions:
+            raise ValueError('AA encoder installation direction is unavailable')
+        motors = joint_motors(aa)
+        mask = sum(1 << m for m in motors)
+        if (not state.has_servo_route_status or mask & ~state.servo_route_controllable_bitmap
+                or mask & state.servo_route_conflict_bitmap or mask & state.multi_turn_unknown_bitmap):
+            raise ValueError('AA motor routes or multi-turn coordinates are untrusted')
+        first = float(result['tendonLutAngleStartDeg'])
+        last = first + float(result['tendonLutAngleStepDeg']) * (int(result['tendonLutCount']) - 1)
+        low = max(workspace.current_min_deg, first)
+        high = min(workspace.current_max_deg, last)
+        center = (low + high) / 2
+        if low >= high or dual_lut_targets(result, motors, center) is None:
+            raise ValueError('AA midpoint requires a valid dual LUT; extrapolation is forbidden')
+        limits = {}
+        for motor in motors:
+            bounds = self._limits.get(motor)
+            if bounds is None and state.motor_abs_limit_valid_bitmap & (1 << motor):
+                bounds = state.motor_abs_limit_min[motor], state.motor_abs_limit_max[motor]
+            hardware = self.logical_range(motor)
+            if bounds is None or hardware is None:
+                raise ValueError('AA midpoint requires trusted motor limits')
+            limits[motor] = max(bounds[0], hardware[0]), min(bounds[1], hardware[1])
+            if limits[motor][0] >= limits[motor][1]:
+                raise ValueError('AA motor limits are invalid')
+        return result, center, limits
+
+    def preflight_finger_aa(self, joints):
+        """Check unselected dependencies before any selected motor is reset."""
+        for aa in sorted({finger_aa_joint(j) for j in joints} - {None}):
+            if self.selected_joint_mask & (1 << aa):
+                continue
+            try:
+                self._finger_aa_plan(aa)
+            except (ValueError, TypeError, KeyError, IndexError) as exc:
+                self.feedback_recovery_error = f'J{aa:02d}: {exc}'
+                return False
+        return True
+
+    def _finger_aa_feedback(self, aa, result):
+        state = self._state()
+        mask = sum(1 << m for m in joint_motors(aa))
+        if (not self._fresh_feedback(state, mask) or mask & ~state.servo_route_controllable_bitmap
+                or mask & state.servo_route_conflict_bitmap
+                or not state.has_encoder_raw_data or not state.can_link_online
+                or not state.encoder_online_bitmap & (1 << aa)
+                or state.encoder_fault_bitmap & (1 << aa) or state.encoders[aa].raw_error
+                or self._age(state, state.encoder_raw_p4_time_ms,
+                             state.received_at('encoder_raw_last_rx_ts')) > kEncoderTrustedSampleMaxAgeMs):
+            raise ValueError('AA feedback is stale, offline or untrusted')
+        mapped = map_manual_scaled_encoder_to_urdf(
+            self, aa, result, state.encoders[aa].raw_sensor,
+            state.manual_reference_encoder_directions[aa])
+        if mapped is None or not mapped['valid']:
+            raise ValueError('AA encoder mapping is invalid')
+        return state, mapped['urdf_deg']
+
+    def prepare_finger_aa(self, joint):
+        self._aa_hold = None
+        self._aa_drift = (None, 0)
+        aa = finger_aa_joint(joint)
+        if aa is None:
+            return True, ''
+        try:
+            result, center, limits = self._finger_aa_plan(aa)
+            state, angle = self._finger_aa_feedback(aa, result)
+            params = default_auto_calibration_params(aa)
+            motors = joint_motors(aa)
+            count = int(result['tendonLutCount'])
+            # LUT determines tendon direction only; reverse travel has backlash.
+            response = [(row[count - 1] - row[0]) * shorten_sign(m)
+                        for m, row in zip(motors, result['tendonLutMotorAbs'])]
+            if not (response[0] * response[1] < 0):
+                raise ValueError('AA tendon directions are invalid')
+            targets = {m: state.servo_angles[m] for m in motors}
+            speed = min(100, params.servoSpeed)
+            last_command = progress_at = self.now_ms()
+            progress_angle = angle
+            deadline = last_command + 60000
+            self.trace('AA_MIDPOINT', aa, target_deg=center)
+            from .dual_motor import invalidate_dual_workspace_cache_joint
+            invalidate_dual_workspace_cache_joint(self, aa)
+            stable, last = 0, (state.encoder_raw_p4_time_ms, state.servo_feedback_p4_time_ms)
+            while self.owns_control() and self.now_ms() <= deadline:
+                state, angle = self._finger_aa_feedback(aa, result)
+                stamp = state.encoder_raw_p4_time_ms, state.servo_feedback_p4_time_ms
+                if stamp[0] != last[0] and stamp[1] != last[1]:
+                    last = stamp
+                    now = self.now_ms()
+                    if abs(angle - progress_angle) >= 0.5:
+                        progress_at, progress_angle = now, angle
+                    if abs(angle - center) <= 2:
+                        targets = {m: state.servo_angles[m] for m in motors}
+                        stable += 1
+                    else:
+                        stable = 0
+                        if now - progress_at >= 20000:
+                            raise ValueError('AA angle did not follow tendon movement for 20 seconds')
+                        step = max(1, speed * min(now - last_command, 100) // 1000)
+                        for motor, direction in zip(motors, response):
+                            delta = step if (direction > 0) == (angle < center) else -step
+                            command = motor_apply_tendon_delta(motor, targets[motor], delta)
+                            # Never accumulate a target far ahead of actual feedback.
+                            actual = state.servo_angles[motor]
+                            targets[motor] = max(actual - 40, min(actual + 40, command))
+                    if any(not limits[m][0] <= value <= limits[m][1] for m, value in targets.items()):
+                        raise ValueError('AA midpoint movement exceeded trusted motor limits')
+                    if not self.publish(targets, speed, params.servoAcc):
+                        raise ValueError(self.motion_publish_error or 'AA midpoint target publish failed')
+                    last_command = now
+                    if stable >= 3:
+                        self._aa_hold = (aa, result, center, targets)
+                        return True, ''
+                self.sleep_ms(params.loopMs)
+            raise ValueError('AA midpoint arrival timed out or control was lost')
+        except (ValueError, TypeError, KeyError, IndexError) as exc:
+            message = f'J{aa:02d}: {exc}'
+            self.trace('AA_MIDPOINT_FAILED', aa, reason=str(exc))
+            return False, message
 
     def _wait(self, predicate, timeout_ms):
         self.wait_exit_reason = ''
@@ -380,10 +547,10 @@ class HostCalibrationIO:
     def _ack(self, command, value, timeout=1.0):
         if self._cancel.is_set() or self.cancel_check() or not self.controller.comm:
             return False
-        sent_at = time.time()
+        sent_at = time.monotonic()
         if not self.controller.comm.send_command(value):
             return False
-        ack = self.controller.comm.wait_for_ack(command, timeout, received_after=sent_at)
+        ack = self.controller.comm.wait_for_ack(command, timeout, received_after_monotonic=sent_at)
         if ack is None or int(ack[2]) not in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED):
             return False
         if command == CMD_MANUAL_ENCODER_SINGLE and int(ack[2]) == PROTO_ACK_STATUS_QUEUED:
@@ -414,7 +581,7 @@ class HostCalibrationIO:
             return False
         state = self._state()
         window = {'mask': int(mask), 'start_ms': state.system_status_p4_time_ms,
-                  'start_rx': time.time(), 'active': True, 'end_ms': None}
+                  'start_rx': time.monotonic(), 'active': True, 'end_ms': None}
         with self.controller.state_lock:
             self._rebase_windows.append(window)
         try:
@@ -438,7 +605,7 @@ class HostCalibrationIO:
             windows = [dict(window) for window in self._rebase_windows]
         for window in windows:
             if (unknown & ~window['mask'] or
-                    state.system_status_last_rx_ts < window['start_rx']):
+                    state.received_at('system_status_last_rx_ts') < window['start_rx']):
                 continue
             delta = (state.system_status_p4_time_ms - window['start_ms']) & 0xFFFFFFFF
             if delta >= 0x80000000:
@@ -470,7 +637,7 @@ class HostCalibrationIO:
         self._rebase_zero_applied = True
         completed = self._state()
         after_ms = completed.servo_rebase_zero_result_p4_time_ms
-        requested_at = time.time()
+        requested_at = time.monotonic()
         self.controller.request_state_sync()
         accepted_anchor_ms = None
         # 新坐标的 ABS/raw 和硬件行程都必须来自这次结果之后。
@@ -482,7 +649,7 @@ class HostCalibrationIO:
                            - after_ms) & 0xFFFFFFFF
             ready = (self._fresh_anchor(state, mask) and 0 < delta < 0x80000000
                      and 0 < range_delta < 0x80000000
-                     and getattr(state, 'servo_logical_range_last_rx_ts', 0) >= requested_at
+                     and state.received_at('servo_logical_range_last_rx_ts') >= requested_at
                      and state.servo_logical_range_valid_bitmap & mask == mask)
             if ready:
                 accepted_anchor_ms = state.servo_feedback_p4_time_ms
@@ -523,7 +690,7 @@ class HostCalibrationIO:
         if unroutable:
             unmet.append(f'unroutable=0x{unroutable:08X}')
         age = self._age(state, state.servo_feedback_p4_time_ms,
-                        state.servo_abs_last_rx_ts)
+                        state.received_at('servo_abs_last_rx_ts'))
         if age > kFeedbackReadyServoTimeoutMs:
             unmet.append(f'stale_abs(age={age:.0f}ms)')
         if not state.has_servo_raw_data:
@@ -540,7 +707,7 @@ class HostCalibrationIO:
         range_delta = (state.servo_logical_range_p4_time_ms - after_ms) & 0xFFFFFFFF
         if not 0 < range_delta < 0x80000000:
             unmet.append('range_not_after_zero_result')
-        if state.servo_logical_range_last_rx_ts < requested_at:
+        if state.received_at('servo_logical_range_last_rx_ts') < requested_at:
             unmet.append('range_before_sync_request')
         missing_range = mask & ~state.servo_logical_range_valid_bitmap
         if missing_range:
@@ -570,7 +737,7 @@ class HostCalibrationIO:
                 state.servo_online_bitmap & mask == mask and
                 state.servo_route_controllable_bitmap & mask == mask and
                 self._age(state, state.servo_feedback_p4_time_ms,
-                          state.servo_abs_last_rx_ts) <= kFeedbackReadyServoTimeoutMs)
+                          state.received_at('servo_abs_last_rx_ts')) <= kFeedbackReadyServoTimeoutMs)
 
     def _fresh_anchor(self, state, mask):
         return (self._fresh_feedback(state, mask) and state.has_servo_raw_data and
@@ -583,13 +750,19 @@ class HostCalibrationIO:
         if not self.owns_control():
             self.feedback_recovery_error = 'calibration preparation lost control or fresh system status'
             return False
+        # The startup restore may already be in flight when calibration takes
+        # ownership. Let its verified result drain before changing coordinates;
+        # the controller will not start another restore during this session.
+        if not self._wait(lambda: not getattr(self.controller, '_multiturn_pending_restore_mask', 0), 5000):
+            self.feedback_recovery_error = 'startup coordinate restore has not completed; calibration not started'
+            return False
         self.controller.invalidate_direct_commands()
-        sent_at = time.time()
+        sent_at = time.monotonic()
         if not self._ack(CMD_RESET, 'reset'):
             self.feedback_recovery_error = 'maintenance RESET timeout/reject'
             return False
         self.sleep_ms(300)  # 原 CALIBRATION_TURN_RESET_SETTLE_S = 0.30。
-        if not self._wait(lambda: self._state().system_status_last_rx_ts >= sent_at
+        if not self._wait(lambda: self._state().received_at('system_status_last_rx_ts') >= sent_at
                           and self.owns_control(), 1000):
             self.feedback_recovery_error = 'waiting for stopped P4 state after maintenance RESET'
             return False
@@ -637,7 +810,7 @@ class HostCalibrationIO:
         self.diag_if_empty(CALIB_DIAG_REASON_SERVO_RECOVERY_TIMEOUT,
                            CALIB_DIAG_PHASE_SEQUENCE, 255, 255, 0, 0, 0, mask)
         state = self._state()
-        age = self._age(state, state.servo_feedback_p4_time_ms, state.servo_abs_last_rx_ts)
+        age = self._age(state, state.servo_feedback_p4_time_ms, state.received_at('servo_abs_last_rx_ts'))
         self.feedback_recovery_error = (
             f'ABS age={age:.0f}ms stable={stable}/{kServoRecoveryStableSamples} '
             f'offline=0x{mask & ~state.servo_online_bitmap:08X} '
@@ -735,7 +908,7 @@ class HostCalibrationIO:
         token = (self._target_token + 1) & 0xFFFFFFFF
         token = token or 1
         self._target_token = token
-        sent_at = time.time()
+        sent_at = time.monotonic()
         if not self.controller.comm.send_command((
                 'motor_pos_abs', token, requested_mask,
                 values, int(speed), int(acc))):
@@ -746,10 +919,10 @@ class HostCalibrationIO:
         def applied():
             latest = self._state()
             if (getattr(latest, 'direct_target_token', 0) == token and
-                    getattr(latest, 'direct_target_result_rx_ts', 0) >= sent_at):
+                    latest.received_at('direct_target_result_rx_ts') >= sent_at):
                 return True
             ack = self.controller.comm.wait_for_ack(
-                CMD_MOTOR_POS_ABS, 0, received_after=sent_at)
+                CMD_MOTOR_POS_ABS, 0, received_after_monotonic=sent_at)
             if ack is not None and int(ack[2]) not in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED):
                 rejected_ack.append(int(ack[2]))
                 return True
@@ -788,6 +961,8 @@ class HostCalibrationIO:
         return False
 
     def failure_message(self, reason):
+        if reason == 'control lost' and self.control_loss_reason:
+            return f'control lost: {self.control_loss_reason}'
         if self.lut_sampling_error:
             return self.lut_sampling_error
         if self.motion_publish_error:
@@ -984,3 +1159,4 @@ class HostCalibrationIO:
                 self.controller.comm.send_command('stop')
             self.controller.set_control_mode(self._saved_mode)
             self._motion_started = False
+            self._session_finished = True

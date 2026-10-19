@@ -84,6 +84,9 @@ class FakeIO:
     def hold_targets_except(self, ordered, active, skip, params):
         return {} if self.holds_ok else None
 
+    def prepare_finger_aa(self, joint):
+        return True, ''
+
     def publish(self, targets, speed, acc):
         self.commands.append((self.ms, dict(targets), speed, acc))
         if self.dynamic and 2 in targets:

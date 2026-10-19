@@ -1,5 +1,7 @@
 """Connection identity changes must preserve Connect and explicit STOP semantics."""
 
+from _clock_helpers import stamp
+
 import threading
 import time
 from unittest.mock import Mock
@@ -20,6 +22,7 @@ def publish_state(hand, device_id=None):
     state = HandModel()
     state.has_system_status_data = True
     state.system_status_last_rx_ts = time.time()
+    stamp(state, 'system_status_last_rx_ts')
     state.system_state = SYSTEM_STATE_READY
     state.protocol_compatible = True
     if device_id is not None:

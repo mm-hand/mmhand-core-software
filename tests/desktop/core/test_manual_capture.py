@@ -1,4 +1,6 @@
 """Manual capture uses current asynchronous GUI operations and retains confirmed endpoints."""
+
+from _clock_helpers import stamp
 import time
 import threading
 from unittest.mock import Mock
@@ -13,6 +15,8 @@ def capture(monkeypatch):
     state = hand._controller.current_state
     state.has_system_status_data = state.has_encoder_raw_data = True
     state.system_status_last_rx_ts = state.encoder_raw_last_rx_ts = time.time()
+    stamp(state, 'system_status_last_rx_ts')
+    stamp(state, 'encoder_raw_last_rx_ts')
     state.system_state = SYSTEM_STATE_READY
     state.encoder_online_bitmap = 1
     state.has_manual_reference_encoder_directions = True
@@ -60,7 +64,9 @@ def test_equal_reverse_or_half_turn_pair_is_not_installed(capture, second):
 @pytest.mark.parametrize('fault', ['stale', 'raw_error', 'missing_direction', 'bad_direction'])
 def test_invalid_feedback_or_direction_never_enters_draft(capture, fault):
     hand, state, writer = capture
-    if fault == 'stale': state.encoder_raw_last_rx_ts -= 1
+    if fault == 'stale':
+        state.encoder_raw_last_rx_ts -= 1
+        stamp(state, 'encoder_raw_last_rx_ts')
     elif fault == 'raw_error': state.encoders[0].raw_error = True
     elif fault == 'missing_direction': state.has_manual_reference_encoder_directions = False
     else: state.manual_reference_encoder_directions[0] = 0
@@ -85,10 +91,12 @@ def test_install_failure_retains_confirmed_pair_for_explicit_set(capture):
 def test_single_click_waits_for_a_fresh_raw_frame(capture):
     hand,state,writer=capture
     state.encoder_raw_last_rx_ts=time.time()-1
+    stamp(state, 'encoder_raw_last_rx_ts')
     def feedback():
         time.sleep(.03)
         state.encoders[0].raw_sensor=1234
         state.encoder_raw_last_rx_ts=time.time()
+        stamp(state, 'encoder_raw_last_rx_ts')
     thread=threading.Thread(target=feedback); thread.start()
     assert run(hand,'min')
     thread.join()

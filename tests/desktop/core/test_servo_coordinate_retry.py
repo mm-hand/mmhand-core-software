@@ -1,5 +1,7 @@
 """Upper-computer coordinate writes retry failed motors without repeating successes."""
 
+from _clock_helpers import stamp
+
 import time
 from unittest.mock import Mock, call
 
@@ -27,6 +29,7 @@ def controller(monkeypatch):
     state.has_system_status_data = state.has_servo_route_status = True
     state.system_state = SYSTEM_STATE_IDLE
     state.system_status_last_rx_ts = time.time()
+    stamp(state, 'system_status_last_rx_ts')
     state.servo_online_bitmap = state.servo_route_controllable_bitmap = 7
     state.has_servo_rebase_zero_result = state.has_servo_reset_zero_status = True
     state.servo_rebase_zero_result_token = 7
@@ -48,6 +51,7 @@ def controller(monkeypatch):
 def publish(controller, mask, success, *, ee=False, token=None):
     state = controller.current_state
     state.system_status_last_rx_ts = time.time()
+    stamp(state, 'system_status_last_rx_ts')
     if ee:
         token = state.servo_reset_zero_result_token + 1 if token is None else token
         state.servo_reset_zero_request_token = state.servo_reset_zero_result_token = token
@@ -60,6 +64,7 @@ def publish(controller, mask, success, *, ee=False, token=None):
         state.servo_rebase_zero_success_mask = success
         state.servo_rebase_zero_failed_mask = mask & ~success
         state.servo_rebase_zero_result_last_rx_ts = time.time()
+        stamp(state, 'servo_rebase_zero_result_last_rx_ts')
         state.servo_rebase_zero_result_p4_time_ms = token * 100
         state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = token * 100 + 1
     state.multi_turn_unknown_bitmap = mask & ~success
@@ -70,14 +75,14 @@ def scripted_ack(controller, successes, *, ee=False):
     outcomes = iter(successes)
     command_name = "servo_reset_zero" if ee else "servo_rebase_zero"
 
-    def ack(command, _timeout, received_after):
+    def ack(command, _timeout, received_after_monotonic):
         if command == CMD_RESET:
-            return command, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after
+            return command, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after_monotonic
         commands = [c.args[0] for c in controller.comm.send_command.call_args_list
                     if isinstance(c.args[0], tuple) and c.args[0][0] in (command_name, "motor_abs_zero")]
         mask = commands[-1][1]
         publish(controller, mask, next(outcomes), ee=ee)
-        return command, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after
+        return command, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after_monotonic
 
     controller.comm.wait_for_ack.side_effect = ack
 
@@ -112,7 +117,7 @@ def test_fresh_rejections_try_three_times_without_invalidating_old_coordinates(c
     controller._multiturn_anchor_capture_blocked_mask = 2
     controller._multiturn_anchor_capture_pending_mask = 1
     controller.comm.wait_for_ack.side_effect = (
-        lambda cmd, _timeout, received_after: (cmd, SYSTEM_STATE_IDLE, 1, received_after))
+        lambda cmd, _timeout, received_after_monotonic: (cmd, SYSTEM_STATE_IDLE, 1, received_after_monotonic))
     result = controller.zero_direct_motor_abs(1) if direct else controller.rebase_servo_abs_zero(1)
     command = "motor_abs_zero" if direct else "servo_rebase_zero"
     assert not result.ok and "rejected after 3" in result.message
@@ -125,11 +130,11 @@ def test_fresh_rejections_try_three_times_without_invalidating_old_coordinates(c
 
 @pytest.mark.parametrize("ack_kind", ["lost", "wrong_command", "old_timestamp"])
 def test_unknown_result_queries_three_times_and_never_rewrites(controller, ack_kind):
-    def ack(cmd, _timeout, received_after):
-        if ack_kind == "lost":
+    def ack(cmd, _timeout, received_after_monotonic):
+        if ack_kind in ("lost", "old_timestamp"):  # Tracker filters pre-send ACKs.
             return None
         return (CMD_MOTOR_ABS_ZERO if ack_kind == "wrong_command" else cmd,
-                SYSTEM_STATE_IDLE, 1, received_after - 1 if ack_kind == "old_timestamp" else received_after)
+                SYSTEM_STATE_IDLE, 1, received_after_monotonic - 1 if ack_kind == "old_timestamp" else received_after_monotonic)
 
     controller.comm.wait_for_ack.side_effect = ack
     result = controller.rebase_servo_abs_zero(3)
@@ -194,7 +199,7 @@ def test_unsaved_success_blocks_retry_without_repeating_zero(controller):
 
 @pytest.mark.parametrize("bad_result", ["old_token", "skipped_token", "missing_motor", "extra_motor", "old_rx"])
 def test_unrelated_final_result_does_not_complete_or_allow_retry(controller, bad_result):
-    def ack(cmd, _timeout, received_after):
+    def ack(cmd, _timeout, received_after_monotonic):
         state = publish(controller, 3, 3)
         if bad_result == "old_token":
             state.servo_rebase_zero_result_token = 7
@@ -205,8 +210,9 @@ def test_unrelated_final_result_does_not_complete_or_allow_retry(controller, bad
         elif bad_result == "extra_motor":
             state.servo_rebase_zero_success_mask = 7
         else:
-            state.servo_rebase_zero_result_last_rx_ts = received_after - 1
-        return cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after
+            state.servo_rebase_zero_result_last_rx_ts = received_after_monotonic - 1
+            stamp(state, 'servo_rebase_zero_result_last_rx_ts')
+        return cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after_monotonic
 
     controller.comm.wait_for_ack.side_effect = ack
     assert not controller.rebase_servo_abs_zero(3).ok
@@ -227,8 +233,8 @@ def test_ee_retries_failed_motors_with_one_entry_reset(controller):
 
 def test_ee_unknown_result_is_queried_but_never_reset_or_written_again(controller):
     controller.comm.wait_for_ack.side_effect = (
-        lambda cmd, _timeout, received_after:
-        (cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after))
+        lambda cmd, _timeout, received_after_monotonic:
+        (cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after_monotonic))
     result = controller.prepare_calibration_turn_zero(3)
     assert not result[0] and controller._servo_turn_zero_unresolved_mask == 3
     assert not controller.prepare_calibration_turn_zero(3)[0]
@@ -242,8 +248,8 @@ def test_ee_fresh_nack_restores_anchor_gate_and_retries_without_another_reset(co
     controller._multiturn_anchor_capture_blocked_mask = 2
     controller._multiturn_anchor_capture_pending_mask = 1
     controller.comm.wait_for_ack.side_effect = (
-        lambda cmd, _timeout, received_after:
-        (cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED if cmd == CMD_RESET else 1, received_after))
+        lambda cmd, _timeout, received_after_monotonic:
+        (cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED if cmd == CMD_RESET else 1, received_after_monotonic))
     assert not controller.prepare_calibration_turn_zero(1)[0]
     assert controller.comm.send_command.call_args_list == [call("reset")] + [call(("servo_reset_zero", 1))] * 3
     assert controller._servo_turn_zero_unresolved_mask == 0
@@ -253,9 +259,9 @@ def test_ee_fresh_nack_restores_anchor_gate_and_retries_without_another_reset(co
 
 
 def test_stop_after_ee_reset_prevents_zero_write(controller):
-    def ack(cmd, _timeout, received_after):
+    def ack(cmd, _timeout, received_after_monotonic):
         controller.stop()
-        return cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after
+        return cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after_monotonic
 
     controller.comm.wait_for_ack.side_effect = ack
     assert not controller.prepare_calibration_turn_zero(3)[0]
@@ -264,8 +270,8 @@ def test_stop_after_ee_reset_prevents_zero_write(controller):
 
 def test_late_ee_result_resolves_original_transaction_without_new_hardware_write(controller):
     controller.comm.wait_for_ack.side_effect = (
-        lambda cmd, _timeout, received_after:
-        (cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after))
+        lambda cmd, _timeout, received_after_monotonic:
+        (cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after_monotonic))
     assert not controller.prepare_calibration_turn_zero(3)[0]
     controller.comm.send_command.reset_mock()
     controller._service_servo_turn_zero_result(publish(controller, 3, 1, ee=True))
@@ -316,13 +322,13 @@ def test_unknown_or_cancelled_write_invalidates_runtime_and_device_auto_backup(
         HandController._invalidate_servo_rebase_zero_anchors.__get__(controller))
     cancelled = [False]
 
-    def ack(cmd, _timeout, received_after):
+    def ack(cmd, _timeout, received_after_monotonic):
         if cmd != CMD_RESET:
             if ending == "stop":
                 controller.stop()
             elif ending == "caller_cancel":
                 cancelled[0] = True
-        return cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after
+        return cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after_monotonic
 
     controller.comm.wait_for_ack.side_effect = ack
     cancel_check = lambda: cancelled[0]
@@ -344,11 +350,11 @@ def test_fresh_rejection_and_stop_preserve_unaccepted_anchor_and_prevent_retry(c
     controller._multiturn_anchor_capture_blocked_mask = 2
     controller._multiturn_anchor_capture_pending_mask = 1
 
-    def ack(cmd, _timeout, received_after):
+    def ack(cmd, _timeout, received_after_monotonic):
         if cmd == CMD_RESET:
-            return cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after
+            return cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after_monotonic
         controller.stop()
-        return cmd, SYSTEM_STATE_IDLE, 1, received_after
+        return cmd, SYSTEM_STATE_IDLE, 1, received_after_monotonic
 
     controller.comm.wait_for_ack.side_effect = ack
     if command_name == "servo_reset_zero":
@@ -368,10 +374,10 @@ def test_fresh_rejection_and_stop_preserve_unaccepted_anchor_and_prevent_retry(c
 
 @pytest.mark.parametrize("command_name", ["servo_rebase_zero", "motor_abs_zero", "servo_reset_zero"])
 def test_changed_device_unknown_write_never_invalidates_new_device_anchors(controller, command_name):
-    def ack(cmd, _timeout, received_after):
+    def ack(cmd, _timeout, received_after_monotonic):
         if cmd != CMD_RESET:
             controller.current_state.product_fingerprint["device_id"] = "0000FEDCBA987654"
-        return cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after
+        return cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after_monotonic
 
     controller.comm.wait_for_ack.side_effect = ack
     if command_name == "servo_reset_zero":

@@ -366,7 +366,7 @@ class HandController:
             state = HandModel()
             state.copy_state_from(self.current_state)
         targets = list(state.servo_angles)
-        age = time.time() - state.servo_abs_last_rx_ts
+        age = time.monotonic() - state.received_at('servo_abs_last_rx_ts')
         p4_age = ((state.p4_time_ms - state.servo_feedback_p4_time_ms + 0x80000000) & 0xFFFFFFFF) - 0x80000000
         valid = state.servo_online_bitmap & state.servo_route_controllable_bitmap
         reason = ""
@@ -396,7 +396,7 @@ class HandController:
                 if generation != self._coordinate_cancel_generation:
                     return False, 'Direct enable cancelled', targets
                 state = self._coordinate_state()
-                if (not 0 <= time.time() - state.servo_abs_last_rx_ts <= .5 or
+                if (not 0 <= time.monotonic() - state.received_at('servo_abs_last_rx_ts') <= .5 or
                     mask & (~state.servo_online_bitmap | ~state.servo_route_controllable_bitmap | state.multi_turn_unknown_bitmap)):
 
                     return False, 'Current ABS became stale or unavailable', targets
@@ -406,19 +406,19 @@ class HandController:
 
                     return False, 'Current ABS would require clamping', targets
                 token = (state.direct_target_token + 1) & 0xffffffff or 1
-                submitted_at = time.time()
+                submitted_at = time.monotonic()
                 self.start()
                 if not self.comm.send_command(('motor_pos_abs', token, mask, targets, 400, 20)):
                     return False, 'Current-position hold was not queued', targets
             deadline = time.monotonic() + 3
             while time.monotonic() < deadline and generation == self._coordinate_cancel_generation:
                 state = self._coordinate_state()
-                if (state.direct_target_token == token and state.direct_target_result_rx_ts >= submitted_at):
+                if (state.direct_target_token == token and state.received_at('direct_target_result_rx_ts') >= submitted_at):
                     if state.direct_target_status != 2 or state.direct_target_applied_mask != mask or state.direct_target_rejected_mask:
                         return False, 'P4 rejected current-position hold', targets
                     if (state.control_enabled and state.servo_target_owner == 1 and
                             state.system_state == SYSTEM_STATE_RUN_DIRECT and state.active_motor_mask == mask
-                            and 0 <= time.time() - state.system_status_last_rx_ts <= .6):
+                            and 0 <= time.monotonic() - state.received_at('system_status_last_rx_ts') <= .6):
                         return True, 'Selected motors enabled; holding current ABS', targets
                 time.sleep(.01)
             reason = 'Direct enable execution was not confirmed'
@@ -573,8 +573,8 @@ class HandController:
         self._control_mode = ControlMode.JOINT_ANGLE
 
     def _wait_for_lower_sync(self, timeout_s: float) -> bool:
-        deadline = time.time() + max(0.0, float(timeout_s))
-        while time.time() < deadline:
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        while time.monotonic() < deadline:
             with self.state_lock:
                 state = self.current_state
                 ready = self._startup_sync_ready(state)
@@ -1139,7 +1139,7 @@ class HandController:
                 bool(getattr(state, "has_multiturn_restore_result", False))
                 and self._multiturn_pending_restore_context == context
                 and result_token == self._multiturn_pending_restore_expected_token
-                and float(getattr(state, "multiturn_restore_result_last_rx_ts", 0) or 0)
+                and float(state.received_at('multiturn_restore_result_last_rx_ts') or 0)
                 > self._multiturn_pending_restore_sent_at
                 and not (restored & rejected)
                 and (restored | rejected) == pending_mask
@@ -1155,7 +1155,7 @@ class HandController:
                         continue
                     if (int(event.get("command", -1)) == CMD_RESTORE_MULTITURN
                             and int(event.get("sequence", 0)) > self._multiturn_pending_restore_ack_sequence
-                            and float(event.get("received_at", 0)) >= self._multiturn_pending_restore_sent_at
+                            and float(event.get("received_monotonic", 0)) >= self._multiturn_pending_restore_sent_at
                             and (baseline_p4_ms is None or
                                  ((int(event.get("p4_time_ms", 0)) - baseline_p4_ms) & 0xFFFFFFFF) < 0x80000000)):
                         status = int(event.get("status", -1))
@@ -1218,6 +1218,13 @@ class HandController:
 
         if self._multiturn_restore_cancelled:
             return
+        # A calibration owns coordinate changes for its entire transaction,
+        # including preparation before the first motor target is executed.
+        # Unselected unknown motors must not start background bus maintenance.
+        calibration_io = getattr(self, '_host_calibration_io', None)
+        if (calibration_io is not None and not getattr(calibration_io, '_session_finished', False)
+                and not calibration_io.is_cancelled()):
+            return
         if now - self._multiturn_last_restore_attempt_at < HOST_MULTITURN_RESTORE_RETRY_S:
             return
         if (self._servo_rebase_zero_unresolved_mask or self._servo_rebase_zero_capture_mask
@@ -1234,7 +1241,7 @@ class HandController:
                     self.comm.send_command(("state_sync", STATE_SYNC_MULTITURN_STATE))
             return
         if (not bool(getattr(state, "has_system_status_data", False))
-                or not 0 <= time.time() - float(state.system_status_last_rx_ts) <= LOWER_STATUS_STALE_AFTER_S
+                or not 0 <= time.monotonic() - float(state.received_at('system_status_last_rx_ts')) <= LOWER_STATUS_STALE_AFTER_S
                 or state.system_state not in (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE,
                                               SYSTEM_STATE_READY, SYSTEM_STATE_RECOVERY_REQUIRED)
                 or state.control_enabled or state.servo_target_owner
@@ -1286,11 +1293,11 @@ class HandController:
             return
         with self._coordinate_command_lock:
             if (self._multiturn_restore_cancelled or not self.comm.is_connected()
-                    or not 0 <= time.time() - float(state.system_status_last_rx_ts) <= LOWER_STATUS_STALE_AFTER_S
+                    or not 0 <= time.monotonic() - float(state.received_at('system_status_last_rx_ts')) <= LOWER_STATUS_STALE_AFTER_S
                     or not self._restore_feedback_ready(state)
                     or context != (device_id, self._servo_abs_zero_connection_generation, id(self.comm))):
                 return
-            sent_at = time.time()
+            sent_at = time.monotonic()
             if not self.comm.send_command(("restore_multiturn", restore_mask, restore_abs)):
                 log_session("MULTITURN", f"host restore was not queued mask=0x{restore_mask:08X}")
                 return
@@ -1602,11 +1609,12 @@ class HandController:
         self,
         manual_min_raw: List[int],
         manual_max_raw: List[int],
+        *, updated_joint_mask: int | None = None,
     ) -> bool:
         """Persist all 21 Manual endpoint pairs and verify the P4 readback."""
         if not self.comm:
             return False
-        sent_at = time.time()
+        sent_at = time.monotonic()
         self.comm.send_command((
             "manual_encoder_reference",
             list(manual_min_raw),
@@ -1615,7 +1623,7 @@ class HandController:
         ack = self.comm.wait_for_ack(
             CMD_MANUAL_ENCODER_REFERENCE,
             MANUAL_REFERENCE_ACK_TIMEOUT_S,
-            received_after=sent_at,
+            received_after_monotonic=sent_at,
         )
         if ack is None or int(ack[2]) not in (
             PROTO_ACK_STATUS_OK,
@@ -1645,6 +1653,7 @@ class HandController:
                     valid_mask=expected_mask,
                     min_raw=list(manual_min_raw),
                     max_raw=list(manual_max_raw),
+                    updated_joint_mask=updated_joint_mask,
                 )
             except (OSError, CalibrationSnapshotError) as exc:
                 log_session("MANUAL", f"desktop JSON save failed: {exc}")
@@ -1654,24 +1663,20 @@ class HandController:
     def query_manual_encoder_references(self, timeout_s: float = 2.0) -> bool:
         if not self.comm:
             return False
-        sent_at = time.time()
+        sent_at = time.monotonic()
         self.comm.send_command("query_manual_encoder_reference")
         ack = self.comm.wait_for_ack(
             CMD_MANUAL_ENCODER_QUERY,
             timeout_s,
-            received_after=sent_at,
+            received_after_monotonic=sent_at,
         )
         if ack is None or int(ack[2]) != 0:
             return False
-        deadline = time.time() + timeout_s
-        while time.time() < deadline:
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
             with self.state_lock:
                 received_at = float(
-                    getattr(
-                        self.current_state,
-                        "manual_reference_last_rx_time",
-                        0.0,
-                    )
+                    self.current_state.received_at('manual_reference_last_rx_time')
                     or 0.0
                 )
             if received_at >= sent_at:
@@ -1685,12 +1690,12 @@ class HandController:
         timeout_s: float = MANUAL_REFERENCE_ACK_TIMEOUT_S,
     ) -> bool:
         """等待 Manual 写入 P4 RAM 的结果包，避免把 QUEUED 当成提交完成。"""
-        deadline = time.time() + timeout_s
-        while time.time() < deadline:
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
             with self.state_lock:
                 state = self.current_state
                 received_at = float(
-                    getattr(state, "manual_reference_last_rx_time", 0.0) or 0.0
+                    state.received_at('manual_reference_last_rx_time') or 0.0
                 )
                 commit_status = int(
                     getattr(state, "manual_reference_commit_status", 0) or 0
@@ -1781,7 +1786,7 @@ class HandController:
         expected_max[joint] = int(manual_max_raw)
         if cancelled():
             return False
-        sent_at = time.time()
+        sent_at = time.monotonic()
         self.comm.send_command((
             "manual_encoder_single",
             joint,
@@ -1791,7 +1796,7 @@ class HandController:
         ack = self.comm.wait_for_ack(
             CMD_MANUAL_ENCODER_SINGLE,
             MANUAL_REFERENCE_ACK_TIMEOUT_S,
-            received_after=sent_at,
+            received_after_monotonic=sent_at,
         )
         if ack is None or int(ack[2]) not in (
             PROTO_ACK_STATUS_OK,
@@ -1821,6 +1826,7 @@ class HandController:
                     valid_mask=expected_mask,
                     min_raw=expected_min,
                     max_raw=expected_max,
+                    updated_joint_mask=1 << joint,
                 )
             except (OSError, CalibrationSnapshotError) as exc:
                 log_session("MANUAL", f"desktop JSON save failed: {exc}")
@@ -1831,12 +1837,12 @@ class HandController:
     def rope_init(self, active_joint_mask: int) -> bool:
         if not self.comm:
             return False
-        sent_at = time.time()
+        sent_at = time.monotonic()
         self.comm.send_command(("rope_init", int(active_joint_mask)))
         ack = self.comm.wait_for_ack(
             CMD_ROPE_INIT,
             MANUAL_REFERENCE_ACK_TIMEOUT_S,
-            received_after=sent_at,
+            received_after_monotonic=sent_at,
         )
         return bool(ack is not None and int(ack[2]) in (0, 2))
 
@@ -1844,12 +1850,12 @@ class HandController:
         """清除 P4 RAM 中的 Manual 表，并同步清除桌面标定 JSON 的对应内容。"""
         if not self.comm:
             return False
-        sent_at = time.time()
+        sent_at = time.monotonic()
         self.comm.send_command("clear_manual_encoder_reference")
         ack = self.comm.wait_for_ack(
             CMD_MANUAL_ENCODER_REFERENCE,
             MANUAL_REFERENCE_ACK_TIMEOUT_S,
-            received_after=sent_at,
+            received_after_monotonic=sent_at,
         )
         if ack is None or int(ack[2]) not in (
             PROTO_ACK_STATUS_OK,
@@ -1895,7 +1901,7 @@ class HandController:
         motor_mask = int(active_motor_mask) & 0xFFFFFFFF
         joint_mask = int(active_joint_mask) & 0xFFFFFFFF
         require_can = bool(require_can_feedback)
-        sent_at = time.time()
+        sent_at = time.monotonic()
         with self.state_lock:
             state = self.current_state
             # RUN_DIRECT owns the current scope. Reusing its confirmed scope
@@ -1908,7 +1914,7 @@ class HandController:
                 and joint_mask & ~((1 << ENCODER_COUNT) - 1) == 0
                 and state.has_system_status_data
                 and state.has_active_scope_status
-                and 0 <= sent_at - state.system_status_last_rx_ts <= 0.6
+                and 0 <= sent_at - state.received_at('system_status_last_rx_ts') <= 0.6
                 and state.system_state == SYSTEM_STATE_RUN_DIRECT
                 and state.control_enabled
                 and state.servo_target_owner == SERVO_TARGET_OWNER_CONTROL
@@ -1924,7 +1930,7 @@ class HandController:
             joint_mask,
             require_can,
         ))
-        ack = self.comm.wait_for_ack(CMD_ACTIVE_SCOPE, ACTIVE_SCOPE_ACK_TIMEOUT_S, received_after=sent_at)
+        ack = self.comm.wait_for_ack(CMD_ACTIVE_SCOPE, ACTIVE_SCOPE_ACK_TIMEOUT_S, received_after_monotonic=sent_at)
         return bool(ack is not None and int(ack[2]) == 0)
 
     def _invalidate_servo_rebase_zero_anchors(self, motor_mask: int) -> None:
@@ -1969,7 +1975,7 @@ class HandController:
         completed = state.servo_rebase_zero_success_mask | state.servo_rebase_zero_failed_mask
         return (state.has_servo_rebase_zero_result
                 and state.servo_rebase_zero_result_token == expected
-                and state.servo_rebase_zero_result_last_rx_ts >= sent_at
+                and state.received_at('servo_rebase_zero_result_last_rx_ts') >= sent_at
                 and completed == mask)
 
     def _coordinate_state(self):
@@ -1981,7 +1987,7 @@ class HandController:
     @staticmethod
     def _coordinate_safe_state(state, mask):
         return (state.has_system_status_data
-                and 0 <= time.time() - state.system_status_last_rx_ts <= LOWER_STATUS_STALE_AFTER_S
+                and 0 <= time.monotonic() - state.received_at('system_status_last_rx_ts') <= LOWER_STATUS_STALE_AFTER_S
                 and not state.control_enabled and state.servo_target_owner == 0
                 and state.system_state in (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE,
                                            SYSTEM_STATE_READY, SYSTEM_STATE_RECOVERY_REQUIRED)
@@ -1998,14 +2004,13 @@ class HandController:
             delta -= 0x100000000
         return (state.has_servo_angle_data and state.has_servo_raw_data
                 and state.servo_raw_p4_time_ms == state.servo_feedback_p4_time_ms
-                and 0 <= time.time() - state.servo_abs_last_rx_ts <= LOWER_STATUS_STALE_AFTER_S
+                and 0 <= time.monotonic() - state.received_at('servo_abs_last_rx_ts') <= LOWER_STATUS_STALE_AFTER_S
                 and abs(delta) <= LOWER_STATUS_STALE_AFTER_S * 1000)
 
     @staticmethod
     def _coordinate_ack_status(ack, command_id, sent_at):
         """仅发送之后同命令的 ACK 可用于受理判断；逐电机成功仍依赖最终结果。"""
-        if (ack is None or len(ack) < 4 or int(ack[0]) != command_id
-                or float(ack[3]) < sent_at):
+        if ack is None or len(ack) < 4 or int(ack[0]) != command_id:
             return None
         return int(ack[2])
 
@@ -2049,7 +2054,7 @@ class HandController:
                 and state.servo_reset_zero_result_token == expected
                 and state.servo_reset_zero_status in (2, 3)
                 and not success & failed and (success | failed) == mask
-                and state.system_status_last_rx_ts >= sent_at)
+                and state.received_at('system_status_last_rx_ts') >= sent_at)
 
     def _service_servo_turn_zero_result(self, state):
         """迟到 EE 结果仍失效旧锚点，未知结果期间禁止再次改写圈数。"""
@@ -2234,7 +2239,7 @@ class HandController:
                         previous_blocked = self._multiturn_anchor_capture_blocked_mask
                         previous_capture = self._multiturn_anchor_capture_pending_mask
                     self._block_multiturn_anchor_capture(pending)
-                    sent_at = time.time()
+                    sent_at = time.monotonic()
                     baseline_token = state.servo_rebase_zero_result_token
                     self._servo_rebase_zero_unresolved_mask = pending
                     self._servo_rebase_zero_baseline_token = baseline_token
@@ -2263,7 +2268,7 @@ class HandController:
                     restore_unaccepted()
                     return rejected("servo ABS zero cancelled or command queue rejected")
                 log_session("MULTITURN", f"{command_name} attempt={attempt}/3 mask=0x{pending:08X}")
-                ack = comm.wait_for_ack(command_id, SERVO_REBASE_ZERO_ACK_TIMEOUT_S, received_after=sent_at)
+                ack = comm.wait_for_ack(command_id, SERVO_REBASE_ZERO_ACK_TIMEOUT_S, received_after_monotonic=sent_at)
                 matches = lambda s: (same_session()
                     and self._servo_abs_zero_result_matches(s, baseline_token, sent_at, pending))
                 status = self._coordinate_ack_status(ack, command_id, sent_at)
@@ -2360,7 +2365,7 @@ class HandController:
             if state.servo_reset_zero_status == 1:
                 return failure("another calibration turn-reset is running")
 
-            reset_sent_at = time.time()
+            reset_sent_at = time.monotonic()
 
             def reset_once():
                 with self._coordinate_command_lock:
@@ -2371,10 +2376,9 @@ class HandController:
             if not motion_gate(reset_once):
                 return failure("calibration turn-reset cancelled before maintenance RESET")
             reset_ack = comm.wait_for_ack(
-                CMD_RESET, CALIBRATION_TURN_RESET_ACK_TIMEOUT_S, received_after=reset_sent_at,
+                CMD_RESET, CALIBRATION_TURN_RESET_ACK_TIMEOUT_S, received_after_monotonic=reset_sent_at,
             )
             if (changed() or reset_ack is None or int(reset_ack[0]) != CMD_RESET
-                    or float(reset_ack[3]) < reset_sent_at
                     or int(reset_ack[2]) not in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED)):
                 return failure("maintenance RESET timeout/reject or cancelled")
             deadline = time.monotonic() + CALIBRATION_TURN_RESET_SETTLE_S
@@ -2388,7 +2392,7 @@ class HandController:
                 state = self._coordinate_state()
                 if changed() or not self._coordinate_safe_state(state, pending):
                     return failure("calibration turn-reset cancelled or stopped status/selected routes changed")
-                sent_at = time.time()
+                sent_at = time.monotonic()
                 baseline_token = state.servo_reset_zero_result_token
 
                 def send():
@@ -2423,7 +2427,7 @@ class HandController:
                     return failure("calibration turn-reset cancelled or command queue rejected")
                 log_session("MULTITURN", f"servo_reset_zero attempt={attempt}/3 mask=0x{pending:08X}")
                 ack = comm.wait_for_ack(
-                    CMD_SERVO_RESET_ZERO, SERVO_RESET_ZERO_ACK_TIMEOUT_S, received_after=sent_at,
+                    CMD_SERVO_RESET_ZERO, SERVO_RESET_ZERO_ACK_TIMEOUT_S, received_after_monotonic=sent_at,
                 )
                 matches = lambda s: (same_session()
                     and self._servo_turn_zero_result_matches(s, baseline_token, sent_at, pending))
@@ -2488,7 +2492,7 @@ class HandController:
             )
             has_routes = bool(getattr(state, "has_servo_route_status", False))
             has_abs = (bool(getattr(state, "has_servo_angle_data", False))
-                       and 0 <= time.time() - state.servo_abs_last_rx_ts <= 0.5
+                       and 0 <= time.monotonic() - state.received_at('servo_abs_last_rx_ts') <= 0.5
                        and state.servo_route_scan_state != 1)
 
         allowed_states = (
@@ -2559,7 +2563,7 @@ class HandController:
                     getattr(state, "multi_turn_unknown_bitmap", 0) or 0
                 ) & requested_mask
                 online = int(getattr(state, "servo_online_bitmap", 0) or 0)
-                fresh = 0 <= time.time() - state.servo_abs_last_rx_ts <= 0.5
+                fresh = 0 <= time.monotonic() - state.received_at('servo_abs_last_rx_ts') <= 0.5
                 routable = (state.servo_route_controllable_bitmap & requested_mask) == requested_mask
                 servo_abs = list(getattr(state, "servo_angles", []) or [])
                 servo_raw = list(getattr(state, "servo_raw_positions", []) or [])
@@ -2635,7 +2639,7 @@ class HandController:
                 unknown = int(
                     getattr(state, "multi_turn_unknown_bitmap", 0) or 0
                 ) & requested_mask
-                fresh = 0 <= time.time() - state.servo_abs_last_rx_ts <= 0.5
+                fresh = 0 <= time.monotonic() - state.received_at('servo_abs_last_rx_ts') <= 0.5
                 routable = (state.servo_route_controllable_bitmap & requested_mask) == requested_mask
                 servo_abs = list(getattr(state, "servo_angles", []) or [])
             if not fresh or not routable or unknown or (online & requested_mask) != requested_mask:
@@ -2734,7 +2738,7 @@ class HandController:
             )
             if already_matches:
                 continue
-            sent_at = time.time()
+            sent_at = time.monotonic()
             self.comm.send_command((
                 "manual_encoder_single",
                 joint_idx,
@@ -2744,7 +2748,7 @@ class HandController:
             ack = self.comm.wait_for_ack(
                 CMD_MANUAL_ENCODER_SINGLE,
                 MANUAL_REFERENCE_ACK_TIMEOUT_S,
-                received_after=sent_at,
+                received_after_monotonic=sent_at,
             )
             if ack is None or int(ack[2]) not in (
                 PROTO_ACK_STATUS_OK,
@@ -2887,7 +2891,7 @@ class HandController:
                 f"snapshot Manual CRC mismatch: {mismatch_text}; "
                 "re-run automatic calibration for these joints"
             )
-        limits_sent_at = time.time()
+        limits_sent_at = time.monotonic()
         # 标定加载只覆盖快照实际包含的电机，P4 上其他已生效关节保持不变。
         self.comm.send_command(
             (
@@ -2903,7 +2907,7 @@ class HandController:
         ack = self.comm.wait_for_ack(
             CMD_CALIB_LOAD_LIMITS,
             CALIB_LOAD_ACK_TIMEOUT_S,
-            received_after=limits_sent_at,
+            received_after_monotonic=limits_sent_at,
         )
         if not ack or int(ack[2]) != 0:
             return False, "motor ABS limit load ACK timeout/reject"
@@ -2916,12 +2920,12 @@ class HandController:
                 continue
             payload = dict(result)
             payload["joint"] = joint_idx
-            joint_sent_at = time.time()
+            joint_sent_at = time.monotonic()
             self.comm.send_command(("calib_load_joint", payload))
             ack = self.comm.wait_for_ack(
                 CMD_CALIB_LOAD_JOINT,
                 CALIB_LOAD_ACK_TIMEOUT_S,
-                received_after=joint_sent_at,
+                received_after_monotonic=joint_sent_at,
             )
             if not ack or int(ack[2]) != 0:
                 return False, f"J{joint_idx:02d} load ACK timeout/reject"
@@ -2969,8 +2973,8 @@ class HandController:
     def is_started(self) -> bool:
         with self.state_lock:
             has_status = bool(getattr(self.current_state, "has_system_status_data", False))
-            last_rx = float(getattr(self.current_state, "system_status_last_rx_ts", 0.0) or 0.0)
-        status_fresh = has_status and last_rx > 0.0 and (time.time() - last_rx) <= LOWER_STATUS_STALE_AFTER_S
+            last_rx = float(self.current_state.received_at('system_status_last_rx_ts') or 0.0)
+        status_fresh = has_status and last_rx > 0.0 and (time.monotonic() - last_rx) <= LOWER_STATUS_STALE_AFTER_S
         return self._started and status_fresh
 
     def register_update_callback(self, callback):

@@ -88,6 +88,11 @@ def joint_motors(joint: int) -> tuple[int, ...]:
     return tuple(m for m, mapped in enumerate(MOTOR_TO_JOINT_INDEX) if mapped == joint)
 
 
+def finger_aa_joint(joint: int) -> int | None:
+    """Five fingers' FE/PIP/DIP depend on their AA; thumb CMC is separate."""
+    return joint - joint % 4 if 0 <= joint < 20 and joint % 4 else None
+
+
 def primary_motor(joint: int) -> int:
     return JOINT_TO_PRIMARY_MOTOR_INDEX[joint] if 0 <= joint < ENCODER_COUNT else -1
 

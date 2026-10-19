@@ -21,7 +21,7 @@ _STEP_PERIOD_MS = 50
 _SERVO_ACC = 254
 
 
-def _zero_targets(result, motors):
+def dual_lut_targets(result, motors, angle):
     """镜像 TendonCalibrationLut.cpp 的单精度插值与 lroundf。"""
     if not isinstance(result, dict):
         return None
@@ -49,19 +49,20 @@ def _zero_targets(result, motors):
             return nominal
 
         last = sample_angle(count - 1)
-        if not math.isfinite(last) or not first <= 0.0 <= last or last <= first:
+        angle = f32(angle)
+        if not math.isfinite(last) or not first <= angle <= last or last <= first:
             return None
         upper_index = 1
-        if 0.0 >= last:
+        if angle >= last:
             upper_index = count - 1
-        elif 0.0 > first:
-            while upper_index < count - 1 and 0.0 > sample_angle(upper_index):
+        elif angle > first:
+            while upper_index < count - 1 and angle > sample_angle(upper_index):
                 upper_index += 1
         lower_index = upper_index - 1
         lower_deg, upper_deg = sample_angle(lower_index), sample_angle(upper_index)
         if upper_deg <= lower_deg:
             return None
-        fraction = f32(f32(-lower_deg) / f32(upper_deg - lower_deg))
+        fraction = f32(f32(angle - lower_deg) / f32(upper_deg - lower_deg))
         targets = {}
         for actuator, motor in enumerate(motors):
             lower, upper = f32(rows[actuator][lower_index]), f32(rows[actuator][upper_index])
@@ -88,7 +89,7 @@ def finish_dual_zero(io, completed_joint_mask):
         motors = joint_motors(joint)
         result = host_result(joint) if callable(host_result) else (
             results[joint] if joint < len(results) else None)
-        targets = _zero_targets(result, motors)
+        targets = dual_lut_targets(result, motors, 0.0)
         if len(motors) != 2 or targets is None:
             return False, f'J{joint:02d} zero finish requires a valid dual LUT containing 0 degrees'
         plan.append((joint, targets))

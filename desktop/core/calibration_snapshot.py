@@ -516,8 +516,9 @@ def update_manual_snapshot(
     min_raw: list[int],
     max_raw: list[int],
     identity: dict | None = None,
+    updated_joint_mask: int | None = None,
 ) -> dict:
-    """更新 V6 Manual 数据，并只失效端点真正变化关节的 Auto/LUT 与限位。"""
+    """只更新指定关节；None 表示显式整表替换，RAM 缺项不影响范围外 JSON。"""
     with snapshot_write_transaction():
         return _update_manual_snapshot_locked(
             path,
@@ -525,6 +526,7 @@ def update_manual_snapshot(
             min_raw=min_raw,
             max_raw=max_raw,
             identity=identity,
+            updated_joint_mask=updated_joint_mask,
         )
 
 
@@ -535,6 +537,7 @@ def _update_manual_snapshot_locked(
     min_raw: list[int],
     max_raw: list[int],
     identity: dict | None = None,
+    updated_joint_mask: int | None = None,
 ) -> dict:
     """在快照写事务内更新 Manual 数据。"""
     target = Path(path)
@@ -555,6 +558,14 @@ def _update_manual_snapshot_locked(
     old_max = _normalized_list(
         payload.get("manual_reference_max_raw"), ENCODER_COUNT, 0
     )
+    scope = _JOINT_MASK if updated_joint_mask is None else updated_joint_mask
+    if type(scope) is not int or scope <= 0 or scope & ~_JOINT_MASK:
+        raise CalibrationSnapshotError("Manual update joint scope is empty or invalid")
+    valid_mask = (old_mask & ~scope) | (valid_mask & scope)
+    min_raw = [int(min_raw[j]) if scope & (1 << j) else old_min[j]
+               for j in range(ENCODER_COUNT)]
+    max_raw = [int(max_raw[j]) if scope & (1 << j) else old_max[j]
+               for j in range(ENCODER_COUNT)]
     changed_mask = 0
     for joint_idx in range(ENCODER_COUNT):
         bit = 1 << joint_idx

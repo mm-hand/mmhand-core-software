@@ -111,6 +111,8 @@ def run(io, joint_mask: int, motor_mask: int,
                     CALIB_DIAG_PHASE_SEQUENCE, 0xFF, 0xFF,
                     int(joint_mask), int(motor_mask), 0, 0)
             message = "active scope has no joints"
+        elif not io.preflight_finger_aa(joints):
+            message = io.feedback_recovery_error
         elif not io.wait_servo_recovery(selected_motors):
             message = _servo_recovery_message(io, "selected servo feedback recovery failed")
         elif not io.wait_encoder_recovery(selected_mask):
@@ -120,6 +122,7 @@ def run(io, joint_mask: int, motor_mask: int,
             if workspace_motors is None:
                 message = "workspace feedback preflight failed"
             else:
+                workspace_motors |= io.finger_aa_motor_mask(joints)
                 io.set_workspace_read_mask(workspace_motors)
                 if not io.wait_servo_recovery(selected_motors | workspace_motors):
                     message = _servo_recovery_message(io, "workspace servo feedback recovery failed")

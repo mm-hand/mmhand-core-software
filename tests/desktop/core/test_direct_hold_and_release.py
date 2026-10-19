@@ -1,3 +1,5 @@
+
+from _clock_helpers import stamp
 from desktop.core.protocol import HOST_PROTOCOL_VERSION
 import time
 from unittest.mock import MagicMock, call
@@ -20,6 +22,7 @@ def controller_with_motor():
     state.has_p4_time = True
     state.p4_time_ms = state.servo_feedback_p4_time_ms = 1000
     state.servo_abs_last_rx_ts = time.time()
+    stamp(state, 'servo_abs_last_rx_ts')
     state.servo_online_bitmap = state.servo_route_controllable_bitmap = 8
     state.multi_turn_unknown_bitmap = ((1 << MOTOR_COUNT) - 1) & ~8
     state.servo_angles[3] = 3000
@@ -37,6 +40,8 @@ def test_direct_enable_holds_exact_abs_and_ignores_unselected_unknown():
             state.direct_target_token = token; state.direct_target_status = 2
             state.direct_target_applied_mask = mask; state.direct_target_rejected_mask = 0
             state.direct_target_result_rx_ts = state.system_status_last_rx_ts = time.time()
+            stamp(state, 'direct_target_result_rx_ts')
+            stamp(state, 'system_status_last_rx_ts')
             state.system_state = SYSTEM_STATE_RUN_DIRECT
             state.control_enabled = True; state.servo_target_owner = 1
         return True
@@ -55,6 +60,7 @@ def test_direct_enable_rejects_untrusted_or_clamped_hold(fault):
     state = controller.current_state
     if fault == "stale":
         state.servo_abs_last_rx_ts -= 2
+        stamp(state, 'servo_abs_last_rx_ts')
     elif fault == "unknown":
         state.multi_turn_unknown_bitmap |= 8
     elif fault == "route":

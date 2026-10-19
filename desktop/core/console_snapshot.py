@@ -72,8 +72,12 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
         span = directed_encoder_delta(minimum, maximum, row['direction']) if row['manual_valid'] or {'min', 'max'} <= draft.keys() else None
         urdf_span = deg_to_encoder_count(f32(f32(row['max']) - f32(row['min'])))
         quality = joint_quality(row['manual_valid'] or draft.get('status') == 'SAVED', span, urdf_span, hand._joint_transactions.get(j, draft.get('status', '')), fresh)
+        saved_pair = hand._manual_saved_pairs.get(j)
         persisted = (draft.get('status') == 'SAVED' or state.manual_reference_committed and
                      hand._manual_saved_pairs.get(j) == (state.manual_reference_min_raw[j], state.manual_reference_max_raw[j]))
+        persistence = (draft.get('status') or ('Saved' if persisted and row['manual_valid'] else
+                       'Saved in JSON; not loaded in P4' if saved_pair and not row['manual_valid'] else
+                       'RAM differs from saved JSON' if saved_pair else 'RAM / JSON unknown'))
         if row['manual_valid'] and quality[0] in ('READY', 'OFFSET') and not persisted:
             quality = ['UNKNOWN']
         motor_status = motor_quality(row['auto_valid'], result, fresh, joint=j)
@@ -89,7 +93,7 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
                    joint_quality=quality, motor_quality=motor_status, motors=list(joint_motors(j)),
                    auto_min=result.get('autoMinRaw'), auto_max=result.get('autoMaxRaw'),
                    current_min=result.get('currentMinDeg'), result=result,
-                   persistence=draft.get('status', 'Saved' if persisted else 'RAM / JSON unknown'),
+                   persistence=persistence,
                    encoder='FAULT' if fresh and state.encoder_fault_bitmap & (1 << j) else
                            'ONLINE' if fresh and state.has_encoder_health_status and state.encoder_online_bitmap & (1 << j) else 'UNKNOWN',
                    ros_target=getattr(hand, '_console_ros_targets', {}).get(j))

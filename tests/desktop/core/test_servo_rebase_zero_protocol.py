@@ -1,5 +1,7 @@
 """设零协议、异步最终结果和新坐标锚点验证；不连接真实硬件。"""
 
+from _clock_helpers import stamp
+
 import struct
 from unittest.mock import MagicMock, call
 
@@ -130,6 +132,7 @@ def _controller(monkeypatch):
     state.system_state = SYSTEM_STATE_IDLE
     state.has_system_status_data = True
     state.system_status_last_rx_ts = core_logic.time.time()
+    stamp(state, 'system_status_last_rx_ts')
     state.has_servo_route_status = True
     state.servo_route_controllable_bitmap = 3
     state.has_servo_rebase_zero_result = True
@@ -148,14 +151,15 @@ def _publish_final_result(controller, success=3, failed=0):
     state.servo_rebase_zero_success_mask = success
     state.servo_rebase_zero_failed_mask = failed
     state.servo_rebase_zero_result_last_rx_ts = core_logic.time.time()
+    stamp(state, 'servo_rebase_zero_result_last_rx_ts')
     state.servo_rebase_zero_result_p4_time_ms = 1000
 
 
 def test_api_waits_for_final_result_without_maintenance_reset(monkeypatch):
     controller = _controller(monkeypatch)
 
-    def ack(cmd, _timeout, received_after):
-        assert received_after > 0
+    def ack(cmd, _timeout, received_after_monotonic):
+        assert received_after_monotonic > 0
         _publish_final_result(controller)
         return cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, core_logic.time.time()
 
@@ -188,10 +192,10 @@ def test_api_accepts_final_result_even_when_ack_was_lost(monkeypatch):
 def test_direct_zero_uses_f1_ack_and_the_shared_hardware_result(monkeypatch):
     controller = _controller(monkeypatch)
 
-    def ack(cmd, _timeout, received_after):
+    def ack(cmd, _timeout, received_after_monotonic):
         assert cmd == CMD_MOTOR_ABS_ZERO
         _publish_final_result(controller)
-        return cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after
+        return cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after_monotonic
 
     controller.comm.wait_for_ack.side_effect = ack
     assert controller.zero_direct_motor_abs(3).ok
@@ -282,9 +286,9 @@ def test_direct_zero_cancel_after_submission_still_advances_when_late_anchor_is_
     controller = _controller(monkeypatch)
     cancelled = [False]
 
-    def ack(cmd, _timeout, received_after):
+    def ack(cmd, _timeout, received_after_monotonic):
         cancelled[0] = True
-        return cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after
+        return cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after_monotonic
 
     controller.comm.wait_for_ack.side_effect = ack
     assert not controller.zero_direct_motor_abs(3, cancelled=lambda: cancelled[0]).ok
@@ -342,11 +346,11 @@ def test_direct_zero_different_device_result_cannot_complete_or_invalidate_origi
     original_device = controller.current_state.product_fingerprint["device_id"]
     monkeypatch.setattr(core_logic, "SERVO_REBASE_ZERO_RESULT_TIMEOUT_S", 0)
 
-    def other_device_ack(cmd, _timeout, received_after):
+    def other_device_ack(cmd, _timeout, received_after_monotonic):
         controller.current_state.product_fingerprint["device_id"] = "0000FEDCBA987654"
         _publish_final_result(controller)
         _fresh_zero_feedback(controller)
-        return cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after
+        return cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after_monotonic
 
     controller.comm.wait_for_ack.side_effect = other_device_ack
     assert not controller.zero_direct_motor_abs(3).ok
@@ -390,9 +394,9 @@ def test_reboot_history_or_incomplete_result_keeps_local_zero_request_unresolved
 def test_api_partial_failure_exposes_success_and_failure_masks(monkeypatch):
     controller = _controller(monkeypatch)
 
-    def ack(cmd, _timeout, received_after):
+    def ack(cmd, _timeout, received_after_monotonic):
         _publish_final_result(controller, success=1, failed=2)
-        return cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after
+        return cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after_monotonic
 
     controller.comm.wait_for_ack.side_effect = ack
     result = controller.rebase_servo_abs_zero(3)

@@ -308,6 +308,8 @@ class HandModel:
     calib_status: str = "IDLE"  # NO_CALIB, IDLE, PENDING, RUNNING, SUCCESS, WARN, FAILED
     # 上位机完成当前状态合并的 Unix 时间，仅用于 UI 新鲜度与 CSV host_time。
     host_rx_time: float = 0.0
+    # Process-local receive times; wall timestamps remain available for logs.
+    monotonic_received: dict[str, float] = field(default_factory=dict)
     # 当前状态最近一次有效 P4 数据包的 millis() 时间。0 表示尚未收到 P4 时间。
     p4_time_ms: int = 0
     has_p4_time: bool = False
@@ -537,6 +539,10 @@ class HandModel:
         for i, a in enumerate(angles):
             if i < len(self.encoders):
                 self.encoders[i].target_angle_deg = float(a)
+
+    def received_at(self, field: str) -> float:
+        """Monotonic receive time; missing telemetry is never treated as fresh."""
+        return self.monotonic_received.get(field, 0.0)
 
     def copy_state_from(self, other: "HandModel") -> None:
         """Copy telemetry without replacing locally owned targets and encoder zeros.

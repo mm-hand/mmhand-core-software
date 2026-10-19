@@ -25,6 +25,12 @@ class _IO:
     def set_workspace_read_mask(self, mask):
         self.calls.append(("workspace", mask))
 
+    def preflight_finger_aa(self, joints):
+        return True
+
+    def finger_aa_motor_mask(self, joints):
+        return 0
+
     def session_state(self, status, **fields):
         self.calls.append(("state", status, fields))
 

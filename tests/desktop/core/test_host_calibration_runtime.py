@@ -1,5 +1,7 @@
 """校准设备适配、执行确认及每关节一次 Manual/LUT 写回。"""
 
+from _clock_helpers import stamp
+
 import time
 from unittest.mock import MagicMock
 
@@ -27,9 +29,11 @@ def io(monkeypatch):
     state.has_system_status_data = state.has_p4_time = True
     state.system_state = SYSTEM_STATE_IDLE
     state.system_status_last_rx_ts = time.time()
+    stamp(state, 'system_status_last_rx_ts')
     state.system_status_p4_time_ms = 1000
     state.p4_time_ms = state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = 1000
     state.servo_abs_last_rx_ts = time.time()
+    stamp(state, 'servo_abs_last_rx_ts')
     state.has_servo_angle_data = state.has_servo_raw_data = True
     state.has_servo_route_status = True
     state.servo_online_bitmap = state.servo_route_controllable_bitmap = (1 << 27) - 1
@@ -40,6 +44,7 @@ def io(monkeypatch):
     state.servo_logical_range_max = [30000] * 27
     state.can_link_online = state.has_encoder_raw_data = True
     state.encoder_raw_last_rx_ts = time.time()
+    stamp(state, 'encoder_raw_last_rx_ts')
     state.encoder_raw_p4_time_ms = 1000
     state.encoder_online_bitmap = (1 << 21) - 1
     state.manual_reference_valid_bitmap = (1 << 21) - 1
@@ -170,6 +175,7 @@ def test_stale_or_offline_telemetry_cannot_drive_endpoint_detection(io):
     state.servo_telem_online[2] = True
     state.servo_telem_p4_time_ms = 1000
     state.servo_telem_last_rx_ts = time.time()
+    stamp(state, 'servo_telem_last_rx_ts')
     state.servo_load[2] = -250
     assert io.servo_load(2) == -250
     state.servo_telem_p4_time_ms = 499
@@ -185,9 +191,10 @@ def test_historical_task_packet_does_not_make_fresh_feedback_49_days_old(io):
     state.encoder_raw_p4_time_ms = 398980
     state.servo_telem_p4_time_ms = 398986
     state.servo_telem_last_rx_ts = time.time()
+    stamp(state, 'servo_telem_last_rx_ts')
     state.servo_telem_online[2] = True
     state.servo_load[2] = 250
-    assert io._age(state, 398986, state.servo_abs_last_rx_ts) < 100
+    assert io._age(state, 398986, state.received_at('servo_abs_last_rx_ts')) < 100
     assert io.servo_abs(2) == 0
     assert io.encoder_raw(1) == 10000
     assert io.servo_load(2) == 250
@@ -204,13 +211,15 @@ def test_historical_packet_cannot_hide_genuinely_stale_device_feedback(io):
 
 
 def test_feedback_age_handles_p4_wrap_and_system_clock_extrapolation(io, monkeypatch):
-    monkeypatch.setattr(time, 'time', lambda: 1024.0)
+    monkeypatch.setattr(time, 'monotonic', lambda: 1024.0)
+    io.controller.current_state.monotonic_received['system_status_last_rx_ts'] = 1024.0
     state = io.controller.current_state
     state.system_status_p4_time_ms = 10
-    assert 26 <= io._age(state, 0xFFFFFFF0, time.time()) < 100
+    assert 26 <= io._age(state, 0xFFFFFFF0, time.monotonic()) < 100
     state.system_status_p4_time_ms = 1000
     state.system_status_last_rx_ts = time.time() - 0.6
-    assert io._age(state, 1000, time.time()) == pytest.approx(600)
+    stamp(state, 'system_status_last_rx_ts')
+    assert io._age(state, 1000, time.monotonic()) == pytest.approx(600, abs=.1)
 
 
 def _recovery_clock(io, monkeypatch, *, advance_feedback=True):
@@ -226,6 +235,8 @@ def _recovery_clock(io, monkeypatch, *, advance_feedback=True):
             state.system_status_p4_time_ms = state.servo_feedback_p4_time_ms + 10
             state.p4_time_ms = state.servo_feedback_p4_time_ms - 498
             state.system_status_last_rx_ts = state.servo_abs_last_rx_ts = time.time()
+            stamp(state, 'system_status_last_rx_ts')
+            stamp(state, 'servo_abs_last_rx_ts')
 
     monkeypatch.setattr(io, 'sleep_ms', sleep)
     return clock
@@ -273,6 +284,7 @@ def test_entry_resets_once_before_rebase_without_cancelling_host_session(io, mon
     def ack(command, value):
         calls.append((command, value))
         state.system_status_last_rx_ts = time.time() + 0.01
+        stamp(state, 'system_status_last_rx_ts')
         return True
 
     monkeypatch.setattr(io, '_ack', ack)
@@ -313,6 +325,7 @@ def test_motion_waits_for_matching_execution_result_and_original_parameters(
         state = io.controller.current_state
         state.direct_target_token = command[1]
         state.direct_target_result_rx_ts = time.time()
+        stamp(state, 'direct_target_result_rx_ts')
         state.direct_target_requested_mask = 4
         state.direct_target_applied_mask = applied
         state.direct_target_rejected_mask = rejected
@@ -353,6 +366,7 @@ def test_remote_execution_and_owner_can_arrive_after_original_100ms(io, monkeypa
         if clock[0] >= 160:
             state.direct_target_token = sent[0][1]
             state.direct_target_result_rx_ts = time.time()
+            stamp(state, 'direct_target_result_rx_ts')
             state.direct_target_requested_mask = 4
             state.direct_target_applied_mask = 4
             state.direct_target_status = 2
@@ -396,6 +410,7 @@ def test_expected_turn_unknown_only_covers_static_rebase_window(io, monkeypatch)
         assert not cancelled() and send_gate(lambda: True)
         state.system_status_p4_time_ms = 1050
         state.system_status_last_rx_ts = time.time()
+        stamp(state, 'system_status_last_rx_ts')
         state.multi_turn_unknown_bitmap = 4
         state.system_fault_bitmap = SYSTEM_FAULT_MULTITURN_UNKNOWN
         during = io._state()
@@ -414,6 +429,7 @@ def test_expected_turn_unknown_only_covers_static_rebase_window(io, monkeypatch)
         state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = 1120
         state.servo_logical_range_p4_time_ms = 1120
         state.servo_logical_range_last_rx_ts = time.time() + 0.01
+        stamp(state, 'servo_logical_range_last_rx_ts')
         return predicate()
 
     monkeypatch.setattr(io, '_wait', wait)
@@ -446,6 +462,7 @@ def test_failed_rebase_does_not_hide_persistent_unknown(io, monkeypatch):
         state.system_fault_bitmap = SYSTEM_FAULT_MULTITURN_UNKNOWN
         state.system_status_p4_time_ms = 1050
         state.system_status_last_rx_ts = time.time()
+        stamp(state, 'system_status_last_rx_ts')
         assert io.is_expected_calibration_turn_unknown(io._state())
         return MagicMock(ok=False, message='hardware zero failed')
 
@@ -681,6 +698,7 @@ def test_target_token_rollover_keeps_advancing(io, monkeypatch):
     def send(command):
         state.direct_target_token = command[1]
         state.direct_target_result_rx_ts = time.time()
+        stamp(state, 'direct_target_result_rx_ts')
         state.direct_target_requested_mask = 4
         state.direct_target_applied_mask = 4
         state.direct_target_rejected_mask = 0
@@ -704,6 +722,7 @@ def test_rebase_requires_feedback_and_range_after_result(io, monkeypatch):
     # 旧帧本身仍然新鲜、可信、同帧，不足以证明坐标更新。
     state.servo_logical_range_p4_time_ms = 1000
     state.servo_logical_range_last_rx_ts = time.time()
+    stamp(state, 'servo_logical_range_last_rx_ts')
     checked = []
 
     def wait(predicate, _timeout):
@@ -712,6 +731,7 @@ def test_rebase_requires_feedback_and_range_after_result(io, monkeypatch):
         state.system_status_p4_time_ms = 1120
         state.servo_logical_range_p4_time_ms = 1120
         state.servo_logical_range_last_rx_ts = time.time() + 0.01
+        stamp(state, 'servo_logical_range_last_rx_ts')
         checked.append(predicate())
         return checked[-1]
 
@@ -745,6 +765,7 @@ def _install_rebase_feedback(io, *, result_ms=1100, abs_ms=1120,
         state.servo_raw_p4_time_ms = raw_ms
         state.servo_logical_range_p4_time_ms = range_ms
         state.servo_logical_range_last_rx_ts = time.time()
+        stamp(state, 'servo_logical_range_last_rx_ts')
 
     io.controller.request_state_sync = MagicMock(side_effect=sync)
 
@@ -805,6 +826,8 @@ def test_post_zero_timeout_reports_the_missing_trust_gate(
 ):
     _install_rebase_feedback(io)
     setattr(io.controller.current_state, field, value)
+    if field.endswith('last_rx_ts'):
+        stamp(io.controller.current_state, field)
     _rebase_wait_clock(io, monkeypatch)
     assert not io.prepare_joint(1, 4)[0]
     assert expected in io.feedback_recovery_error
@@ -816,6 +839,7 @@ def test_post_zero_timeout_reports_raw_offline_and_old_range_reply(io, monkeypat
     state = io.controller.current_state
     state.servo_raw_online[2] = False
     state.servo_logical_range_last_rx_ts = time.time() - 1
+    stamp(state, 'servo_logical_range_last_rx_ts')
     io.controller.request_state_sync = MagicMock()
     state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = 1120
     state.servo_logical_range_p4_time_ms = 1120
@@ -857,6 +881,7 @@ def test_completed_rebase_window_uses_known_anchor_even_when_system_status_lags(
     def zero(_mask, *, cancelled, send_gate):
         assert not cancelled() and send_gate(lambda: True)
         state.system_status_last_rx_ts = time.time()
+        stamp(state, 'system_status_last_rx_ts')
         state.multi_turn_unknown_bitmap = 4
         state.system_fault_bitmap = SYSTEM_FAULT_MULTITURN_UNKNOWN
         intermediate = io._state()

@@ -377,13 +377,13 @@ class ApplicationActions(IdResetActions):
     def _fresh_application_state(self):
         state = self.get_state_snapshot()
         return (self.is_comm_connected() and state.has_system_status_data and
-                0 <= time.time() - state.system_status_last_rx_ts <= 0.6)
+                0 <= time.monotonic() - state.received_at('system_status_last_rx_ts') <= 0.6)
 
     @staticmethod
     def _mapped_feedback_fresh(state):
         # SYSTEM_STATUS can precede a newly sampled angle by one heartbeat.
         delta = ((state.p4_time_ms - state.encoder_mapped_p4_time_ms + 0x80000000) & 0xffffffff) - 0x80000000
-        return (state.has_sensor_data and 0 <= time.time() - state.encoder_mapped_last_rx_ts <= 0.6
+        return (state.has_sensor_data and 0 <= time.monotonic() - state.received_at('encoder_mapped_last_rx_ts') <= 0.6
                 and abs(delta) <= 600)
 
     def _wait_application(self, predicate, epoch, timeout=3.0):
@@ -498,14 +498,14 @@ class ApplicationActions(IdResetActions):
             self.cancel_replay_motion('control mode switch')
             self.invalidate_joint_commands()
             self.invalidate_direct_commands()
-            sent_at = time.time()
+            sent_at = time.monotonic()
             if not self.comm.send_command('control_release'):
                 return False, 'Control handover was not queued'
-        ack = self.comm.wait_for_ack(CMD_CONTROL_RELEASE, timeout_s=1, received_after=sent_at)
+        ack = self.comm.wait_for_ack(CMD_CONTROL_RELEASE, timeout_s=1, received_after_monotonic=sent_at)
         if not ack or ack[2] not in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED):
             return False, 'P4 did not acknowledge control handover'
         confirmed = self._wait_application(lambda s: self._fresh_application_state()
-            and s.system_status_last_rx_ts > ack[3] and not s.control_enabled and not s.servo_target_owner
+            and s.received_at('system_status_last_rx_ts') >= sent_at and not s.control_enabled and not s.servo_target_owner
             and s.system_state in allowed[:4], epoch)
         return self._synchronize_control_parameters(epoch) if confirmed else (False, 'P4 did not release the old control owner')
 
@@ -529,7 +529,7 @@ class ApplicationActions(IdResetActions):
                 return False, 'Enable cancelled'
             self.invalidate_direct_commands()
             self.set_control_mode(ControlMode.JOINT_ANGLE)
-            started = time.time()
+            started = time.monotonic()
             self.start()
         # START prepares a stopped P4. Motion ownership is granted only
         # when the paired joint target and RUN_FEEDBACK are submitted.
@@ -542,8 +542,8 @@ class ApplicationActions(IdResetActions):
             and s.has_active_scope_status
             and s.active_motor_mask == motors and s.active_joint_mask == mask
             and s.require_can_feedback
-            and 0 <= time.time() - s.system_status_last_rx_ts <= 0.6
-            and s.system_status_last_rx_ts > started,
+            and 0 <= time.monotonic() - s.received_at('system_status_last_rx_ts') <= 0.6
+            and s.received_at('system_status_last_rx_ts') > started,
             epoch, 5,
         )
         if not ok:
@@ -607,7 +607,7 @@ class ApplicationActions(IdResetActions):
             lambda s: s.system_state == SYSTEM_STATE_RUN_FEEDBACK and s.control_enabled
             and s.servo_target_owner == SERVO_TARGET_OWNER_CONTROL
             and s.active_joint_mask == mask and s.active_motor_mask == motors
-            and 0 <= time.time() - s.system_status_last_rx_ts <= 0.6,
+            and 0 <= time.monotonic() - s.received_at('system_status_last_rx_ts') <= 0.6,
             epoch, 3)
         if not confirmed and epoch == self._application_epoch:
             self.stop_motion(source="enable confirmation failed")
@@ -634,20 +634,20 @@ class ApplicationActions(IdResetActions):
 
     def request_clear_faults(self):
         def reset(epoch):
-            sent_at = time.time()
+            sent_at = time.monotonic()
             with self._application_lock:
                 if epoch != self._application_epoch:
                     return False, 'Fault clear cancelled'
                 self.reset()
-            ack = self.comm.wait_for_ack(CMD_RESET, timeout_s=1, received_after=sent_at)
+            ack = self.comm.wait_for_ack(CMD_RESET, timeout_s=1, received_after_monotonic=sent_at)
             if not ack or ack[2] not in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED):
                 return False, 'P4 did not acknowledge RESET. STOP remains pending; check the connection and Diagnostics.'
             # Live offline/unknown-position faults can immediately recur after
             # RESET. They do not mean the explicit STOP request is still latched.
             ok = self._wait_application(lambda s: self.is_comm_connected()
                                         and s.has_system_status_data
-                                        and s.system_status_last_rx_ts > ack[3]
-                                        and 0 <= time.time() - s.system_status_last_rx_ts <= 0.6
+                                        and s.received_at('system_status_last_rx_ts') >= sent_at
+                                        and 0 <= time.monotonic() - s.received_at('system_status_last_rx_ts') <= 0.6
                                         and not s.control_enabled and not s.servo_target_owner, epoch)
             if not ok:
                 return False, 'RESET acknowledged, but a fresh stationary P4 status was not confirmed. Check Diagnostics.'
@@ -712,7 +712,7 @@ class ApplicationActions(IdResetActions):
             return (state.has_encoder_raw_data and not encoder.raw_error
                     and not state.encoder_fault_bitmap & (1 << joint)
                     and state.encoder_online_bitmap & (1 << joint)
-                    and 0 <= time.time() - state.encoder_raw_last_rx_ts <= 0.3
+                    and 0 <= time.monotonic() - state.received_at('encoder_raw_last_rx_ts') <= 0.3
                     and ((state.p4_time_ms - state.encoder_raw_p4_time_ms) & 0xFFFFFFFF) <= 300
                     and 0 <= encoder.raw_sensor < 16384)
 
@@ -742,7 +742,7 @@ class ApplicationActions(IdResetActions):
             p4_age = (state.p4_time_ms - state.encoder_raw_p4_time_ms) & 0xFFFFFFFF
             if (not state.has_encoder_raw_data or encoder.raw_error or state.encoder_fault_bitmap & (1 << joint)
                     or not state.encoder_online_bitmap & (1 << joint)
-                    or (not valid_at_click and not 0 <= time.time() - state.encoder_raw_last_rx_ts <= 0.3)
+                    or (not valid_at_click and not 0 <= time.monotonic() - state.received_at('encoder_raw_last_rx_ts') <= 0.3)
                     or p4_age > 300 or not 0 <= encoder.raw_sensor < 16384):
                 return False, f'J{joint:02d} raw feedback is invalid or stale. Check the encoder before capturing.'
             current = self.get_state_snapshot()
@@ -796,7 +796,7 @@ class ApplicationActions(IdResetActions):
             self._manual_drafts[joint]['status'] = 'CANCELLED' if epoch != self._application_epoch else 'SAVED' if ok else stage
             if ok and epoch == self._application_epoch:
                 self._manual_saved_pairs[joint] = (pair['min'], pair['max'])
-        return ok, (f'J{joint:02d} joint calibration saved; motor calibration is still needed.' if ok else
+        return ok, ('' if ok else
                     f'J{joint:02d} Manual was not fully saved ({stage}); draft retained. Retry explicitly.')
 
 
@@ -816,7 +816,8 @@ class ApplicationActions(IdResetActions):
                 mins[j] = maxs[j] = 0
             if epoch != self._application_epoch:
                 return False, 'Clear cancelled'
-            ok = self.set_manual_encoder_references(mins, maxs)
+            ok = self.set_manual_encoder_references(
+                mins, maxs, updated_joint_mask=sum(1 << j for j in joints))
             if ok:
                 with self._application_lock:
                     for j in joints:
@@ -1024,13 +1025,13 @@ class ApplicationActions(IdResetActions):
                     self._controller.stop()
                     return True
 
-                stopped_at = time.time()
+                stopped_at = time.monotonic()
                 if not submit(stop_outputs):
                     return False, 'ABS zero cancelled before stopping'
                 stopped = self._wait_application(
                     lambda s: self.is_comm_connected() and not cancelled()
-                    and 0 <= time.time() - s.system_status_last_rx_ts <= 0.6
-                    and s.system_status_last_rx_ts >= stopped_at
+                    and 0 <= time.monotonic() - s.received_at('system_status_last_rx_ts') <= 0.6
+                    and s.received_at('system_status_last_rx_ts') >= stopped_at
                     and not s.control_enabled and not s.servo_target_owner
                     and s.system_state in (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE,
                                            SYSTEM_STATE_READY, SYSTEM_STATE_RECOVERY_REQUIRED),
@@ -1065,7 +1066,7 @@ class ApplicationActions(IdResetActions):
                             or state.servo_rebase_zero_result_token != result.result_token
                             or state.servo_feedback_p4_time_ms != state.servo_raw_p4_time_ms
                             or not 0 < delta < 0x80000000
-                            or not 0 <= time.time() - state.servo_abs_last_rx_ts <= 0.6
+                            or not 0 <= time.monotonic() - state.received_at('servo_abs_last_rx_ts') <= 0.6
                             or not state.has_servo_route_status):
                         return False
                     for motor in chosen:
@@ -1226,11 +1227,11 @@ class ApplicationActions(IdResetActions):
                 return False, 'Direct control cancelled'
             self._direct_sequence = (max(self._direct_sequence, state.direct_target_token) + 1) & 0xffffffff or 1
             token = self._direct_sequence
-            sent_at = time.time()
+            sent_at = time.monotonic()
             if not self.comm.send_command(('motor_pos_abs', token, mask, values, 400, 20)):
                 return False, 'Motor target send failed'
         ok = self._wait_application(lambda s: s.direct_target_token == token
-                                    and s.direct_target_result_rx_ts >= sent_at, epoch, 1)
+                                    and s.received_at('direct_target_result_rx_ts') >= sent_at, epoch, 1)
         result = self.get_state_snapshot()
         ok = bool(ok and result.direct_target_status == 2 and result.direct_target_applied_mask == mask
                   and not result.direct_target_rejected_mask)

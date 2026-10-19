@@ -1,5 +1,7 @@
 """触觉摘要有效位图、来源和在线状态测试。"""
 
+from _clock_helpers import stamp
+
 import struct
 import time
 
@@ -114,6 +116,7 @@ def test_p4_relay_timeout_does_not_confuse_link_online_with_module_mask():
     model.tactile_module_valid_mask = 0x7FFF
     model.tactile_module_online = [True] * 15
     model.tactile_last_rx_ts = time.time() - 1.0
+    stamp(model, 'tactile_last_rx_ts')
 
     LowerComputerComm._apply_connectivity_visibility(model)
 

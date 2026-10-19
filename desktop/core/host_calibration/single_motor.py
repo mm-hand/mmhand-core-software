@@ -508,6 +508,10 @@ def run_single(io, joint: int, params: AutoCalibrationParams,
                ordered_joints, failed_joint_mask: int, sequence_index: int,
                selected_joint_mask: int) -> dict:
     """原 runSingleMotorCalibrationMachine 的串行循环与中止语义。"""
+    prepared, message = io.prepare_finger_aa(joint)
+    if not prepared:
+        return {"success": False, "aborted": True, "reason": message,
+                "result": None, "limits": {}}
     ctx = JointCalibContext(joint)
     io.trace("SEQUENCE_SERIAL_BEGIN", joint, 255, sequence_index=sequence_index,
              joint_count=len(ordered_joints))
@@ -520,7 +524,9 @@ def run_single(io, joint: int, params: AutoCalibrationParams,
         if targets is None:
             io.diag(p.CALIB_DIAG_REASON_HOLD_TARGET_FAILED, p.CALIB_DIAG_PHASE_SEQUENCE,
                     joint, 255, sequence_index, len(ordered_joints), 0, selected_joint_mask)
-            return {"success": False, "aborted": True, "reason": "hold target failed", "result": None, "limits": {}}
+            return {"success": False, "aborted": True,
+                    "reason": getattr(io, 'motion_publish_error', '') or "hold target failed",
+                    "result": None, "limits": {}}
         step_single(ctx, io, params, targets)
         if not io.publish(targets, params.servoSpeed, params.servoAcc):
             mask = sum(1 << motor for motor in targets)

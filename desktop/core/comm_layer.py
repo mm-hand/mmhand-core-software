@@ -1665,8 +1665,10 @@ class LowerComputerComm:
         cmd: int,
         timeout_s: float = 1.0,
         received_after: Optional[float] = None,
+        *, received_after_monotonic: Optional[float] = None,
     ) -> Optional[tuple]:
-        return self._ack_tracker.wait_for(cmd, timeout_s, received_after)
+        return self._ack_tracker.wait_for(cmd, timeout_s, received_after,
+                                         received_after_monotonic=received_after_monotonic)
 
     def _enqueue_latest_high_rate(self, cmd: SendCmd) -> bool:
         # Keep only the latest pending high-rate command to avoid UI backlog.

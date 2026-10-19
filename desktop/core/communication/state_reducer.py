@@ -245,6 +245,7 @@ class StateReducer:
 
             model.has_sensor_data = True
             model.encoder_mapped_last_rx_ts = _host_received_at
+            model.monotonic_received['encoder_mapped_last_rx_ts'] = time.monotonic()
             model.encoder_mapped_p4_time_ms = int(packet_p4_time_ms or 0)
             emitted = True
         return emitted
@@ -263,6 +264,7 @@ class StateReducer:
             model.has_encoder_raw_data = True
             model.encoder_raw_p4_time_ms = int(packet_p4_time_ms or 0)
             model.encoder_raw_last_rx_ts = time.time()
+            model.monotonic_received['encoder_raw_last_rx_ts'] = time.monotonic()
             valid_mask = sum(
                 1 << index
                 for index in range(min(ENCODER_COUNT, len(raw_values)))
@@ -300,6 +302,7 @@ class StateReducer:
             if packet_p4_time_ms is not None:
                 model.servo_feedback_p4_time_ms = int(packet_p4_time_ms)
             model.servo_abs_last_rx_ts = time.time()
+            model.monotonic_received['servo_abs_last_rx_ts'] = time.monotonic()
             model.has_servo_angle_data = True
             # ABS 包没有单路有效位。尚无权威在线状态时，不能把
             # 默认 multi_turn_unknown=0 和占位 ABS 误当成可信反馈。
@@ -343,6 +346,7 @@ class StateReducer:
             model.multiturn_restore_restored_mask = int(restored_mask)
             model.multiturn_restore_rejected_mask = int(rejected_mask)
             model.multiturn_restore_result_last_rx_ts = time.time()
+            model.monotonic_received['multiturn_restore_result_last_rx_ts'] = time.monotonic()
             model.multiturn_restore_result_p4_time_ms = int(packet_p4_time_ms or 0)
             model.has_multiturn_restore_result = True
             emitted = True
@@ -375,6 +379,7 @@ class StateReducer:
                 packet_p4_time_ms or 0
             )
             model.servo_rebase_zero_result_last_rx_ts = time.time()
+            model.monotonic_received['servo_rebase_zero_result_last_rx_ts'] = time.monotonic()
             model.has_servo_rebase_zero_result = True
             if success_mask and new_result:
                 # F0 改变 ABS 的坐标原点；旧、新坐标的
@@ -398,6 +403,7 @@ class StateReducer:
             model.direct_target_rejected_mask = int(rejected)
             model.direct_target_status = int(status)
             model.direct_target_result_rx_ts = time.time()
+            model.monotonic_received['direct_target_result_rx_ts'] = time.monotonic()
             model.has_direct_target_result = True
             emitted = True
         return emitted
@@ -416,6 +422,7 @@ class StateReducer:
                 model.servo_temperature[i] = int(temps[i])
             model.servo_telem_p4_time_ms = int(packet_p4_time_ms or 0)
             model.servo_telem_last_rx_ts = time.time()
+            model.monotonic_received['servo_telem_last_rx_ts'] = time.monotonic()
             emitted = True
         return emitted
 
@@ -432,6 +439,7 @@ class StateReducer:
                     model.servo_overload_trigger_load[i] = trigger_loads[i] if faulted else None
             model.has_fault_status_data = True
             model.fault_status_last_rx_ts = time.time()
+            model.monotonic_received['fault_status_last_rx_ts'] = time.monotonic()
             emitted = True
         return emitted
 
@@ -611,6 +619,7 @@ class StateReducer:
             )
             model.has_system_status_data = True
             model.system_status_last_rx_ts = time.time()
+            model.monotonic_received['system_status_last_rx_ts'] = time.monotonic()
             if packet_p4_time_ms is not None:
                 model.system_status_p4_time_ms = int(packet_p4_time_ms)
             if calib_status == 0:
@@ -696,6 +705,7 @@ class StateReducer:
                 event.get("overflow_count", 0)
             )
             model.safety_event_last_rx_ts = time.time()
+            model.monotonic_received['safety_event_last_rx_ts'] = time.monotonic()
             model.has_safety_event = True
             if self._safety_event_channel is not None:
                 self._safety_event_channel.publish(dict(event))
@@ -726,6 +736,7 @@ class StateReducer:
                 model.servo_logical_range_min[i] = int(mins[i])
                 model.servo_logical_range_max[i] = int(maxs[i])
             model.servo_logical_range_last_rx_ts = time.time()
+            model.monotonic_received['servo_logical_range_last_rx_ts'] = time.monotonic()
             model.servo_logical_range_p4_time_ms = int(packet_p4_time_ms or 0)
             emitted = True
         return emitted
@@ -746,6 +757,7 @@ class StateReducer:
                 parsed.get("commit_status", 0)
             )
             model.manual_reference_last_rx_time = time.time()
+            model.monotonic_received['manual_reference_last_rx_time'] = time.monotonic()
             model.has_manual_reference_status = True
             model.manual_reference_min_raw = list(parsed["min_raw"])
             model.manual_reference_max_raw = list(parsed["max_raw"])
@@ -835,6 +847,7 @@ class StateReducer:
                 parsed["motor_command_abs"]
             )
             model.control_trace_last_rx_ts = time.time()
+            model.monotonic_received['control_trace_last_rx_ts'] = time.monotonic()
             emitted = True
         return emitted
 
@@ -957,6 +970,7 @@ class StateReducer:
                 model.tactile_data_level = TACTILE_DATA_LEVEL_FULL
                 model.tactile_online = True
                 model.tactile_last_rx_ts = time.time()
+                model.monotonic_received['tactile_last_rx_ts'] = time.monotonic()
                 model.tactile_full_seq = int(seq)
                 model.tactile_full_summary_seq = (
                     int(accepted_summary_seq)
@@ -1025,6 +1039,7 @@ class StateReducer:
                 "mode": int(applied_mode),
                 "status": int(status),
                 "received_at": float(ack_received_at),
+                "received_monotonic": time.monotonic(),
                 "p4_time_ms": int(packet_p4_time_ms or 0),
             })
             model.proto_ack_history = model.proto_ack_history[-64:]

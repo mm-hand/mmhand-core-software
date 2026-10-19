@@ -1,4 +1,6 @@
 """Motor renumbering recovery, operation state and removed tactile ID APIs."""
+
+from _clock_helpers import stamp
 import time
 import pytest
 from unittest.mock import Mock
@@ -112,8 +114,10 @@ def test_motor_lost_result_resumes_after_scan_without_duplicate_write(hand,monke
     result=finish(hand,hand.request_motor_renumber({(0,i):i+5 for i in range(5)}))
     assert result['status']=='FAILED' and device.writes==[(0,0,253)], result
     hand._controller.current_state.system_status_last_rx_ts=time.time()
+    stamp(hand._controller.current_state, 'system_status_last_rx_ts')
     finish(hand,hand.request_id_scan())
     hand._controller.current_state.system_status_last_rx_ts=time.time()
+    stamp(hand._controller.current_state, 'system_status_last_rx_ts')
     recovered=hand.id_reset_snapshot()['motor']
     assert recovered['recovering']
     assert next(row for row in recovered['rows'] if row['id']==253)['new_id']==5

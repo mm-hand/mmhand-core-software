@@ -24,6 +24,7 @@ class AckTracker:
         self._condition = threading.Condition()
         self._last_ack: Optional[tuple] = None
         self._acks_by_command: dict[int, tuple] = {}
+        self._received_monotonic: dict[int, float] = {}
         self._last_p4_time_ms: Optional[int] = None
         self._sequence = 0
         # 等待保留各命令的最近ACK，防止同批次其他命令覆盖待确认结果。
@@ -44,6 +45,7 @@ class AckTracker:
         with self._condition:
             self._last_ack = None
             self._acks_by_command.clear()
+            self._received_monotonic.clear()
             self._last_p4_time_ms = None
             if reset_sequence:
                 self._sequence = 0
@@ -64,6 +66,8 @@ class AckTracker:
             # 兼容旧调用方：(cmd, mode, status, host_received_at) 必须保持四元素。
             self._last_ack = (int(command), int(mode), int(status), float(received_at))
             self._acks_by_command[int(command)] = self._last_ack
+            received_monotonic = time.monotonic()
+            self._received_monotonic[int(command)] = received_monotonic
             self._last_p4_time_ms = None if p4_time_ms is None else int(p4_time_ms)
             self._sequence += 1
             sequence = int(self._sequence)
@@ -73,6 +77,7 @@ class AckTracker:
                 "mode": int(mode),
                 "status": int(status),
                 "received_at": float(received_at),
+                "received_monotonic": received_monotonic,
                 "p4_time_ms": 0 if p4_time_ms is None else int(p4_time_ms),
             })
             self._condition.notify_all()
@@ -92,15 +97,17 @@ class AckTracker:
         """
         with self._condition:
             self._acks_by_command.pop(int(command), None)
+            self._received_monotonic.pop(int(command), None)
 
     def wait_for(
         self,
         command: int,
         timeout_s: float = 1.0,
         received_after: Optional[float] = None,
+        *, received_after_monotonic: Optional[float] = None,
     ) -> Optional[tuple]:
         """等待指定命令的新 ACK，避免把上一次操作的 ACK 误当成本次成功。"""
-        deadline = time.time() + max(0.0, float(timeout_s))
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
         with self._condition:
             while True:
                 ack = self._acks_by_command.get(int(command))
@@ -112,9 +119,11 @@ class AckTracker:
                         and float(ack[3]) >= float(received_after)
                     )
                 )
+                if received_after_monotonic is not None:
+                    ack_is_new = self._received_monotonic.get(int(command), 0) >= received_after_monotonic
                 if ack is not None and int(ack[0]) == int(command) and ack_is_new:
                     return ack
-                remaining = deadline - time.time()
+                remaining = deadline - time.monotonic()
                 if remaining <= 0.0:
                     return None
                 self._condition.wait(timeout=remaining)

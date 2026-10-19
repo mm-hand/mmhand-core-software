@@ -161,7 +161,9 @@ def test_ack_tracker_rejects_stale_ack_and_exposes_monotonic_sequence() -> None:
     assert second_sequence == 2
     ack = tracker.wait_for(0x10, timeout_s=0.0, received_after=11.0)
     assert ack == (0x10, 3, 0, 12.0)
-    assert tracker.drain_events() == [
+    events = tracker.drain_events()
+    assert all(event.pop('received_monotonic') > 0 for event in events)
+    assert events == [
         {
             "sequence": 1,
             "command": 0x10,

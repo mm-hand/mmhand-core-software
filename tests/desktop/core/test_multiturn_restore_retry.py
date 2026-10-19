@@ -1,11 +1,24 @@
 """DA 恢复只重试已确认失败的电机；真实通信队列不连接硬件。"""
 
+from _clock_helpers import stamp
+
 import queue
 import struct
+from types import SimpleNamespace
 
 import pytest
 
 import desktop.core.core_logic as core_logic
+
+
+def test_no_background_coordinate_write_during_calibration_preparation(restore):
+    controller,comm,state,_=restore
+    controller._host_calibration_io=SimpleNamespace(_session_finished=False,is_cancelled=lambda:False)
+    controller._service_multiturn_restore(state)
+    assert comm.tx_queue.empty()
+    controller._host_calibration_io._session_finished=True
+    controller._service_multiturn_restore(state)
+    assert not comm.tx_queue.empty()
 from desktop.core.comm_layer import LowerComputerComm
 from desktop.core.core_logic import HandController
 from desktop.core.data_models import HandModel
@@ -36,7 +49,9 @@ def restore(monkeypatch):
     state.system_state = SYSTEM_STATE_IDLE
     state.has_system_status_data = True
     state.system_status_last_rx_ts = clock["wall"]
+    stamp(state, 'system_status_last_rx_ts')
     state.servo_abs_last_rx_ts = clock["wall"]
+    stamp(state, 'servo_abs_last_rx_ts')
     state.system_status_p4_time_ms = state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = 1000
     state.has_p4_time = True
     state.p4_time_ms = 1000
@@ -68,7 +83,9 @@ def _advance(restore, seconds=2):
     clock["mono"] += seconds
     clock["wall"] += seconds
     state.system_status_last_rx_ts = clock["wall"]
+    stamp(state, 'system_status_last_rx_ts')
     state.servo_abs_last_rx_ts = clock["wall"]
+    stamp(state, 'servo_abs_last_rx_ts')
     state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = state.system_status_p4_time_ms
 
 
@@ -89,6 +106,7 @@ def _result(restore, restored, rejected, *, token=None):
     state.multiturn_restore_restored_mask = restored
     state.multiturn_restore_rejected_mask = rejected
     state.multiturn_restore_result_last_rx_ts = clock["wall"] + 0.01
+    stamp(state, 'multiturn_restore_result_last_rx_ts')
     state.multiturn_restore_result_p4_time_ms = state.p4_time_ms + 20
     state.has_multiturn_restore_result = True
 
@@ -106,6 +124,8 @@ def test_restore_does_not_write_abs_from_stale_or_unpaired_raw_snapshot(restore,
     controller, comm, state, _clock = restore
     for field, value in changes.items():
         setattr(state, field, value)
+        if field.endswith('last_rx_ts'):
+            stamp(state, field)
     controller._service_multiturn_restore(state)
     assert _drain(comm) == []
     assert controller._multiturn_pending_restore_mask == 0
@@ -173,7 +193,7 @@ def _nack(restore, sequence=1):
     state.proto_ack_sequence = sequence
     return {"sequence": sequence, "command": CMD_RESTORE_MULTITURN,
             "mode": state.system_state, "status": PROTO_ACK_STATUS_UNSUPPORTED_MODE,
-            "received_at": clock["wall"], "p4_time_ms": state.p4_time_ms + 10}
+            "received_at": clock["wall"], "received_monotonic": clock["mono"], "p4_time_ms": state.p4_time_ms + 10}
 
 
 def test_explicit_nack_is_confirmed_failure_and_consumes_at_most_three_write_requests(restore):
@@ -202,7 +222,7 @@ def test_unrelated_or_stale_nack_cannot_resolve_pending(restore, invalid):
     elif invalid == "old_sequence":
         event["sequence"] = controller._multiturn_pending_restore_ack_sequence
     elif invalid == "old_host_time":
-        event["received_at"] = controller._multiturn_pending_restore_sent_at - 0.01
+        event["received_monotonic"] = controller._multiturn_pending_restore_sent_at - 0.01
     else:
         event["p4_time_ms"] = 999
     controller._service_multiturn_restore(state, ack_events=[event])
@@ -236,6 +256,7 @@ def test_unmatched_final_result_never_clears_pending_or_retries(restore, invalid
         state.multiturn_restore_result_token = 9
     elif invalid == "old_host_time":
         state.multiturn_restore_result_last_rx_ts = controller._multiturn_pending_restore_sent_at
+        stamp(state, 'multiturn_restore_result_last_rx_ts')
     elif invalid == "old_p4_time":
         state.multiturn_restore_result_p4_time_ms = 999
     elif invalid == "missing_result":
@@ -320,8 +341,10 @@ def test_nonstationary_or_unresolved_coordinate_transaction_prevents_restore(res
         state.has_system_status_data = False
     elif guard == "stale_status":
         state.system_status_last_rx_ts = clock["wall"] - 1.1
+        stamp(state, 'system_status_last_rx_ts')
     elif guard == "future_status":
         state.system_status_last_rx_ts = clock["wall"] + 0.1
+        stamp(state, 'system_status_last_rx_ts')
     elif guard == "no_routes":
         state.has_servo_route_status = False
     elif guard == "no_raw":

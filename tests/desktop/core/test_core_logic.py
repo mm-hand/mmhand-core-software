@@ -1,3 +1,5 @@
+
+from _clock_helpers import stamp
 from desktop.core.protocol import HOST_PROTOCOL_VERSION
 """Tests for core_logic.py - HandController.set_motor_positions_absolute"""
 
@@ -549,11 +551,13 @@ def test_host_multiturn_restore_uses_nearest_circle_for_each_motor(tmp_path):
     state.has_system_status_data = state.has_p4_time = True
     state.system_state = SYSTEM_STATE_IDLE
     state.system_status_last_rx_ts = core_logic.time.time()
+    stamp(state, 'system_status_last_rx_ts')
     state.has_product_fingerprint = True
     state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": HOST_PROTOCOL_VERSION}
     state.has_multiturn_restore_result = True
     state.has_servo_angle_data = True
     state.servo_abs_last_rx_ts = core_logic.time.time()
+    stamp(state, 'servo_abs_last_rx_ts')
     state.multi_turn_unknown_bitmap = (1 << 0) | (1 << 1)
     state.servo_online_bitmap = (1 << 0) | (1 << 1)
     state.has_servo_route_status = True
@@ -602,6 +606,7 @@ class TestPrepareCalibrationTurnZero:
         state.has_system_status_data = state.has_servo_route_status = True
         state.system_state = SYSTEM_STATE_IDLE
         state.system_status_last_rx_ts = core_logic.time.time()
+        stamp(state, 'system_status_last_rx_ts')
         state.servo_route_controllable_bitmap = (1 << 2) | (1 << 3)
         state.has_servo_reset_zero_status = True
         state.servo_online_bitmap = (1 << 2) | (1 << 3)
@@ -611,17 +616,18 @@ class TestPrepareCalibrationTurnZero:
         monkeypatch.setattr(core_logic.time, "sleep", lambda _seconds: None)
         monkeypatch.setattr(core_logic, "CALIBRATION_TURN_RESET_SETTLE_S", 0)
 
-        def wait_for_ack(cmd, _timeout, received_after=None):
+        def wait_for_ack(cmd, _timeout, received_after_monotonic=None):
             if cmd == CMD_RESET:
-                return (cmd, 0, PROTO_ACK_STATUS_QUEUED, received_after)
+                return (cmd, 0, PROTO_ACK_STATUS_QUEUED, received_after_monotonic)
             if cmd == CMD_SERVO_RESET_ZERO:
                 state.servo_reset_zero_result_token = 6
                 state.servo_reset_zero_request_token = 6
                 state.system_status_last_rx_ts = core_logic.time.time()
+                stamp(state, 'system_status_last_rx_ts')
                 state.servo_reset_zero_status = 2
                 state.servo_reset_zero_success_mask = 1 << 2
                 state.servo_reset_zero_failed_mask = 0
-                return (cmd, 1, PROTO_ACK_STATUS_OK, received_after)
+                return (cmd, 1, PROTO_ACK_STATUS_OK, received_after_monotonic)
             return None
 
         controller.comm.wait_for_ack.side_effect = wait_for_ack
@@ -650,6 +656,7 @@ class TestPrepareCalibrationTurnZero:
         state.has_servo_route_status = True
         all_motors = (1 << MOTOR_COUNT) - 1
         state.servo_abs_last_rx_ts = core_logic.time.time()
+        stamp(state, 'servo_abs_last_rx_ts')
         state.servo_online_bitmap = all_motors & ~(1 << 24)
         state.servo_route_controllable_bitmap = all_motors
 
@@ -705,7 +712,7 @@ class TestLoadCalibrationSnapshot:
         )
         monkeypatch.setattr(
             core_logic.time,
-            "time",
+            "monotonic",
             MagicMock(side_effect=[100.0, 101.0, 102.0]),
         )
         controller.comm.wait_for_ack.side_effect = [
@@ -759,17 +766,17 @@ class TestLoadCalibrationSnapshot:
             call(
                 CMD_CALIB_LOAD_LIMITS,
                 core_logic.CALIB_LOAD_ACK_TIMEOUT_S,
-                received_after=100.0,
+                received_after_monotonic=100.0,
             ),
             call(
                 CMD_CALIB_LOAD_JOINT,
                 core_logic.CALIB_LOAD_ACK_TIMEOUT_S,
-                received_after=101.0,
+                received_after_monotonic=101.0,
             ),
             call(
                 CMD_CALIB_LOAD_JOINT,
                 core_logic.CALIB_LOAD_ACK_TIMEOUT_S,
-                received_after=102.0,
+                received_after_monotonic=102.0,
             ),
         ]
 
@@ -855,6 +862,8 @@ class TestActiveDirectScopeReuse:
 
     @staticmethod
     def _controller(monkeypatch):
+        monkeypatch.setattr(core_logic.time, "time", lambda: 100.0)
+        monkeypatch.setattr(core_logic.time, "monotonic", lambda: 100.0)
         controller = HandController()
         controller.comm = MagicMock()
         controller.comm.wait_for_ack.return_value = (
@@ -864,6 +873,7 @@ class TestActiveDirectScopeReuse:
         state.has_system_status_data = True
         state.has_active_scope_status = True
         state.system_status_last_rx_ts = 99.8
+        stamp(state, 'system_status_last_rx_ts')
         state.system_state = SYSTEM_STATE_RUN_DIRECT
         state.control_enabled = True
         state.servo_target_owner = 1
@@ -871,7 +881,7 @@ class TestActiveDirectScopeReuse:
         state.active_motor_mask = 1 << 11
         state.active_joint_mask = 1 << 8
         state.require_can_feedback = False
-        monkeypatch.setattr(core_logic.time, "time", lambda: 100.0)
+        monkeypatch.setattr(core_logic.time, "monotonic", lambda: 100.0)
         return controller
 
     def test_same_running_direct_scope_does_not_send_d7(self, monkeypatch):
@@ -906,6 +916,8 @@ class TestActiveDirectScopeReuse:
         controller = self._controller(monkeypatch)
         for field, value in changes.items():
             setattr(controller.current_state, field, value)
+            if field.endswith('last_rx_ts'):
+                stamp(controller.current_state, field)
 
         assert not controller.set_active_scope(*requested)
 
@@ -915,7 +927,7 @@ class TestActiveDirectScopeReuse:
         controller.comm.wait_for_ack.assert_called_once_with(
             CMD_ACTIVE_SCOPE,
             core_logic.ACTIVE_SCOPE_ACK_TIMEOUT_S,
-            received_after=100.0,
+            received_after_monotonic=100.0,
         )
 
     @pytest.mark.parametrize("ack,expected", [

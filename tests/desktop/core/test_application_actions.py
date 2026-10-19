@@ -1,4 +1,6 @@
 """用户操作边界回归；不连接真实硬件。"""
+
+from _clock_helpers import stamp
 import threading
 import time
 from unittest.mock import Mock
@@ -21,12 +23,14 @@ def hand(monkeypatch, tmp_path):
     state = hand._controller.current_state
     state.has_system_status_data = True
     state.system_status_last_rx_ts = time.time()
+    stamp(state, 'system_status_last_rx_ts')
     state.system_state = SYSTEM_STATE_READY
     state.has_manual_reference_encoder_directions = True
     state.manual_reference_encoder_directions = [-1] * 21
     state.protocol_compatible = True
     state.has_encoder_raw_data = True
     state.encoder_raw_last_rx_ts = time.time()
+    stamp(state, 'encoder_raw_last_rx_ts')
     state.p4_time_ms = state.encoder_raw_p4_time_ms = 1000
     state.encoder_online_bitmap = (1 << 21) - 1
     state.encoders[0].raw_error = state.encoders[0].error = False
@@ -52,6 +56,8 @@ def direct_target_device(hand, monkeypatch, *, load=0):
     state.has_servo_angle_data = state.has_servo_route_status = True
     state.has_connectivity_status = True
     state.servo_abs_last_rx_ts = state.servo_telem_last_rx_ts = time.time()
+    stamp(state, 'servo_abs_last_rx_ts')
+    stamp(state, 'servo_telem_last_rx_ts')
     state.servo_online_bitmap = state.servo_route_controllable_bitmap = (1 << 27) - 1
     state.servo_online = state.servo_telem_online = [True] * 27
     state.servo_logical_range_valid_bitmap = (1 << 27) - 1
@@ -72,7 +78,11 @@ def direct_target_device(hand, monkeypatch, *, load=0):
         state.direct_target_rejected_mask = 0
         state.direct_target_status = 2
         state.direct_target_result_rx_ts = time.time()
+        stamp(state, 'direct_target_result_rx_ts')
         state.system_status_last_rx_ts = state.servo_abs_last_rx_ts = state.servo_telem_last_rx_ts = time.time()
+        stamp(state, 'system_status_last_rx_ts')
+        stamp(state, 'servo_abs_last_rx_ts')
+        stamp(state, 'servo_telem_last_rx_ts')
         for motor in range(27):
             if mask & (1 << motor):
                 state.servo_angles[motor] = values[motor]
@@ -146,6 +156,7 @@ def direct_zero_device(hand, monkeypatch, *, success=None, fault='', change_sele
 
     def stop_readback():
         state.system_status_last_rx_ts = time.time()
+        stamp(state, 'system_status_last_rx_ts')
         state.system_state = SYSTEM_STATE_READY
         state.control_enabled = False
         state.servo_target_owner = 0
@@ -167,6 +178,7 @@ def direct_zero_device(hand, monkeypatch, *, success=None, fault='', change_sele
         state.servo_rebase_zero_result_p4_time_ms = 1000
         state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = 1001
         state.servo_abs_last_rx_ts = time.time()
+        stamp(state, 'servo_abs_last_rx_ts')
         state.servo_raw_online = [True] * 27
         for motor in range(27):
             if done & (1 << motor):
@@ -466,7 +478,10 @@ def test_two_fresh_captures_save_once_then_single_endpoint_resaves(hand, monkeyp
     writer.assert_not_called()
     state = hand._controller.current_state
     state.encoders[0].raw_sensor = 11000  # J00 安装方向 -1
-    assert wait_operation(hand, hand.request_manual_capture(0, 'max'))['status'] == 'SUCCESS'
+    saved = wait_operation(hand, hand.request_manual_capture(0, 'max'))
+    assert saved['status'] == 'SUCCESS'
+    assert saved['message'] == ''
+    assert hand.application_snapshot()['joints'][0]['capture_status'] == ''
     assert writer.call_count == 1 and writer.call_args.args == (0, 12000, 11000)
     assert writer.call_args.kwargs['cancelled']() is False
     state.encoders[0].raw_sensor = 12500
@@ -481,7 +496,9 @@ def test_manual_installed_but_not_saved_keeps_draft_until_next_set(hand, monkeyp
     hand._controller.last_manual_write_phase = 'INSTALLED_NOT_SAVED'
     writer = Mock(side_effect=[False, True])
     monkeypatch.setattr(hand, 'set_manual_encoder_reference', writer)
-    assert wait_operation(hand, hand.request_manual_capture(0, 'min'))['status'] == 'FAILED'
+    failed = wait_operation(hand, hand.request_manual_capture(0, 'min'))
+    assert failed['status'] == 'FAILED'
+    assert 'INSTALLED_NOT_SAVED' in failed['message']
     assert hand._manual_drafts[0]['status'] == 'INSTALLED_NOT_SAVED'
     assert wait_operation(hand, hand.request_manual_capture(0, 'min'))['status'] == 'SUCCESS'
     assert hand._manual_drafts[0]['status'] == 'SAVED'
@@ -489,6 +506,7 @@ def test_manual_installed_but_not_saved_keeps_draft_until_next_set(hand, monkeyp
 
 def test_stale_raw_cannot_be_captured(hand, monkeypatch):
     hand._controller.current_state.encoder_raw_last_rx_ts = time.time() - 1
+    stamp(hand._controller.current_state, 'encoder_raw_last_rx_ts')
     writer = Mock()
     monkeypatch.setattr(hand, 'set_manual_encoder_reference', writer)
     assert wait_operation(hand, hand.request_manual_capture(0, 'min'))['status'] == 'FAILED'
@@ -509,6 +527,7 @@ def test_healthy_status_does_not_make_stale_mapped_angle_current(hand):
     state.has_sensor_data = True
     state.encoders[0].angle_error = False
     state.encoder_mapped_last_rx_ts = time.time() - 1
+    stamp(state, 'encoder_mapped_last_rx_ts')
     assert hand.application_snapshot()['joints'][0]['angle'] is None
 
 
@@ -567,6 +586,7 @@ def test_disconnect_is_queued_after_cancelled_worker(hand, monkeypatch):
 
 def test_stale_status_is_unknown_and_zero_warning_is_not_an_alarm(hand):
     hand._controller.current_state.system_status_last_rx_ts = time.time() - 1
+    stamp(hand._controller.current_state, 'system_status_last_rx_ts')
     snapshot = hand.application_snapshot()
     assert snapshot['communication'] == 'Stale data'
     assert snapshot['device'] == 'Unknown'

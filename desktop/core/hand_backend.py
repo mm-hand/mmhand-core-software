@@ -967,10 +967,10 @@ class HandBackend(ApplicationActions):
                 return False
         return self._run_manual_transaction(write)
 
-    def set_manual_encoder_references(self, manual_min_raw, manual_max_raw) -> bool:
+    def set_manual_encoder_references(self, manual_min_raw, manual_max_raw, *, updated_joint_mask=None) -> bool:
         return self._run_manual_transaction(
             lambda cancelled: False if cancelled() else self._controller.set_manual_encoder_references(
-                list(manual_min_raw), list(manual_max_raw)
+                list(manual_min_raw), list(manual_max_raw), updated_joint_mask=updated_joint_mask
             ),
             False,
         )
