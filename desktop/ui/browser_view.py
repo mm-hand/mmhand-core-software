@@ -8,7 +8,7 @@
 禁止依赖：禁止直接操作协议、串口和控制器。
 """
 import time
-from nicegui import ui
+from nicegui import core, ui
 from . import refresh_policy as policy
 from .web import renumber_motors, renumber_tactile, joint_calibration, motor_calibration, feedback_control, direct_control
 from .web import replay, plots, tactile, diagnostics, control_parameters
@@ -213,7 +213,12 @@ def self_heal_script():
 def build_page(hand):
     ui.colors(primary='#2563eb', positive='#16a34a', warning='#ea880c', negative='#dc2626')
     ui.add_css(CSS)
-    ui.add_body_html(self_heal_script())
+    # add_body_html only inserts raw HTML: script elements there never execute (and
+    # without tags the source is rendered as page text). Run the script explicitly
+    # once the client websocket is connected instead. Unit tests build pages without
+    # the server event loop, so only schedule it when the loop exists.
+    if core.loop is not None:
+        ui.run_javascript(self_heal_script())
     # Fast ticks rewrite this label; the injected script watches it for a frozen page.
     heartbeat = ui.label('0').classes(policy.HEARTBEAT_LABEL_CLASS)
     preview_token, log_sequence = [None], [0]

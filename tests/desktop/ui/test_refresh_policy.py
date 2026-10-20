@@ -120,3 +120,11 @@ def test_injected_script_uses_policy_thresholds_and_heartbeat_class():
     assert str(policy.MAX_AUTO_RELOADS) in script
     assert str(policy.AUTO_RELOAD_DELAY_MS) in script
     assert str(policy.HEARTBEAT_POLL_MS) in script
+
+
+def test_reconnect_script_is_executed_not_rendered_as_body_text():
+    from pathlib import Path
+    source = Path(__file__).resolve().parents[3] / 'desktop/ui/browser_view.py'
+    text = source.read_text(encoding='utf-8')
+    assert 'ui.run_javascript(self_heal_script())' in text
+    assert 'ui.add_body_html(self_heal_script' not in text
