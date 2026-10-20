@@ -54,6 +54,7 @@ from .config import (
 )
 from .math import (TendonRawFitBuffer, encoder_count_to_deg, wrap_encoder_delta,
                    map_manual_scaled_encoder_to_urdf)
+from .dependencies import usable_snapshot_aa_result
 from .finish import dual_lut_targets
 from .time_alignment import TimeAlignmentError, align_feedback
 
@@ -397,6 +398,36 @@ class HostCalibrationIO:
         aas = {finger_aa_joint(j) for j in joints} - {None}
         return sum(1 << m for aa in aas for m in joint_motors(aa))
 
+    def _host_snapshot_result(self, aa):
+        """Full AA result from the host snapshot for a cross-session dependency."""
+        try:
+            snapshot = self.snapshot_store.load()
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        result = usable_snapshot_aa_result(
+            snapshot, aa, self._state(), self.urdf_config_crc()
+        )
+        if result is not None:
+            log_session(
+                "CALIB_AA",
+                f"J{aa:02d} using host snapshot AA result for dependency resolution",
+            )
+        return result
+
+    def _aa_mapping_usable(self, aa, result) -> bool:
+        """Validate the AA encoder mapping without requiring fresh feedback."""
+        state = self._state()
+        if not state.has_encoder_raw_data or not state.has_manual_reference_encoder_directions:
+            return False
+        if not state.encoder_online_bitmap & (1 << aa) or state.encoder_fault_bitmap & (1 << aa):
+            return False
+        if not state.manual_reference_valid_bitmap & (1 << aa):
+            return False
+        direction = int(state.manual_reference_encoder_directions[aa])
+        return map_manual_scaled_encoder_to_urdf(
+            self, aa, result, int(state.encoders[aa].raw_sensor), direction
+        ) is not None
+
     def _finger_aa_plan(self, aa):
         state = self._state()
         result = self.calibration_result(aa)
@@ -405,7 +436,14 @@ class HostCalibrationIO:
             result['hasManualScaledV4Fields'] = True
             state.auto_calibration_valid_bitmap |= 1 << aa
         else:
-            result = state.joint_calib_results[aa]
+            # Cross-session dependency: use the full host snapshot result (with
+            # host-only manualSpanCounts) instead of the incomplete P4 readback.
+            result = self._host_snapshot_result(aa)
+            if result is not None:
+                state.joint_calib_results[aa] = result
+                state.auto_calibration_valid_bitmap |= 1 << aa
+            else:
+                result = state.joint_calib_results[aa]
         workspace = resolve_joint_workspace_range(state, aa, *self.urdf_limits(aa),
                                                   4, self.urdf_config_crc())
         if not workspace.ready:
@@ -443,7 +481,11 @@ class HostCalibrationIO:
             if self.selected_joint_mask & (1 << aa):
                 continue
             try:
-                self._finger_aa_plan(aa)
+                result, _center, _limits = self._finger_aa_plan(aa)
+                # Validate mapping before the flow resets/invalidate any selected
+                # joint; a rejected dependency must not destroy a good result.
+                if not self._aa_mapping_usable(aa, result):
+                    raise ValueError('AA encoder mapping is invalid')
             except (ValueError, TypeError, KeyError, IndexError) as exc:
                 self.feedback_recovery_error = f'J{aa:02d}: {exc}'
                 return False

@@ -12,11 +12,14 @@ from dataclasses import dataclass, field
 import threading
 from typing import Callable, Optional
 from desktop.paths import CALIB_LOAD_SNAPSHOT_PATH
+from .angle_mapping import urdf_manual_scaled_mapping_metadata
 from .calibration_snapshot import CalibrationSnapshotError, CalibrationSnapshotStore, parse_mask, validate_snapshot_for_load as validate_calibration_snapshot_for_load
 from .calibration_diagnostics import format_calibration_warning
 from .data_models import HandModel
 from .protocol import ENCODER_COUNT, HAND_PROFILE, VALID_MOTOR_MASK
 from .session_log import log_session
+from .host_calibration.config import finger_aa_joint, joint_motors
+from .host_calibration.dependencies import missing_aa_joint_mask
 from .host_calibration.flow import run as run_host_calibration
 
 _JOINT_MASK = (1 << ENCODER_COUNT) - 1
@@ -237,18 +240,62 @@ class CalibrationWorkflowService:
                 if not self._is_current(epoch):
                     return
                 identity = {} if self._store_override else self._controller.calibration_data_identity
+                # Single-tendon joints need their finger AA as a reference. If the
+                # host snapshot has no usable full AA result, add that AA to this
+                # same transaction so the flow calibrates it first.
+                auto_joint_mask = 0
+                selected_manual_mask = int(
+                    getattr(baseline_state, "manual_reference_valid_bitmap", 0) or 0
+                )
+                if (bool(getattr(baseline_state, "has_manual_reference_encoder_directions", False))
+                        and selected_manual_mask & joint_mask):
+                    snapshot = None
+                    try:
+                        if self._store.exists():
+                            snapshot = self._store.load()
+                    except (OSError, ValueError, KeyError, TypeError):
+                        snapshot = None
+                    auto_joint_mask = missing_aa_joint_mask(
+                        joint_mask,
+                        snapshot,
+                        baseline_state,
+                        int(urdf_manual_scaled_mapping_metadata()[1]),
+                    )
+                auto_motor_mask = sum(
+                    1 << motor
+                    for joint in range(ENCODER_COUNT)
+                    if auto_joint_mask & (1 << joint)
+                    for motor in joint_motors(joint)
+                )
+                effective_joint_mask = joint_mask | auto_joint_mask
+                effective_motor_mask = motor_mask | auto_motor_mask
+                effective_reset_mask = reset_motor_mask | auto_motor_mask
                 io = self._controller.create_host_calibration_io(
                     lambda: not self._is_current(epoch),
-                    joint_mask,
-                    motor_mask,
-                    reset_motor_mask=reset_motor_mask,
+                    effective_joint_mask,
+                    effective_motor_mask,
+                    reset_motor_mask=effective_reset_mask,
                     snapshot_store=self._store,
                 )
                 io.snapshot_identity = identity
+                auto_text = ''
+                if auto_joint_mask:
+                    auto_joints = ", ".join(
+                        f"J{joint:02d}"
+                        for joint in range(ENCODER_COUNT)
+                        if auto_joint_mask & (1 << joint)
+                    )
+                    auto_text = (
+                        f"; auto-included {auto_joints} AA because no usable host "
+                        "calibration result remains"
+                    )
+                    log_session("CALIB_WORKFLOW", f"auto-included AA joints {auto_joints}")
                 self._emit(CalibrationWorkflowEvent(
                     epoch, "prepare", True,
-                    "host calibration started; each joint is rebased before calibration",
-                    joint_mask, reset_motor_mask,
+                    "host calibration started" + auto_text
+                    + "; each joint is rebased before calibration",
+                    effective_joint_mask, effective_reset_mask,
+                    details={"auto_aa_joint_mask": auto_joint_mask},
                 ))
 
                 def on_joint(joint: int, outcome: dict) -> None:
@@ -307,12 +354,12 @@ class CalibrationWorkflowService:
                             epoch, 'joint_started', True, f'J{joint:02d} calibrating',
                             1 << joint, motors))
 
-                session = run_host_calibration(io, joint_mask, motor_mask, on_joint,
+                session = run_host_calibration(io, effective_joint_mask, effective_motor_mask, on_joint,
                                                on_joint_started=on_started)
                 if self._is_current(epoch):
                     self._emit(CalibrationWorkflowEvent(
                         epoch, "calibration_complete", session.success,
-                        session.message, joint_mask, motor_mask,
+                        session.message, effective_joint_mask, effective_motor_mask,
                         details={
                             "records": records,
                             "terminal_status": ("HOST_FAILED" if
@@ -325,7 +372,7 @@ class CalibrationWorkflowService:
             except Exception as exc:
                 self._emit(CalibrationWorkflowEvent(
                     epoch, "calibration_complete", False,
-                    f"{type(exc).__name__}: {exc}", joint_mask, motor_mask,
+                    f"{type(exc).__name__}: {exc}", effective_joint_mask, effective_motor_mask,
                     details={"records": records, "terminal_status": "HOST_ERROR"},
                 ))
             finally:

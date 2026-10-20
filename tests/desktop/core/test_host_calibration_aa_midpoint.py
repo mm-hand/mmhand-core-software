@@ -14,6 +14,11 @@ from desktop.core.host_calibration.config import (
 from desktop.core.host_calibration.dual_motor import WorkspaceCacheEntry, POSE_A, WORKSPACE_DUAL_JOINTS
 from desktop.core.host_calibration.finish import dual_lut_targets
 from desktop.core.host_calibration import flow, single_motor
+from desktop.core.host_calibration.dependencies import (
+    missing_aa_joint_mask,
+    required_aa_joint_mask,
+    usable_snapshot_aa_result,
+)
 from desktop.core.host_calibration.runtime import HostCalibrationIO
 from desktop.core.protocol import manual_encoder_reference_entry_crc
 from test_host_calibration_runtime import io
@@ -97,7 +102,7 @@ def test_five_finger_midpoint_is_reached_then_held_at_fixed_targets(centered_io,
     io.snapshot_store.merge_calibration.assert_not_called()
 
 
-@pytest.mark.parametrize('fault', ['missing', 'manual_crc', 'urdf_crc', 'unknown', 'limits', 'lut'])
+@pytest.mark.parametrize('fault', ['missing', 'manual_crc', 'urdf_crc', 'unknown', 'limits', 'lut', 'span'])
 def test_untrusted_unselected_aa_is_rejected_before_reset_or_motion(centered_io, fault):
     io = centered_io
     state = io.controller.current_state
@@ -111,6 +116,8 @@ def test_untrusted_unselected_aa_is_rejected_before_reset_or_motion(centered_io,
         state.multi_turn_unknown_bitmap |= 1
     elif fault == 'limits':
         state.motor_abs_limit_valid_bitmap &= ~1
+    elif fault == 'span':
+        state.joint_calib_results[0]['manualSpanCounts'] = 0
     else:
         state.joint_calib_results[0]['tendonLutValid'] = False
     io.wait_servo_recovery = Mock(side_effect=AssertionError('must preflight before reset'))
@@ -308,3 +315,59 @@ def test_general_lut_interpolation_preserves_short_last_interval_and_rejects_ext
     assert dual_lut_targets(result, (0, 1), 0) == {0: 18, 1: -18}
     assert dual_lut_targets(result, (0, 1), -3.5) == {0: 9, 1: -9}
     assert dual_lut_targets(result, (0, 1), 2) is None
+
+
+def _snapshot_with_aa(io, aa):
+    state = io.controller.current_state
+    snapshot = {
+        'joint_calib_results': [None] * 21,
+        'active_joint_mask': hex(1 << aa),
+        'motor_abs_limit_valid_bitmap': hex((1 << 27) - 1),
+    }
+    snapshot['joint_calib_results'][aa] = deepcopy(state.joint_calib_results[aa])
+    io.snapshot_store.load.return_value = snapshot
+    return snapshot
+
+
+def test_required_aa_mask_only_adds_unselected_dependencies():
+    assert required_aa_joint_mask(1 << 1) == 1 << 0
+    assert required_aa_joint_mask((1 << 0) | (1 << 1)) == 0
+    assert required_aa_joint_mask(1 << 13) == 1 << 12
+    assert required_aa_joint_mask(1 << 20) == 0
+
+
+def test_host_snapshot_aa_result_satisfies_cross_session_dependency(centered_io):
+    io = centered_io
+    state = io.controller.current_state
+    snapshot = _snapshot_with_aa(io, 0)
+    assert usable_snapshot_aa_result(snapshot, 0, state, io.urdf_config_crc()) is not None
+    assert missing_aa_joint_mask(1 << 1, snapshot, state, io.urdf_config_crc()) == 0
+
+    # The P4 readback result is absent, but the host snapshot still resolves it.
+    state.joint_calib_results[0] = None
+    state.auto_calibration_valid_bitmap &= ~1
+    result, _center, _limits = io._finger_aa_plan(0)
+    assert result['manualSpanCounts'] == 4000
+    assert io._finger_aa_plan(0)[0]['manualSpanCounts'] == 4000
+
+
+@pytest.mark.parametrize('fault', ['missing', 'manual_crc', 'manual_span', 'urdf_crc', 'inactive', 'limits'])
+def test_unusable_host_snapshot_requests_aa_recalibration(centered_io, fault):
+    io = centered_io
+    state = io.controller.current_state
+    snapshot = _snapshot_with_aa(io, 0)
+    result = snapshot['joint_calib_results'][0]
+    if fault == 'missing':
+        snapshot['joint_calib_results'][0] = None
+    elif fault == 'manual_crc':
+        result['manualReferenceCrc'] ^= 1
+    elif fault == 'manual_span':
+        result['manualSpanCounts'] = 0
+    elif fault == 'urdf_crc':
+        result['urdfConfigCrc'] ^= 1
+    elif fault == 'inactive':
+        snapshot['active_joint_mask'] = '0x0'
+    else:
+        snapshot['motor_abs_limit_valid_bitmap'] = '0x0'
+    assert usable_snapshot_aa_result(snapshot, 0, state, io.urdf_config_crc()) is None
+    assert missing_aa_joint_mask(1 << 1, snapshot, state, io.urdf_config_crc()) == 1

@@ -410,6 +410,56 @@ def test_cancel_keeps_external_output_blocked_until_host_worker_finishes(tmp_pat
 
 
 
+def test_begin_calibration_auto_includes_missing_aa_dependency(tmp_path, monkeypatch):
+    captured = {}
+    entered = threading.Event()
+
+    class Controller:
+        current_state = HandModel()
+        state_lock = threading.RLock()
+        calibration_data_identity = {}
+
+        def create_host_calibration_io(self, cancel_check, joint_mask, motor_mask, **kwargs):
+            captured['factory_joint_mask'] = joint_mask
+            captured['factory_motor_mask'] = motor_mask
+            captured['factory_reset_mask'] = kwargs.get('reset_motor_mask')
+            return _IO()
+
+    def host_run(calib_io, joint_mask, motor_mask, on_joint, *, on_joint_started):
+        captured['expanded_joint_mask'] = joint_mask
+        captured['expanded_motor_mask'] = motor_mask
+        entered.set()
+        return flow.CalibrationSessionResult(
+            True, joint_mask, 0, tuple(range(21)), message='complete',
+            terminal_status='SUCCESS')
+
+    monkeypatch.setattr(calibration_workflow, 'run_host_calibration', host_run)
+    service = CalibrationWorkflowService(Controller(), tmp_path / 'calib.json')
+    monkeypatch.setattr(service._store, 'exists', lambda: True)
+    monkeypatch.setattr(service._store, 'load', lambda: {'joint_calib_results': [None] * 21})
+
+    baseline = HandModel()
+    baseline.has_manual_reference_encoder_directions = True
+    baseline.manual_reference_encoder_directions = [-1] * 21
+    baseline.manual_reference_valid_bitmap = (1 << 21) - 1
+    baseline.manual_reference_min_raw = [10000] * 21
+    baseline.manual_reference_max_raw = [6000] * 21
+
+    assert service.begin_calibration(
+        joint_mask=1 << 13, motor_mask=1 << 17, reset_motor_mask=1 << 17,
+        baseline_state=baseline)
+    assert entered.wait(2)
+    service._executor.shutdown(wait=True)
+
+    # J13 needs J12; the host snapshot has no usable J12 result, so J12 is
+    # calibrated in the same transaction before J13.
+    assert captured['expanded_joint_mask'] & (1 << 12)
+    assert captured['expanded_joint_mask'] & (1 << 13)
+    assert captured['factory_joint_mask'] == captured['expanded_joint_mask']
+    assert captured['expanded_motor_mask'] & ((1 << 15) | (1 << 16))
+    assert captured['factory_reset_mask'] & ((1 << 15) | (1 << 16))
+
+
 def test_executor_submit_failure_rolls_back_host_flags(tmp_path):
     service = calibration_workflow.CalibrationWorkflowService(MagicMock(), tmp_path / 'calib.json')
     service._executor.shutdown(wait=True)
