@@ -54,9 +54,6 @@ bool manualReferenceGateReady(SystemRuntimeContext* runtime);
 /** 当前 active motors 是否无 Turn Unknown 和硬件圈数溢出。 */
 bool activeMotorsMultiTurnKnown(SystemRuntimeContext* runtime);
 
-/** 当前 active motors 是否全部具备有效 ABS/LUT 限位。 */
-bool activeMotorsAbsLimitsCalibrated(SystemRuntimeContext* runtime);
-
 /** 执行完整反馈 READY 判定，并更新 24/48 counts、连续三帧迟滞状态。 */
 FeedbackReadinessDecision evaluateFeedbackReadiness(
     SystemRuntimeContext* runtime,

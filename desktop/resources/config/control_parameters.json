@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "revision": 1,
+  "revision": 200,
   "single_tendon": {
     "kp": 0.8,
     "ki_per_s": 0.0,
@@ -10,7 +10,7 @@
     "kp": 0.8,
     "ki_per_s": 0.0,
     "integral_limit_counts": 100,
-    "pair_recovery_gain": 0.05
+    "pair_recovery_gain": 0.0
   },
   "feedback": {
     "fast_window_ms": 20,
@@ -21,13 +21,8 @@
   "reversal": {
     "confirm_deg": 1.0,
     "confirm_ms": 20,
-    "initial_counts": 60,
-    "growth_counts_per_s": 5000,
-    "max_counts": 140,
-    "exit_travel_deg": 0.25,
-    "settle_ms": 50,
-    "cooldown_ms": 100,
-    "max_duration_ms": 500
+    "takeup_counts": 0,
+    "exit_travel_deg": 0.25
   },
   "collision": {
     "arm_velocity_flex_deg_s": 8.0,
@@ -39,8 +34,6 @@
     "retreat_deg": 1.0
   },
   "output": {
-    "max_step_counts": 150,
-    "max_rate_counts_per_s": 5000,
     "lut_release_margin_counts": 500,
     "lut_tight_margin_counts": 1000
   },

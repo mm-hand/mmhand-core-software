@@ -44,8 +44,7 @@ bool applyParameterPayload(const uint8_t* payload, size_t length) {
             next.values[i] > kParameterMaximum[i]) return false;
     }
     if (next[FeedbackFastWindowMs] >= next[FeedbackSlowWindowMs] ||
-        next[Ros2InputEnterDeg] >= next[Ros2InputExitDeg] ||
-        next[ReversalInitialCounts] > next[ReversalMaxCounts]) return false;
+        next[Ros2InputEnterDeg] >= next[Ros2InputExitDeg]) return false;
     next.configured = true;
     SharedSafetyGuard guard;
     current = next;

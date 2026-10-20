@@ -21,6 +21,7 @@
 #include "../../system/calibration/CalibrationRuntimeStore.h"
 #include "../../system/calibration/TendonCalibrationLut.h"
 #include "../../system/ServiceCyclePolicy.h"
+#include "../../system/SnapshotTimestamp.h"
 #include "../../config/ControlConfig.h"
 #include "../../config/topology/HardwareMap.h"
 #include "../../hal/servo/ServoValue.h"
@@ -60,7 +61,6 @@ static int16_t controlTraceAngleCenti(float angleDeg)
  */
 struct ControlServiceRuntime {
     bool initialized;
-    uint32_t reversalFailureMask;
     float localTargets[ENCODER_TOTAL_NUM];
     float magAngles[ENCODER_TOTAL_NUM];
     RemoteSensorData_t sensorData;
@@ -428,7 +428,8 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
         if (sharedData->servoTelemetryQueue.peek(&telemetryData)) {
             // 负载/电流数据用于过载保护，因此比编码器映射更快过期。
             telemetryFresh =
-                (uint32_t)(nowMs - telemetryData.timestamp) <= kServoTelemetryTimeoutMs;
+                p4::system::snapshotFreshAtCycle(nowMs, telemetryData.timestamp,
+                    kServoTelemetryTimeoutMs, uint32_t(kPeriodSec * 1000));
         }
 
         for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++)
@@ -466,7 +467,8 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
         bool canBusOnline = false;
         if (sharedData->canRxQueue.peek(&sensorData) && sensorData.isValid) {
             // 超过 CAN 超时时间后，磁编码器反馈视为过期。
-            canBusOnline = (nowMs - sensorData.timestamp) <= kCanBusOfflineTimeoutMs;
+            canBusOnline = p4::system::snapshotFreshAtCycle(nowMs, sensorData.timestamp,
+                kCanBusOfflineTimeoutMs, uint32_t(kPeriodSec * 1000));
         }
 
         memset(&mappedData, 0, sizeof(mappedData));
@@ -824,7 +826,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                             servoData.servoAngles[actuator.motorChannel];
                     }
                 }
-                g_jointController.suspend(jointIndex, servoData, nowMs);
+                g_jointController.suspend(jointIndex, nowMs);
                 recordControlRuleEvent(
                     output,
                     sharedAtomicLoad(&sharedData->system_state),
@@ -853,7 +855,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                 p4::safety::clearSafetyRuleEvent(
                     SafetyRuleId::ControlCollisionHold,
                     jointIndex);
-                g_jointController.suspend(jointIndex, servoData, nowMs);
+                g_jointController.suspend(jointIndex, nowMs);
                 FW_LOG_INFO_PRINTF(
                     "[COLLISION_RELEASE] J%02u reason=%s(%u) "
                     "blockedTarget=%.3f newTarget=%.3f retreat=%.3f "
@@ -917,7 +919,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                     if (!safety.allowed) recordControlRuleEvent(output, systemState, targetOwner, safety.ruleId,
                         joint, 0xFF, safety.requestedValue, safety.observedValue);
                     if (g_feedbackCollisionGuard.isHoldActive(joint)) {
-                        g_jointController.suspend(joint, servoData, nowMs);
+                        g_jointController.suspend(joint, nowMs);
                         appendJointActuatorSnapshotTargets(&targetBatch, joint, servoData, feedbackCollisionHoldAbs[joint],
                             kFeedbackServoSpeed, SERVO_TARGET_ACC_DEFAULT);
                         continue;
@@ -928,8 +930,8 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                         continue;
                     }
                     const auto result = g_jointController.compute(joint, localTargets[joint], g_feedbackEstimates[joint],
-                        nowMs, dt, servoData, calibrationSnapshot[joint].result,
-                        sharedAtomicLoad(&sharedData->active_motor_mask), sharedData, controlParameters);
+                        nowMs, servoData, calibrationSnapshot[joint].result,
+                        sharedAtomicLoad(&sharedData->active_motor_mask), controlParameters);
                     if (!result.count) {
                         g_jointController.reset(joint);
                         appendJointActuatorHoldTargets(&targetBatch, joint, servoData, kFeedbackServoSpeed, SERVO_TARGET_ACC_DEFAULT);
@@ -949,10 +951,6 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                         runtime.cycleTrace.recoveryCounts[motor] = lroundf(fmaxf(-32768, fminf(32767, result.recovery[axis])));
                         if (result.recovery[axis] != 0) runtime.cycleTrace.recoveryAppliedMask |= 1UL << motor;
                     }
-                    if (result.reversalFailed && !(runtime.reversalFailureMask & bit)) {
-                        FW_LOG_INFO_PRINTF("[CONTROL] REVERSAL_NO_RESPONSE J%02u: holding measured motor positions\r\n", joint);
-                        runtime.reversalFailureMask |= bit;
-                    } else if (!result.reversalFailed) runtime.reversalFailureMask &= ~bit;
                 }
             }
         }

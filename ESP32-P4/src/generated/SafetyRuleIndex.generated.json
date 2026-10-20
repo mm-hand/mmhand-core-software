@@ -276,25 +276,9 @@
       "name": "ActuatorLogicalRange",
       "rule_id": 1011,
       "code": "ACT-1011",
-      "active": true,
-      "retired": false,
-      "policy": {
-        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
-        "symbol": "evaluateCommand"
-      },
-      "caller": {
-        "file": "tasks/servo_bus/ServoBusService.cpp",
-        "symbol": "p4::actuator::evaluateCommand"
-      },
-      "event": {
-        "file": "safety/SafetyEventReporter.cpp",
-        "symbol": "reportServoSafetyDecision"
-      },
-      "recovery": {
-        "file": "safety/policies/ActuatorSafetyPolicy.cpp",
-        "symbol": "ServoRejectReason::None"
-      },
-      "registry_function": "ruleForServoRejectReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "ActuatorHardwareRange",
@@ -908,25 +892,9 @@
       "name": "FeedbackAbsLimitRejected",
       "rule_id": 3205,
       "code": "FBK-3205",
-      "active": true,
-      "retired": false,
-      "policy": {
-        "file": "safety/policies/SystemReadinessPolicy.cpp",
-        "symbol": "evaluateFeedbackReadiness"
-      },
-      "caller": {
-        "file": "tasks/system_state/SystemEventDispatcher.cpp",
-        "symbol": "evaluateFeedbackReadiness"
-      },
-      "event": {
-        "file": "tasks/system_state/SystemEventDispatcher.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/system_state/SystemEventDispatcher.cpp",
-        "symbol": "FEEDBACK_REJECT_NONE"
-      },
-      "registry_function": "ruleForFeedbackRejectReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "FeedbackModeSwitchRejected",

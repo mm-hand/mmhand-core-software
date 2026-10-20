@@ -81,19 +81,7 @@
     },
     {
       "group": "reversal",
-      "name": "initial_counts",
-      "minimum": 0,
-      "maximum": 200
-    },
-    {
-      "group": "reversal",
-      "name": "growth_counts_per_s",
-      "minimum": 0,
-      "maximum": 10000
-    },
-    {
-      "group": "reversal",
-      "name": "max_counts",
+      "name": "takeup_counts",
       "minimum": 0,
       "maximum": 300
     },
@@ -102,24 +90,6 @@
       "name": "exit_travel_deg",
       "minimum": 0.05,
       "maximum": 5.0
-    },
-    {
-      "group": "reversal",
-      "name": "settle_ms",
-      "minimum": 0,
-      "maximum": 500
-    },
-    {
-      "group": "reversal",
-      "name": "cooldown_ms",
-      "minimum": 0,
-      "maximum": 1000
-    },
-    {
-      "group": "reversal",
-      "name": "max_duration_ms",
-      "minimum": 100,
-      "maximum": 1000
     },
     {
       "group": "collision",
@@ -162,18 +132,6 @@
       "name": "retreat_deg",
       "minimum": 0.1,
       "maximum": 10.0
-    },
-    {
-      "group": "output",
-      "name": "max_step_counts",
-      "minimum": 1,
-      "maximum": 300
-    },
-    {
-      "group": "output",
-      "name": "max_rate_counts_per_s",
-      "minimum": 100,
-      "maximum": 10000
     },
     {
       "group": "output",

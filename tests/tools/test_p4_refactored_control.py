@@ -39,9 +39,9 @@ inline bool getJointActuator(uint8_t, uint8_t axis, JointActuatorItem* out) { ou
 inline bool interpolateTendonCalibrationMotorAbs(const JointCalibrationResult&, uint8_t axis, float q, float* out) { *out = 100 + (axis ? -20 : 10)*q; return true; }
 inline bool singleTendonCalibrationMotorAbsRange(const JointCalibrationResult&,uint8_t,uint8_t,int32_t,int32_t,int32_t* lo,int32_t* hi) { *lo=-10000; *hi=10000; return true; }
 inline bool tendonCalibrationMotorAbsRangeWithMargins(const JointCalibrationResult& c,uint8_t a,uint8_t m,int32_t r,int32_t t,int32_t* lo,int32_t* hi) { return singleTendonCalibrationMotorAbsRange(c,a,m,r,t,lo,hi); }
-inline int32_t clampServoPosToSessionRange(SystemRuntimeContext*,uint8_t,int32_t x) { return x; }
 '''
     fixture += generated + '\n'
+    fixture += stripped(SRC / 'system/SnapshotTimestamp.h') + '\n'
     for name in ('ControlParameters', 'FeedbackFilter', 'JointFeedbackController'):
         fixture += stripped(SRC / f'control/{name}.h') + '\n'
         source = re.sub(r'^#include ".*"\n', '', (SRC / f'control/{name}.cpp').read_text(encoding='utf-8'), flags=re.M)
@@ -57,6 +57,13 @@ inline int32_t clampServoPosToSessionRange(SystemRuntimeContext*,uint8_t,int32_t
 #include <cassert>
 using namespace mmhand::control;
 int main() {
+    assert(p4::system::snapshotFreshAtCycle(1000,1001,150,10));
+    assert(p4::system::snapshotFreshAtCycle(1000,1010,150,10));
+    assert(!p4::system::snapshotFreshAtCycle(1000,1011,150,10));
+    assert(p4::system::snapshotFreshAtCycle(1000,850,150,10));
+    assert(!p4::system::snapshotFreshAtCycle(1000,849,150,10));
+    assert(p4::system::snapshotFreshAtCycle(5,0xfffffff0U,150,10));
+    assert(!p4::system::snapshotFreshAtCycle(1000,0,150,10));
     uint8_t payload[] = {PAYLOAD};
     assert(!parametersConfigured());
     assert(applyParameterPayload(payload,sizeof(payload)));
@@ -68,39 +75,51 @@ int main() {
     assert(e.ready && e.fresh && fabsf(e.fast-50.5f)<0.001f && fabsf(e.slow-26.5f)<0.001f);
     assert(!filter.update(510,123,true,p).fresh);
     assert(!filter.update(520,123,false,p).ready);
-    SystemRuntimeContext system;
-    for (int i=0;i<27;++i) { system.motor_abs_limit_min[i]=-10000; system.motor_abs_limit_max[i]=10000; }
     ServoAngleData_t servo; servo.onlineStatus[0]=servo.onlineStatus[1]=1;
     servo.servoAngles[0]=servo.servoAngles[1]=100;
     JointCalibrationResult lut;
     FeedbackEstimate fb; fb.fast=fb.slow=0; fb.ready=fb.fresh=true; fb.sampleDt=0.01f;
     JointFeedbackController controller;
-    auto one=controller.compute(0,1,fb,1000,0.01f,servo,lut,3,&system,p);
+    auto one=controller.compute(0,1,fb,1000,servo,lut,3,p);
     assert(one.count==1 && one.targets[0]==108); // measured 100 + .8 * signed local slope 10 * 1
     servo.servoAngles[0]=110; servo.servoAngles[1]=105;
-    auto two=controller.compute(1,1,fb,1000,0.01f,servo,lut,3,&system,p);
+    auto two=controller.compute(1,1,fb,1000,servo,lut,3,p);
     assert(two.count==2 && fabsf(two.proportional[0]-8)<0.01f && fabsf(two.proportional[1]+16)<0.01f);
     assert(fabsf(two.recovery[0]+0.5f)<0.01f && fabsf(two.recovery[1]+0.25f)<0.01f);
-    assert(controller.compute(1,1,fb,1010,0.01f,servo,lut,1,&system,p).count==0); // incomplete pair rejected
+    assert(controller.compute(1,1,fb,1010,servo,lut,1,p).count==0); // incomplete pair rejected
     controller.resetAll(); servo.servoAngles[0]=100;
     p.values[SingleTendonKiPerS]=0.2f; p.values[FeedbackIntegralConfirmMs]=20;
+    controller.compute(0,0,fb,990,servo,lut,3,p);
     JointControlResult integrated;
-    for(uint32_t t=1000;t<=1100;t+=10) integrated=controller.compute(0,1,fb,t,0.01f,servo,lut,3,&system,p);
+    for(uint32_t t=1000;t<=1100;t+=10) integrated=controller.compute(0,1,fb,t,servo,lut,3,p);
     assert(integrated.integral[0]>0);
     fb.fresh=false;
-    auto unchanged=controller.compute(0,1,fb,1110,0.01f,servo,lut,3,&system,p);
+    auto unchanged=controller.compute(0,1,fb,1110,servo,lut,3,p);
     assert(fabsf(unchanged.integral[0]-integrated.integral[0])<1e-5f); // no duplicate integration or leakage
+    fb.fresh=true;
+    auto pending=controller.compute(0,-1,fb,1120,servo,lut,3,p);
+    assert(pending.integral[0]>0); // an unconfirmed reversal does not clear I
+    auto confirmed=controller.compute(0,-1,fb,1140,servo,lut,3,p);
+    assert(fabsf(confirmed.integral[0])<1e-5f); // confirmed reversal clears old loading bias
+    controller.resetAll();
+    p.values[DualTendonKiPerS]=0.2f;
+    controller.compute(1,0,fb,1190,servo,lut,3,p);
+    for(uint32_t t=1200;t<=1300;t+=10) integrated=controller.compute(1,1,fb,t,servo,lut,3,p);
+    assert(integrated.integral[0]>0 && integrated.integral[1]<0);
+    controller.compute(1,-1,fb,1310,servo,lut,3,p);
+    confirmed=controller.compute(1,-1,fb,1330,servo,lut,3,p);
+    assert(fabsf(confirmed.integral[0])<1e-5f && fabsf(confirmed.integral[1])<1e-5f);
     controller.resetAll(); fb.fresh=true; p.values[SingleTendonKiPerS]=0;
-    controller.compute(0,0,fb,2000,0.01f,servo,lut,3,&system,p);
-    controller.compute(0,2,fb,2010,0.01f,servo,lut,3,&system,p);
-    controller.compute(0,0,fb,2020,0.01f,servo,lut,3,&system,p);
-    auto reverse=controller.compute(0,0,fb,2040,0.01f,servo,lut,3,&system,p);
+    controller.compute(0,0,fb,2000,servo,lut,3,p);
+    controller.compute(0,2,fb,2010,servo,lut,3,p);
+    controller.compute(0,0,fb,2020,servo,lut,3,p);
+    auto reverse=controller.compute(0,0,fb,2040,servo,lut,3,p);
     assert(reverse.reversal[0]<0);
     for(uint32_t t=2050;t<=2300;t+=10) {
         servo.servoAngles[0]=reverse.targets[0];
-        reverse=controller.compute(0,0,fb,t,0.01f,servo,lut,3,&system,p);
+        reverse=controller.compute(0,0,fb,t,servo,lut,3,p);
     }
-    assert(reverse.targets[0]==-40); // anchor 100 minus max140, never repeated from measured base
+    assert(reverse.targets[0]==20); // anchor 100 minus the fixed take-up floor 80
     FeedbackCollisionGuard guard;
     FeedbackCollisionInput input = {};
     input.contextActive=input.feedbackValid=input.pidPushActive=true;
@@ -134,5 +153,5 @@ int main() {
     sources = [str(tmp_path / f'{name}.cpp') for name in ('main','ControlParameters','FeedbackFilter','JointFeedbackController','CollisionSafetyPolicy')]
     exe = tmp_path / ('control_test.exe' if os.name == 'nt' else 'control_test')
     command = [compiler, '/nologo', '/std:c++17', '/EHsc', *sources, f'/Fe:{exe}'] if Path(compiler).name.lower()=='cl.exe' else [compiler,'-std=c++17',*sources,'-o',str(exe)]
-    subprocess.run(command,cwd=tmp_path,check=True,capture_output=True,text=True)
-    subprocess.run([str(exe)],check=True,capture_output=True,text=True)
+    subprocess.run(command,cwd=tmp_path,check=True,capture_output=True,text=True,encoding='utf-8',errors='replace')
+    subprocess.run([str(exe)],check=True,capture_output=True,text=True,encoding='utf-8',errors='replace')

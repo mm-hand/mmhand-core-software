@@ -27,9 +27,12 @@ display caches. Endpoint confirmations, transactions, recording lifecycle and
 quality interpretation belong to core/application_actions.py and
 core/console_snapshot.py.
 
-Snapshots refresh at 10 Hz; visible plots and tactile charts at most
-5 Hz. Input edits never send commands. Blocking device writes run outside the
-NiceGUI event loop. STOP uses the existing backend cancellation path.
+Snapshots refresh at three rates: connection/status/Rx age and badges at 10 Hz,
+non-plot page content at 2 Hz, and visible plots/tactile charts at 1 Hz. Every
+tick is change-detected and back-pressured; a stalled tick is skipped. A visible
+page whose heartbeat stops for 3 s shows a reconnect overlay and reloads once
+(or twice at most). Input edits never send commands. Blocking device writes run
+outside the NiceGUI event loop. STOP uses the existing backend cancellation path.
 
 Replaced Qt pages, compatibility helpers and Qt-only tests are removed. Core
 control, communications, calibration, ROS2 and replay stay independent of UI.

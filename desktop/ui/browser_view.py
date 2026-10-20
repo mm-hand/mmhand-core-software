@@ -9,6 +9,7 @@
 """
 import time
 from nicegui import ui
+from . import refresh_policy as policy
 from .web import renumber_motors, renumber_tactile, joint_calibration, motor_calibration, feedback_control, direct_control
 from .web import replay, plots, tactile, diagnostics, control_parameters
 from .web.common import show
@@ -72,6 +73,7 @@ body {background:#F5F7FA;color:#1e293b}
 .log-resize-grip {width:40px;height:3px;border-radius:2px;background:#94a3b8}
 .system-log {height:100%;min-height:0;background:white;padding:6px 12px;gap:4px;overflow:hidden}
 .system-log .nicegui-log {flex:1;min-height:0;width:100%;font:11px ui-monospace,monospace;color:#475569}
+.ui-heartbeat {display:none}
 .q-btn {text-transform:none;border-radius:6px;font-size:12px}
 .tactile-grid {display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
 .renumber-motors-layout {display:grid;grid-template-columns:minmax(260px,1fr) minmax(0,2fr);gap:16px}
@@ -81,9 +83,139 @@ body {background:#F5F7FA;color:#1e293b}
 @media(max-width:1000px) {.connection-bar {flex-wrap:wrap}.tactile-layout,.diagnostic-layout {flex-wrap:wrap!important}}
 '''
 
+# Injected once per page build through ui.add_body_html. The JavaScript only
+# watches the hidden heartbeat label; it never runs on a hidden tab and gives up
+# after MAX_AUTO_RELOADS consecutive reloads so a dead server is not hammered.
+SELF_HEAL_SCRIPT = '''
+(function () {
+  'use strict';
+  var HEARTBEAT_SELECTOR = '.ui-heartbeat';
+  var STALE_MS = __STALE_MS__;
+  var MAX_RELOADS = __MAX_RELOADS__;
+  var RELOAD_DELAY_MS = __RELOAD_DELAY_MS__;
+  var POLL_MS = __POLL_MS__;
+  var STABLE_RESET_MS = 60000;
+  var COUNT_KEY = 'mmhand-ui-auto-reloads';
+  var TIME_KEY = 'mmhand-ui-auto-reload-at';
+  var reloads = 0;
+  var lastReloadAt = 0;
+  var lastValue = null;
+  var changedAt = Date.now();
+  var reloading = false;
+  var reloadTimer = null;
+  var overlay = null;
+
+  function readStorage() {
+    try {
+      reloads = parseInt(window.sessionStorage.getItem(COUNT_KEY) || '0', 10) || 0;
+      lastReloadAt = parseInt(window.sessionStorage.getItem(TIME_KEY) || '0', 10) || 0;
+    } catch (error) {
+      reloads = 0;
+      lastReloadAt = 0;
+    }
+    if (reloads > 0 && Date.now() - lastReloadAt > STABLE_RESET_MS) {
+      reloads = 0;
+      lastReloadAt = 0;
+    }
+  }
+
+  function writeStorage() {
+    try {
+      window.sessionStorage.setItem(COUNT_KEY, String(reloads));
+      window.sessionStorage.setItem(TIME_KEY, String(lastReloadAt));
+    } catch (error) {
+      return;
+    }
+  }
+
+  function showOverlay(text) {
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.setAttribute('role', 'alert');
+      overlay.style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;z-index:12000;'
+        + 'display:flex;align-items:center;justify-content:center;padding:24px;'
+        + 'background:rgba(15,23,42,0.78);color:#f8fafc;text-align:center;'
+        + 'font:600 18px system-ui,sans-serif;';
+      document.body.appendChild(overlay);
+    }
+    overlay.textContent = text;
+    overlay.style.display = 'flex';
+  }
+
+  function hideOverlay() {
+    if (overlay) { overlay.style.display = 'none'; }
+  }
+
+  function cancelPendingReload() {
+    if (reloadTimer !== null) {
+      window.clearTimeout(reloadTimer);
+      reloadTimer = null;
+    }
+    reloading = false;
+    hideOverlay();
+  }
+
+  function scheduleReload() {
+    if (reloading) { return; }
+    reloading = true;
+    showOverlay('Connection lost — reloading…');
+    reloadTimer = window.setTimeout(function () {
+      reloads = reloads + 1;
+      lastReloadAt = Date.now();
+      writeStorage();
+      window.location.reload();
+    }, RELOAD_DELAY_MS);
+  }
+
+  function poll() {
+    var node = document.querySelector(HEARTBEAT_SELECTOR);
+    if (!node) { return; }
+    var now = Date.now();
+    var value = node.textContent || '';
+    if (document.hidden) {
+      lastValue = value;
+      changedAt = now;
+      return;
+    }
+    if (value !== lastValue) {
+      lastValue = value;
+      changedAt = now;
+      if (reloading) { cancelPendingReload(); return; }
+      hideOverlay();
+      if (reloads > 0 && now - lastReloadAt > STABLE_RESET_MS) {
+        reloads = 0;
+        lastReloadAt = 0;
+        writeStorage();
+      }
+      return;
+    }
+    if (now - changedAt <= STALE_MS) { return; }
+    if (reloads < MAX_RELOADS) { scheduleReload(); return; }
+    showOverlay('Connection lost — reload the page manually.');
+  }
+
+  readStorage();
+  document.addEventListener('visibilitychange', function () { changedAt = Date.now(); });
+  window.setInterval(poll, POLL_MS);
+})();
+'''
+
+
+def self_heal_script():
+    """Fill the reconnect thresholds from refresh_policy, the single source of truth."""
+    return (SELF_HEAL_SCRIPT
+            .replace('__STALE_MS__', str(int(policy.HEARTBEAT_STALE_S * 1000)))
+            .replace('__MAX_RELOADS__', str(policy.MAX_AUTO_RELOADS))
+            .replace('__RELOAD_DELAY_MS__', str(policy.AUTO_RELOAD_DELAY_MS))
+            .replace('__POLL_MS__', str(policy.HEARTBEAT_POLL_MS)))
+
+
 def build_page(hand):
     ui.colors(primary='#2563eb', positive='#16a34a', warning='#ea880c', negative='#dc2626')
     ui.add_css(CSS)
+    ui.add_body_html(self_heal_script())
+    # Fast ticks rewrite this label; the injected script watches it for a frozen page.
+    heartbeat = ui.label('0').classes(policy.HEARTBEAT_LABEL_CLASS)
     preview_token, log_sequence = [None], [0]
     displayed_calibration_alerts = set()
     pending_calibration_alerts = []
@@ -195,15 +327,52 @@ def build_page(hand):
                     ui.tooltip('Drag up or down to resize System Log')
             with workspace.after:
                 with ui.column().classes('system-log w-full'):
-                    ui.label('System Log').classes('text-xs font-semibold')
+                    log_title = ui.label('System Log').classes('text-xs font-semibold')
                     output = ui.log(max_lines=2000)
-        def current_leaf():
-            group = tabs.value or TABS[0]
-            return group if group == 'Replay' else (subtabs[group].value or SUBTABS[group][0])
-    last_heavy = [0.0]
-    def refresh():
-        heavy = time.monotonic() - last_heavy[0] >= 0.2
-        snapshot = hand.application_snapshot(include_curves=heavy)
+
+    def current_leaf():
+        group = tabs.value or TABS[0]
+        child = subtabs[group].value if group in subtabs else None
+        return policy.active_leaf(group, child, TABS, SUBTABS)
+
+    # Display caches: NiceGUI values are only written when they actually changed.
+    text_cache, enabled_cache, style_cache = {}, {}, {}
+    running = {'fast': False, 'heavy': False, 'plots': False}
+    slow_ticks = {'fast': 0, 'heavy': 0, 'plots': 0}
+    heartbeat_at = [0.0]
+    plot_cache = {'leaf': None, 'snapshot': None}
+    plot_last = {'leaf': None, 'ts': None}
+
+    def set_text(key, widget, text):
+        if policy.changed(text_cache, key, text):
+            widget.set_text(text)
+
+    def set_enabled(key, widget, enabled):
+        if policy.changed(enabled_cache, key, enabled):
+            widget.set_enabled(enabled)
+
+    def set_style(key, widget, style):
+        if policy.changed(style_cache, key, style):
+            widget.style(style)
+
+    def run_tick(kind, body):
+        if not policy.backpressure_ok(running[kind]):
+            return
+        running[kind] = True
+        started = time.perf_counter()
+        try:
+            body()
+        finally:
+            running[kind] = False
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            if policy.slow_tick(elapsed_ms):
+                slow_ticks[kind] += 1
+                total = sum(slow_ticks.values())
+                output.push(f'UI slow tick: {kind} {elapsed_ms:.0f} ms (slow ticks: {total})')
+                set_text('slow_ticks', log_title, f'System Log · slow ticks: {total}')
+
+    def refresh_body():
+        snapshot = hand.application_snapshot(include_curves=False)
         refresh_calibration_alerts(snapshot)
         choices = {d['port']: f"{d['port']} · {d['description']}" for d in snapshot['devices']}
         for name, state in snapshot['connections'].items():
@@ -211,16 +380,18 @@ def build_page(hand):
             options, value = device_selector_state(choices, selector.value, state)
             if selector.options != options: selector.set_options(options, value=value)
             elif selector.value != value: selector.set_value(value)
-            selector.set_enabled(not state['connected'] and not state['pending'])
-            buttons[name].set_text(state['label'])
-            buttons[name].set_enabled(not state['pending'] and (state['connected'] or bool(selector.value)) and not snapshot['busy'])
-            ages[name].set_text(state['data_status'] + ' · Rx age: ' + ('—' if state['age_ms'] is None else str(state['age_ms']) + ' ms'))
+            set_enabled(('selector', name), selector, not state['connected'] and not state['pending'])
+            set_text(('button', name), buttons[name], state['label'])
+            set_enabled(('button', name), buttons[name],
+                        not state['pending'] and (state['connected'] or bool(selector.value)) and not snapshot['busy'])
+            age = '—' if state['age_ms'] is None else str(state['age_ms']) + ' ms'
+            set_text(('age', name), ages[name], state['data_status'] + ' · Rx age: ' + age)
         for name, value in snapshot['badges'].items():
             display_name = 'Motor multi-turn position' if name == 'Multi-turn' else name
             display_value = 'UNKNOWN' if name == 'Multi-turn' and value == 'MISSING' else value
-            badges[name].set_text(f'{display_name}: {display_value}')
-            badges[name].style(f'background-color:{status_background(value)}')
-        save.set_text('Save Data: ON' if snapshot['recording']['enabled'] else 'Save Data: OFF')
+            set_text(('badge', name), badges[name], f'{display_name}: {display_value}')
+            set_style(('badge-style', name), badges[name], f'background-color:{status_background(value)}')
+        set_text('save', save, 'Save Data: ON' if snapshot['recording']['enabled'] else 'Save Data: OFF')
         preview = snapshot['import_preview']
         if preview and importer.value and preview['token'] != preview_token[0]:
             preview_token[0] = preview['token']
@@ -229,8 +400,47 @@ def build_page(hand):
         events = hand.log_since(log_sequence[0])
         for line in events['lines']: output.push(line)
         log_sequence[0] = events['sequence']
-        current = current_leaf()
-        if heavy or current not in ('Curves & Recordings', 'Tactile'): refreshers[current](snapshot)
-        if heavy: last_heavy[0] = time.monotonic()
+        now = time.monotonic()
+        if policy.heartbeat_due(heartbeat_at[0], now):
+            heartbeat_at[0] = now
+            heartbeat.set_text(f'{time.time():.3f}')
+
+    def refresh_heavy_body():
+        leaf = current_leaf()
+        if leaf in policy.PLOT_LEAVES:
+            # Cache one curve-bearing snapshot for the slower chart timer.
+            plot_cache['leaf'] = leaf
+            plot_cache['snapshot'] = hand.application_snapshot(include_curves=policy.needs_curves(leaf))
+            return
+        refreshers[leaf](hand.application_snapshot(include_curves=False))
+
+    def refresh_plots_body():
+        leaf = current_leaf()
+        now = time.monotonic()
+        if not policy.should_refresh_plots(leaf, plot_last['leaf'], plot_last['ts'], now):
+            return
+        snapshot = plot_cache['snapshot']
+        if snapshot is None or plot_cache['leaf'] != leaf:
+            snapshot = hand.application_snapshot(include_curves=policy.needs_curves(leaf))
+            plot_cache['leaf'] = leaf
+            plot_cache['snapshot'] = snapshot
+        refreshers[leaf](snapshot)
+        plot_last['leaf'] = leaf
+        plot_last['ts'] = now
+
+    def refresh():
+        run_tick('fast', refresh_body)
+
+    def refresh_heavy():
+        run_tick('heavy', refresh_heavy_body)
+
+    def refresh_plots():
+        run_tick('plots', refresh_plots_body)
+
     refresh()
-    ui.timer(0.1, refresh)
+    refresh_heavy()
+    refresh_plots()
+    fast_interval, heavy_interval, plots_interval = policy.select_intervals('Curves & Recordings')
+    ui.timer(fast_interval, refresh)
+    ui.timer(heavy_interval, refresh_heavy)
+    ui.timer(plots_interval, refresh_plots)

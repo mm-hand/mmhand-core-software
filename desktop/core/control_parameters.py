@@ -28,9 +28,9 @@ BOUNDS = {
     'single_tendon': {'kp': (0.0, 2.0), 'ki_per_s': (0.0, 1.0), 'integral_limit_counts': (0, 500)},
     'dual_tendon': {'kp': (0.0, 2.0), 'ki_per_s': (0.0, 1.0), 'integral_limit_counts': (0, 500), 'pair_recovery_gain': (0.0, 0.5)},
     'feedback': {'fast_window_ms': (10, 100), 'slow_window_ms': (100, 1000), 'integral_noise_deg': (0.0, 2.0), 'integral_confirm_ms': (0, 1000)},
-    'reversal': {'confirm_deg': (0.1, 10.0), 'confirm_ms': (0, 500), 'initial_counts': (0, 200), 'growth_counts_per_s': (0, 10000), 'max_counts': (0, 300), 'exit_travel_deg': (0.05, 5.0), 'settle_ms': (0, 500), 'cooldown_ms': (0, 1000), 'max_duration_ms': (100, 1000)},
+    'reversal': {'confirm_deg': (0.1, 10.0), 'confirm_ms': (0, 500), 'takeup_counts': (0, 300), 'exit_travel_deg': (0.05, 5.0)},
     'collision': {'arm_velocity_flex_deg_s': (0.1, 100.0), 'arm_velocity_extend_deg_s': (0.1, 100.0), 'stall_velocity_flex_deg_s': (0, 20.0), 'stall_velocity_extend_deg_s': (0, 20.0), 'min_error_deg': (0.5, 30.0), 'target_reset_deg': (0.1, 10.0), 'retreat_deg': (0.1, 10.0)},
-    'output': {'max_step_counts': (1, 300), 'max_rate_counts_per_s': (100, 10000), 'lut_release_margin_counts': (0, 500), 'lut_tight_margin_counts': (0, 1000)},
+    'output': {'lut_release_margin_counts': (0, 500), 'lut_tight_margin_counts': (0, 1000)},
     'ros2_input': {'min_cutoff_hz': (0.01, 10.0), 'beta': (0, 1.0), 'derivative_cutoff_hz': (0.01, 10.0), 'enter_deg': (0.01, 1.0), 'enter_dwell_ms': (0, 1000), 'exit_deg': (0.02, 2.0), 'exit_confirm_ms': (0, 500), 'max_gap_ms': (100, 5000)},
 }
 
@@ -52,8 +52,6 @@ def validate(data: dict) -> dict:
         raise ValueError('Fast feedback window must be shorter than slow window')
     if data['ros2_input']['enter_deg'] >= data['ros2_input']['exit_deg']:
         raise ValueError('Stationary exit threshold must exceed enter threshold')
-    if data['reversal']['initial_counts'] > data['reversal']['max_counts']:
-        raise ValueError('Reversal initial counts exceeds maximum')
     return copy.deepcopy(data)
 
 

@@ -52,8 +52,7 @@ static void logServoSafetyReject(SystemRuntimeContext* sharedData,
     if (!sharedData || decision.motorChannel >= SERVO_TOTAL_NUM) {
         return;
     }
-    if (decision.reason == ServoRejectReason::LogicalRange ||
-        decision.reason == ServoRejectReason::HardwareRange) {
+    if (decision.reason == ServoRejectReason::HardwareRange) {
         const ServoLogicalRange range = servoPositionRange();
         FW_LOG_WARN_PRINTF(
             "[SERVO SAFETY REJECT] M%02u reason=%s abs=%ld range=[%ld,%ld] "
@@ -150,8 +149,6 @@ static ServoBatchApplyResult applyServoTargetBatch(
     FeetechServoDriver* commandDrivers[SERVO_TARGET_BATCH_MAX] = {nullptr};
     ServoRoute commandRoutes[SERVO_TARGET_BATCH_MAX] = {};
     ServoSafetyDecision commandDecisions[SERVO_TARGET_BATCH_MAX] = {};
-    int32_t logicalMin[SERVO_TOTAL_NUM] = {0};
-    int32_t logicalMax[SERVO_TOTAL_NUM] = {0};
     p4::actuator::ServoSafetyContext safetyContext;
     safetyContext.activeOwner =
         sharedAtomicLoad(&sharedData->servo_target_owner);
@@ -173,20 +170,6 @@ static ServoBatchApplyResult applyServoTargetBatch(
         sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap);
     safetyContext.turnOverflowMask =
         sharedAtomicLoad(&sharedData->servo_turn_overflow_bitmap);
-    safetyContext.logicalRangeValidMask =
-        sharedAtomicLoad(&sharedData->servo_logical_range_valid_bitmap);
-    {
-        // logical range 是多字段快照，复制到栈上后再逐命令裁决，避免跨核撕裂。
-        SharedSafetyGuard guard;
-        memcpy(logicalMin,
-               sharedData->servo_logical_range_min,
-               sizeof(logicalMin));
-        memcpy(logicalMax,
-               sharedData->servo_logical_range_max,
-               sizeof(logicalMax));
-    }
-    safetyContext.logicalMin = logicalMin;
-    safetyContext.logicalMax = logicalMax;
     safetyContext.requireOnline = true;
     // 直控承担人工恢复用途，允许由上位机重建基准。
     // 负反馈和 Rope Init 则必须依赖可信 logical ABS。

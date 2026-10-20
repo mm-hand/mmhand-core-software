@@ -28,7 +28,7 @@ enum class ServoRejectReason : uint8_t {
     Offline,        ///< 目标舵机没有可靠反馈。
     MultiTurnUnknown, ///< logical ABS 不可信。
     StaleTarget,    ///< 命令时间戳超过新鲜度窗口。
-    LogicalRange,   ///< 超出标定/LUT 逻辑边界。
+    LogicalRange,   ///< 已退役：唯一边界收敛为 LUT±扩放量；编号保留解释历史日志。
     HardwareRange,  ///< 超出 ST3215 hardware ABS 硬边界。
     TurnOverflow,   ///< 舵机已越过 Reset Zero 阈值，必须先重置圈数。
 };

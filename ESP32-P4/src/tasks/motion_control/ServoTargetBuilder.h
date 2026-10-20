@@ -19,10 +19,6 @@ struct JointActuatorRuntimeTarget {
 
 // ServoTargetBuilder 负责把控制器输出转换成舵机总线目标：
 // - 关节执行器辅助函数向 PID 隐藏单腱/双腱硬件拓扑差异。
-// 将目标限制到本次上电会话确认过的 logical ABS 行程；LUT 边界由控制器先行处理。
-int32_t clampServoPosToSessionRange(SystemRuntimeContext* sharedData,
-                                    uint8_t motorChannel,
-                                    int32_t value);
 // 如果固定大小 batch 仍有空间，则追加一条 Mxx 命令；BUS 在执行时解析。
 bool appendServoTarget(ServoTargetBatch_t* batch,
                        uint8_t motorChannel,

@@ -658,19 +658,34 @@ def _invalidate_calibration_snapshot_scope_locked(
 
     motor_mask = int(motor_mask) & VALID_MOTOR_MASK
     joint_mask = int(joint_mask) & _JOINT_MASK
+    payload = read_snapshot(target)
+    results = _normalized_list(
+        payload.get("joint_calib_results"), ENCODER_COUNT, None
+    )
+    valid = parse_mask(payload.get("motor_abs_limit_valid_bitmap"))
+    anchor_valid, _anchor_abs, _anchor_raw = multiturn_anchor_fields(payload)
+    # 重复 Release / 重复失效同一范围时不要反复重写并产生空备份：范围已经
+    # 没有可失效的数据就原样返回，避免把“已失效”状态再覆盖一次。
+    scope_has_data = (
+        bool(valid & motor_mask)
+        or bool(anchor_valid & motor_mask)
+        or any(
+            isinstance(results[joint_idx], dict)
+            and bool(results[joint_idx].get("success", False))
+            for joint_idx in range(ENCODER_COUNT)
+            if joint_mask & (1 << joint_idx)
+        )
+    )
+    if not scope_has_data:
+        return "scope already invalid; snapshot not rewritten"
     reason_tag = str(reason).strip().lower() or "coordinate_reset"
     stamp = time.strftime("%Y%m%d_%H%M%S")
     archive = target.parent / "backups" / f"{target.stem}.before_scoped_{reason_tag}_{stamp}{target.suffix}"
     archive.parent.mkdir(parents=True, exist_ok=True)
 
     shutil.copy2(target, archive)
-    payload = read_snapshot(target)
-    results = _normalized_list(
-        payload.get("joint_calib_results"), ENCODER_COUNT, None
-    )
     mins = _normalized_list(payload.get("motor_abs_limit_min"), MOTOR_COUNT, 0)
     maxs = _normalized_list(payload.get("motor_abs_limit_max"), MOTOR_COUNT, 0)
-    valid = parse_mask(payload.get("motor_abs_limit_valid_bitmap"))
     anchor_valid, anchor_abs, anchor_raw = multiturn_anchor_fields(payload)
 
     for joint_idx in range(ENCODER_COUNT):

@@ -1,5 +1,5 @@
 
-from _clock_helpers import stamp
+from _clock_helpers import live_servo_feedback, stamp
 from desktop.core.protocol import HOST_PROTOCOL_VERSION
 import time
 from unittest.mock import MagicMock, call
@@ -54,7 +54,7 @@ def test_direct_enable_holds_exact_abs_and_ignores_unselected_unknown():
     ]
 
 
-@pytest.mark.parametrize("fault", ["stale", "unknown", "route", "raw_only", "range"])
+@pytest.mark.parametrize("fault", ["stale", "unknown", "route", "raw_only"])
 def test_direct_enable_rejects_untrusted_or_clamped_hold(fault):
     controller = controller_with_motor()
     state = controller.current_state
@@ -68,8 +68,6 @@ def test_direct_enable_rejects_untrusted_or_clamped_hold(fault):
     elif fault == "raw_only":
         state.has_servo_angle_data = False
         state.has_servo_raw_data = True
-    else:
-        controller._clamp_motor_abs_for_current_session = lambda i, value: value - 1
     assert not controller.enable_direct_hold(8)[0]
     controller.comm.send_command.assert_not_called()
 
@@ -87,10 +85,16 @@ def test_release_only_connected_motor(monkeypatch):
     def send(command):
         if isinstance(command, tuple) and command[0] == "motor_pos_abs":
             state.servo_angles[3] = command[1][3]
+            state.has_direct_target_result = True
+            state.direct_target_status = 2
+            state.direct_target_applied_mask = 1 << 3
+            state.system_state = 6
+            state.control_enabled = True
         return True
 
     controller.comm.send_command.side_effect = send
-    result = controller.manual_prepare_all_motors()
+    with live_servo_feedback(state):
+        result = controller.manual_prepare_all_motors()
     assert result.ok and result.reached_motor_mask == 8
     assert state.servo_angles[3] == 1500
     controller.set_active_scope.assert_called_once_with(8, 0, False)
@@ -137,10 +141,16 @@ def test_selected_release_never_resets_invalidates_or_moves_other_motors(monkeyp
         if isinstance(command, tuple) and command[0] == 'motor_pos_abs':
             assert command[1][4] == 2500
             state.servo_angles[3] = command[1][3]
+            state.has_direct_target_result = True
+            state.direct_target_status = 2
+            state.direct_target_applied_mask = 1 << 3
+            state.system_state = 6
+            state.control_enabled = True
         return True
 
     controller.comm.send_command.side_effect = send
-    result = controller.manual_prepare_all_motors(motor_mask=8)
+    with live_servo_feedback(state):
+        result = controller.manual_prepare_all_motors(motor_mask=8)
     assert result.ok and result.reset_motor_mask == result.reached_motor_mask == 8
     assert controller.prepare_calibration_turn_zero.call_args.args[0] == 8
     assert invalidate.call_args.kwargs['motor_mask'] == 8

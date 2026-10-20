@@ -196,6 +196,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
     if ((cmd == CMD_RUN_FEEDBACK || cmd == CMD_START || cmd == CMD_MOTOR_POS_ABS ||
          cmd == CMD_MOTOR_POS_ABS_ONE || cmd == CMD_ANGLE_CTRL || cmd == CMD_ANGLE_CTRL_MASKED) &&
         !mmhand::control::parametersConfigured()) {
+        FW_LOG_WARN_PRINTF("[UPPER] motion rejected cmd=0x%02X parameters not configured\r\n", (unsigned)cmd);
         sendProtoAckPacket(cmd, sharedData->system_state, PROTO_ACK_STATUS_INVALID_DATA);
         return;
     }
@@ -443,6 +444,9 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
             !parseInt32ArrayBigEndian(frame + 9, SERVO_TOTAL_NUM * 4U,
                                        targets, SERVO_TOTAL_NUM)) {
             status = PROTO_ACK_STATUS_INVALID_DATA;
+            FW_LOG_WARN_PRINTF("[UPPER] D3 invalid length=%u expected=%u requested=0x%08lX active=0x%08lX\r\n",
+                (unsigned)frameLen, (unsigned)(1 + kMotorPosAbsPayloadBytes),
+                (unsigned long)requestedMask, (unsigned long)activeMask);
         } else if (!upperApplyMotorTargets(
             sharedData, targets, SERVO_TOTAL_NUM, token, requestedMask,
             readU16BigEndian(frame + 117), frame[119])) {

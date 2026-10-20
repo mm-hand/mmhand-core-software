@@ -3,7 +3,7 @@
 from _clock_helpers import stamp
 import threading
 import time
-from unittest.mock import Mock
+from unittest.mock import ANY, Mock
 import pytest
 from test_application_actions import hand, wait_operation
 from desktop.core.hand_backend import HandBackend
@@ -326,8 +326,23 @@ def test_release_selected_tendons_freezes_only_selected_joint_motors(hand, monke
     monkeypatch.setattr(hand, 'manual_prepare_all_motors', writer)
     item = wait_operation(hand, hand.request_release_rope())
     assert item['status'] == 'SUCCESS'
-    writer.assert_called_once_with(motor_mask=mask)
+    writer.assert_called_once_with(motor_mask=mask, cancelled=ANY)
     assert set(hand._motor_transactions) == {0, 7}
+
+
+def test_backend_manual_prepare_combines_external_and_manual_cancellation(hand, monkeypatch):
+    forwarded = {}
+
+    def fake_controller_release(**kwargs):
+        forwarded.update(kwargs)
+        return ManualPrepareResult(True, 'released', 1 << 3, 0, 1 << 3, 1 << 3)
+
+    monkeypatch.setattr(hand._controller, 'manual_prepare_all_motors', fake_controller_release)
+    external = Mock(return_value=True)
+    result = hand.manual_prepare_all_motors(motor_mask=1 << 3, cancelled=external)
+    assert result.ok
+    assert forwarded['cancelled']() is True
+    external.assert_called_once_with()
 
 
 def test_release_selected_tendons_rejects_empty_selection_without_writing(hand, monkeypatch):

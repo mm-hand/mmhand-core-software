@@ -1,10 +1,9 @@
 /** @file JointFeedbackController.cpp
- * @brief 计算关节反馈控制、配对恢复、换向与碰撞保护状态。
+ * @brief 计算关节反馈控制、拉绳、配对恢复与碰撞推进状态。
  */
 #include "JointFeedbackController.h"
 #include "../config/topology/HardwareMap.h"
 #include "../system/calibration/TendonCalibrationLut.h"
-#include "../tasks/motion_control/ServoTargetBuilder.h"
 #include "../system/rtos/SharedSafetyState.h"
 #include <math.h>
 
@@ -22,24 +21,19 @@ bool slopeAt(const JointCalibrationResult& lut, uint8_t axis, float q, float* sl
 }
 }
 void JointFeedbackController::reset(uint8_t joint) { if (joint < ENCODER_TOTAL_NUM) states[joint] = {}; }
-void JointFeedbackController::suspend(uint8_t joint, const ServoAngleData_t& servo, uint32_t now) {
+void JointFeedbackController::suspend(uint8_t joint, uint32_t now) {
     if (joint >= ENCODER_TOTAL_NUM) return;
     auto& state = states[joint];
     state.phase = Tracking; state.candidate = state.direction = 0;
-    state.stableSince = state.errorSince = now;
-    for (uint8_t axis = 0; axis < getJointActuatorCount(joint) && axis < MAX_JOINT_ACTUATORS; ++axis) {
-        JointActuatorItem actuator;
-        if (getJointActuator(joint, axis, &actuator)) state.lastCommand[axis] = servo.servoAngles[actuator.motorChannel];
-    }
+    state.errorSince = now;
 }
 void JointFeedbackController::resetAll() { for (auto& state : states) state = {}; }
 
 JointControlResult JointFeedbackController::compute(uint8_t joint, float target, const FeedbackEstimate& fb,
-    uint32_t now, float dt, const ServoAngleData_t& servo, const JointCalibrationResult& lut,
-    uint32_t motorMask, SystemRuntimeContext* system, const Parameters& p) {
+    uint32_t now, const ServoAngleData_t& servo, const JointCalibrationResult& lut,
+    uint32_t motorMask, const Parameters& p) {
     JointControlResult out;
-    if (joint >= ENCODER_TOTAL_NUM || !p.configured || !fb.ready || !isfinite(target) ||
-        !isfinite(dt) || dt <= 0 || dt > 0.1f) return out;
+    if (joint >= ENCODER_TOTAL_NUM || !p.configured || !fb.ready || !isfinite(target)) return out;
     const uint8_t count = getJointActuatorCount(joint);
     if (!count || count > MAX_JOINT_ACTUATORS || count > TENDON_LUT_ACTUATOR_COUNT) return out;
     float slope[MAX_JOINT_ACTUATORS] = {}, model[MAX_JOINT_ACTUATORS] = {};
@@ -50,6 +44,8 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
         const auto motor = actuator.motorChannel;
         if (!(motorMask & (1UL << motor)) || !servo.onlineStatus[motor] || lut.tendonLutMotor[i] != motor ||
             !slopeAt(lut, i, fb.fast, &slope[i], &model[i])) return out;
+        // The LUT working window (calibrated span widened by the configurable
+        // release/tight margins) is the only command boundary; nothing widens it.
         int32_t lo, hi;
         const bool bounded = count == 1 ? singleTendonCalibrationMotorAbsRange(lut, i, motor,
             p[OutputLutReleaseMarginCounts], p[OutputLutTightMarginCounts], &lo, &hi) :
@@ -58,30 +54,18 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
         if (!bounded) return out;
         out.motors[i] = motor;
         measured[i] = servo.servoAngles[motor];
-        low[i] = clampServoPosToSessionRange(system, motor, lo);
-        high[i] = clampServoPosToSessionRange(system, motor, hi);
-        // Auto-calibrated ABS limits remain mandatory and cannot be enlarged by runtime settings.
-        const uint32_t bit = 1UL << motor;
-        {
-            SharedSafetyGuard guard;
-            if (!(system->motor_abs_limit_valid_bitmap & bit)) return out;
-            low[i] = fmaxf(low[i], system->motor_abs_limit_min[motor]);
-            high[i] = fminf(high[i], system->motor_abs_limit_max[motor]);
-        }
+        low[i] = (float)lo;
+        high[i] = (float)hi;
         if (low[i] > high[i]) return out;
     }
     auto& state = states[joint];
     if (!state.initialized || state.revision != p.revision) {
         state = {};
         state.initialized = true; state.revision = p.revision;
-        state.lastTarget = state.stableTarget = target; state.stableSince = now;
-        for (uint8_t i = 0; i < count; ++i) state.lastCommand[i] = measured[i];
+        state.lastTarget = target;
     }
     const float delta = target - state.lastTarget;
     const int8_t targetDirection = sign(delta);
-    if (fabsf(target - state.stableTarget) > p[FeedbackIntegralNoiseDeg]) {
-        state.stableTarget = target; state.stableSince = now;
-    }
     if (targetDirection) {
         if (!state.direction) state.direction = targetDirection;
         if (targetDirection == state.direction) {
@@ -91,34 +75,27 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
             state.candidate = targetDirection;
             state.candidateAnchor = state.lastTarget;
             state.candidateSince = now;
-            if (state.phase != Failed) state.phase = Pending;
+            state.phase = Pending;
         }
     }
     state.lastTarget = target;
     if (state.candidate && (target - state.candidateAnchor) * state.candidate >= p[ReversalConfirmDeg] &&
-        now - state.candidateSince >= p[ReversalConfirmMs] && int32_t(now - state.cooldownUntil) >= 0) {
+        now - state.candidateSince >= p[ReversalConfirmMs]) {
         state.direction = state.candidate; state.candidate = 0;
-        state.phase = p[ReversalMaxCounts] > 0 ? Takeup : Tracking;
-        state.phaseSince = now; state.responseAnchor = fb.fast;
+        // The old loading direction must not carry integral bias into take-up.
+        for (uint8_t i = 0; i < count; ++i) state.integral[i] = 0;
+        state.errorSign = 0;
+        state.errorSince = now;
+        state.phase = p[ReversalTakeupCounts] > 0 ? Takeup : Tracking;
+        state.responseAnchor = fb.fast;
         for (uint8_t i = 0; i < count; ++i) state.motorAnchor[i] = measured[i];
     }
-    if (state.phase == Takeup) {
-        if (state.direction * (fb.fast - state.responseAnchor) >= p[ReversalExitTravelDeg]) {
-            state.phase = Settling; state.phaseSince = now;
-        } else if (now - state.phaseSince >= p[ReversalMaxDurationMs]) {
-            state.phase = Failed;
-            for (uint8_t i = 0; i < count; ++i) state.hold[i] = measured[i];
-        }
-    }
-    if (state.phase == Settling && now - state.phaseSince >= p[ReversalSettleMs]) {
-        state.phase = Tracking; state.cooldownUntil = now + uint32_t(p[ReversalCooldownMs]);
+    if (state.phase == Takeup &&
+        state.direction * (fb.fast - state.responseAnchor) >= p[ReversalExitTravelDeg]) {
+        // The joint answered; hand back to plain tracking and let the lift die.
+        state.phase = Tracking;
     }
     out.count = count;
-    if (state.phase == Failed) {
-        out.reversalFailed = true;
-        for (uint8_t i = 0; i < count; ++i) out.targets[i] = lroundf(state.hold[i]);
-        return out;
-    }
     const float kp = p[count == 1 ? SingleTendonKp : DualTendonKp];
     const float ki = p[count == 1 ? SingleTendonKiPerS : DualTendonKiPerS];
     const float iLimit = p[count == 1 ? SingleTendonIntegralLimitCounts : DualTendonIntegralLimitCounts];
@@ -128,27 +105,29 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
     if (fb.fresh && state.errorSign != sign(integralError)) {
         state.errorSign = sign(integralError); state.errorSince = now;
     }
-    bool following = true;
-    for (uint8_t i = 0; i < count; ++i)
-        if (fabsf(state.lastCommand[i] - measured[i]) > p[OutputMaxStepCounts]) following = false;
-    const bool integrate = fb.fresh && fb.sampleDt > 0 && following && !state.saturated && state.phase == Tracking &&
-        now - state.stableSince >= p[FeedbackIntegralConfirmMs] &&
+    const bool integrate = fb.fresh && fb.sampleDt > 0 && !state.saturated && state.phase == Tracking &&
         state.errorSign != 0 && now - state.errorSince >= p[FeedbackIntegralConfirmMs];
-    float raw[MAX_JOINT_ACTUATORS] = {}, previousIntegral[MAX_JOINT_ACTUATORS] = {};
+    float raw[MAX_JOINT_ACTUATORS] = {};
     for (uint8_t i = 0; i < count; ++i) {
-        previousIntegral[i] = state.integral[i];
         if (integrate) state.integral[i] = clip(state.integral[i] + ki * slope[i] * integralError * fb.sampleDt, -iLimit, iLimit);
         out.proportional[i] = kp * slope[i] * error;
         out.integral[i] = state.integral[i];
         raw[i] = measured[i] + out.proportional[i] + state.integral[i];
         if (state.phase == Takeup) {
+            // The take-up floor: the command must sit at least A counts past the
+            // reversal anchor in the winding direction, whichever of PI and the
+            // anchor target is further along. PI passing the target ends the lift.
             const int8_t motorDirection = sign(slope[i]) * state.direction;
-            const float amount = fminf(p[ReversalMaxCounts], p[ReversalInitialCounts] +
-                p[ReversalGrowthCountsPerS] * (now - state.phaseSince) * 0.001f);
-            const float reference = state.motorAnchor[i] + motorDirection * amount;
-            out.reversal[i] = motorDirection * fmaxf(0, motorDirection * (reference - raw[i]));
-            raw[i] += out.reversal[i];
+            const float reference = state.motorAnchor[i] + motorDirection * p[ReversalTakeupCounts];
+            const float lifted = motorDirection > 0 ? fmaxf(raw[i], reference) : fminf(raw[i], reference);
+            out.reversal[i] = lifted - raw[i];
+            raw[i] = lifted;
         }
+    }
+    if (state.phase == Takeup) {
+        bool lifting = false;
+        for (uint8_t i = 0; i < count; ++i) lifting = lifting || out.reversal[i] != 0.0f;
+        if (!lifting) state.phase = Tracking; // PI alone already covers the take-up distance.
     }
     if (count == 2) {
         const float z0 = model[0] - measured[0], z1 = model[1] - measured[1];
@@ -156,31 +135,21 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
         out.recovery[0] = p[DualTendonPairRecoveryGain] * (z0 - slope[0] * along);
         out.recovery[1] = p[DualTendonPairRecoveryGain] * (z1 - slope[1] * along);
     }
-    const float rateStep = fminf(p[OutputMaxStepCounts], p[OutputMaxRateCountsPerS] * dt);
-    float allowedLow[MAX_JOINT_ACTUATORS], allowedHigh[MAX_JOINT_ACTUATORS];
     bool recoveryAllowed = count == 2;
-    for (uint8_t i = 0; i < count; ++i) {
-        allowedLow[i] = fmaxf(low[i], state.lastCommand[i] - rateStep);
-        allowedHigh[i] = fminf(high[i], state.lastCommand[i] + rateStep);
-        if (allowedLow[i] > allowedHigh[i]) { allowedLow[i] = low[i]; allowedHigh[i] = high[i]; }
-        if (raw[i] + out.recovery[i] < allowedLow[i] || raw[i] + out.recovery[i] > allowedHigh[i]) recoveryAllowed = false;
-    }
+    for (uint8_t i = 0; i < count; ++i)
+        if (raw[i] + out.recovery[i] < low[i] || raw[i] + out.recovery[i] > high[i]) recoveryAllowed = false;
     state.saturated = false;
     for (uint8_t i = 0; i < count; ++i) {
         if (!recoveryAllowed) out.recovery[i] = 0;
         const float candidate = raw[i] + out.recovery[i];
         out.rawTargets[i] = candidate;
-        const float applied = clip(candidate, allowedLow[i], allowedHigh[i]);
-        if (fabsf(candidate - applied) > 0.5f) {
-            state.saturated = true;
-            if ((state.integral[i] - previousIntegral[i]) * (candidate - applied) > 0)
-                state.integral[i] = previousIntegral[i];
-        }
-        out.targets[i] = lroundf(applied); state.lastCommand[i] = out.targets[i];
+        const float applied = clip(candidate, low[i], high[i]);
+        if (fabsf(candidate - applied) > 0.5f) state.saturated = true;
+        out.targets[i] = lroundf(applied);
         if ((applied - measured[i]) * slope[i] * error > 0 && fabsf(applied - measured[i]) >= 1) out.pushing = true;
     }
     out.saturated = state.saturated;
-    // Rate limiting is normal, but a mechanical boundary cannot be collision evidence.
+    // A mechanical boundary clamp is normal operation, not collision evidence.
     for (uint8_t i = 0; i < count; ++i)
         if (raw[i] < low[i] || raw[i] > high[i]) { out.pushing = false; out.boundaryClamped = true; }
     return out;

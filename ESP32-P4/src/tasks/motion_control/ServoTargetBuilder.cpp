@@ -4,34 +4,6 @@
  */
 #include "ServoTargetBuilder.h"
 #include "../../config/topology/HardwareMap.h"
-#include "../../system/rtos/SharedSafetyState.h"
-
-int32_t clampServoPosToSessionRange(SystemRuntimeContext* sharedData,
-                                    uint8_t motorChannel,
-                                    int32_t value)
-{
-    int32_t clamped = value;
-    // LUT 是负反馈工作区的唯一业务边界；这里仅保留掉电恢复后重建的
-    // 会话级 logical ABS 硬边界，防止向舵机发送当前会话不可达的圈数。
-    if (sharedData && motorChannel < SERVO_TOTAL_NUM) {
-        const uint32_t bit = (1UL << motorChannel);
-        uint32_t rangeValidBitmap = 0;
-        int32_t sessionLo = 0;
-        int32_t sessionHi = 0;
-        {
-            SharedSafetyGuard guard;
-            rangeValidBitmap = sharedAtomicLoad(
-                &sharedData->servo_logical_range_valid_bitmap);
-            sessionLo = sharedData->servo_logical_range_min[motorChannel];
-            sessionHi = sharedData->servo_logical_range_max[motorChannel];
-        }
-        if ((rangeValidBitmap & bit) != 0 && sessionLo <= sessionHi) {
-            if (clamped < sessionLo) clamped = sessionLo;
-            if (clamped > sessionHi) clamped = sessionHi;
-        }
-    }
-    return clamped;
-}
 
 // 向 batch 追加一个舵机目标。
 bool appendServoTarget(ServoTargetBatch_t* batch,

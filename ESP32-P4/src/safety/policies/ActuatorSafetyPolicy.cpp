@@ -237,18 +237,7 @@ ServoSafetyDecision evaluateCommand(const ServoTargetBatch_t& batch,
                       motorChannel,
                       commandIndex);
     }
-    // 只有 valid bit 成立才解释范围数组，避免未初始化的 0..0 被误当成有效工作区。
-    if ((context.logicalRangeValidMask & motorBit) != 0 &&
-        context.logicalMin && context.logicalMax &&
-        (requestedAbs < context.logicalMin[motorChannel] ||
-         requestedAbs > context.logicalMax[motorChannel])) {
-        return reject(ServoRejectReason::LogicalRange,
-                      requestedAbs,
-                      hardwareAbs,
-                      motorChannel,
-                      commandIndex);
-    }
-    // 即使尚未发布范围快照，硬件边界仍独立生效。
+    // 硬件边界独立生效，构成编译期常量的最后一道防线。
     if (hardwareAbs < kServoHardwareCommandMin ||
         hardwareAbs > kServoHardwareCommandMax) {
         return reject(ServoRejectReason::HardwareRange,
@@ -282,7 +271,6 @@ const char* rejectReasonName(ServoRejectReason reason)
         case ServoRejectReason::Offline: return "offline";
         case ServoRejectReason::MultiTurnUnknown: return "multiturn-unknown";
         case ServoRejectReason::StaleTarget: return "stale-target";
-        case ServoRejectReason::LogicalRange: return "logical-range";
         case ServoRejectReason::HardwareRange: return "hardware-range";
         case ServoRejectReason::TurnOverflow: return "turn-overflow";
         default: return "unknown";

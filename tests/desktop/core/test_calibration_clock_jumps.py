@@ -4,6 +4,7 @@ import time
 
 import pytest
 
+import desktop.core.communication.state_reducer as state_reducer_module
 from desktop.core.comm_layer import LowerComputerComm
 from desktop.core.communication.ack_tracker import AckTracker
 from desktop.core.host_calibration.runtime import HostCalibrationIO
@@ -29,6 +30,8 @@ def test_calibration_feedback_and_owner_ignore_wall_clock_jumps(io, monkeypatch,
 
 @pytest.mark.parametrize('jump', [2.816, 60.0, -60.0])
 def test_rx_keeps_wall_dates_and_monotonic_freshness_separate(monkeypatch, jump):
+    # 两次调用都要拿到独立快照：关闭发布节流（默认 20 ms 仅约束高频遥测）。
+    monkeypatch.setattr(state_reducer_module, "STATE_SNAPSHOT_MIN_INTERVAL_S", 0.0)
     comm = LowerComputerComm('')
     wall = time.time()
     payload = struct.pack('>27iI', *([12] * 27), 100)

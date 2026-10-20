@@ -10,9 +10,10 @@
 # data_models.py - 灵巧手数据模型（状态与控制合一）
 
 from dataclasses import dataclass, field, fields, is_dataclass
-from copy import deepcopy
+from copy import copy, deepcopy
 import math
-from typing import List, Optional, Tuple
+import types
+from typing import List, Optional, Tuple, Union, get_args, get_origin, get_type_hints
 import numpy as np
 from enum import Enum
 
@@ -47,16 +48,26 @@ _SCALAR_STATE_TYPES = {int, float, bool, str, bytes, type(None)}
 
 def _copy_state_value(value):
     """Copy nested telemetry; flat scalar lists use the fast built-in list copy."""
-    if isinstance(value, list):
-        if all(type(item) in _SCALAR_STATE_TYPES for item in value):
-            return value.copy()
-        return [_copy_state_value(item) for item in value]
-    if isinstance(value, dict):
-        return {key: _copy_state_value(item) for key, item in value.items()}
+    value_type = type(value)
+    if value_type is list:
+        for item in value:
+            if type(item) not in _SCALAR_STATE_TYPES:
+                return [_copy_state_value(item) for item in value]
+        return value.copy()
+    if value_type is dict:
+        for item in value.values():
+            if type(item) not in _SCALAR_STATE_TYPES:
+                return {key: _copy_state_value(item) for key, item in value.items()}
+        return value.copy()
     if isinstance(value, np.ndarray):
         return value.copy()
     if is_dataclass(value) or isinstance(value, (tuple, set)):
         return deepcopy(value)
+    # Rare list/dict subclasses keep the generic recursive copy contract.
+    if isinstance(value, list):
+        return [_copy_state_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _copy_state_value(item) for key, item in value.items()}
     return value
 
 
@@ -544,32 +555,151 @@ class HandModel:
         """Monotonic receive time; missing telemetry is never treated as fresh."""
         return self.monotonic_received.get(field, 0.0)
 
-    def copy_state_from(self, other: "HandModel") -> None:
+    def copy_state_from(
+        self,
+        other: "HandModel",
+        *,
+        field_names: Optional[Tuple[str, ...]] = None,
+    ) -> None:
         """Copy telemetry without replacing locally owned targets and encoder zeros.
 
         Mutable nested data (including tactile NumPy arrays) belongs to each snapshot.
         Encoder/motor objects keep their identity so callers can hold row references.
+        ``field_names`` restricts the copy to an explicit subset of top-level fields;
+        ``encoders``/``motors`` are only synchronised when named explicitly.
         """
-        for item in fields(self):
-            if item.name in ("encoders", "motors"):
+        source = other.__dict__
+        target = self.__dict__
+        if field_names is None:
+            own_encoders = target["encoders"]
+            own_motors = target["motors"]
+            # Scalar fields are immutable values, so a single bulk reference copy is
+            # sufficient; only the known container fields need fresh copies below.
+            target.update(source)
+            target["encoders"] = own_encoders
+            target["motors"] = own_motors
+            for name in _HAND_FLAT_CONTAINER_FIELDS:
+                value = source[name]
+                value_type = type(value)
+                if value_type is list or value_type is dict:
+                    target[name] = value.copy()
+                else:
+                    target[name] = _copy_state_value(value)
+            for name in _HAND_NESTED_CONTAINER_FIELDS:
+                target[name] = _copy_state_value(source[name])
+            _sync_encoders(own_encoders, source["encoders"])
+            _sync_motors(own_motors, source["motors"])
+            return
+
+        requested = tuple(field_names)
+        for name in requested:
+            if name == "encoders" or name == "motors":
                 continue
-            value = getattr(other, item.name)
-            setattr(self, item.name, _copy_state_value(value) if isinstance(value, (list, dict, np.ndarray)) else value)
-        for target, source in zip(self.encoders, other.encoders):
-            for item in fields(target):
-                if item.name not in ("target_angle_deg", "zero_raw"):
-                    setattr(target, item.name, getattr(source, item.name))
-        for target, source in zip(self.motors, other.motors):
-            for item in fields(target):
-                setattr(target, item.name, getattr(source, item.name))
+            if name in _HAND_FLAT_CONTAINER_FIELD_SET:
+                value = source[name]
+                value_type = type(value)
+                if value_type is list or value_type is dict:
+                    target[name] = value.copy()
+                else:
+                    target[name] = _copy_state_value(value)
+            elif name in _HAND_NESTED_CONTAINER_FIELD_SET:
+                target[name] = _copy_state_value(source[name])
+            else:
+                target[name] = source[name]
+        if "encoders" in requested:
+            _sync_encoders(target["encoders"], source["encoders"])
+        if "motors" in requested:
+            _sync_motors(target["motors"], source["motors"])
+
+
+def _annotation_is_scalar(annotation) -> bool:
+    """True when one list element / dict value annotation is an immutable scalar."""
+    if annotation in (int, float, bool, str, bytes) or annotation is type(None):
+        return True
+    origin = get_origin(annotation)
+    if origin is Union or origin is getattr(types, "UnionType", Union):
+        return all(_annotation_is_scalar(arg) for arg in get_args(annotation))
+    return False
+
+
+def _classify_hand_state_fields() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Split HandModel state fields into flat scalar containers and nested ones.
+
+    Flat containers may be duplicated with ``list.copy()``/``dict.copy()`` because
+    every element is an immutable scalar; nested containers need the recursive copy.
+    Classification is annotation based and falls back to the nested path when a
+    field's annotation is unknown, so newly added fields stay isolated by default.
+    """
+    hints = get_type_hints(HandModel)
+    flat: list[str] = []
+    nested: list[str] = []
+    union_types = (Union, getattr(types, "UnionType", Union))
+    for item in fields(HandModel):
+        name = item.name
+        if name in ("encoders", "motors"):
+            continue
+        annotation = hints.get(name)
+        origin = get_origin(annotation)
+        if origin is list:
+            args = get_args(annotation)
+            (flat if len(args) == 1 and _annotation_is_scalar(args[0]) else nested).append(name)
+        elif origin is dict:
+            args = get_args(annotation)
+            (flat if len(args) == 2 and _annotation_is_scalar(args[1]) else nested).append(name)
+        elif origin in union_types:
+            # Optional[List[...]] 等联合容器保守走递归拷贝，避免共享可变引用。
+            nested.append(name)
+        elif annotation in (list, dict, np.ndarray):
+            nested.append(name)
+    return tuple(flat), tuple(nested)
+
+
+def _sync_encoders(targets: List[JointEncoder], sources: List[JointEncoder]) -> None:
+    """Update encoder objects in place; targets/zeros stay locally owned."""
+    for target, source in zip(targets, sources):
+        target_dict = target.__dict__
+        keep_target_angle_deg = target_dict["target_angle_deg"]
+        keep_zero_raw = target_dict["zero_raw"]
+        target_dict.update(source.__dict__)
+        target_dict["target_angle_deg"] = keep_target_angle_deg
+        target_dict["zero_raw"] = keep_zero_raw
+
+
+def _sync_motors(targets: List[MotorSlot], sources: List[MotorSlot]) -> None:
+    """Update motor slot objects in place to preserve row-reference identity."""
+    for target, source in zip(targets, sources):
+        target.__dict__.update(source.__dict__)
+
+
+_HAND_FLAT_CONTAINER_FIELDS, _HAND_NESTED_CONTAINER_FIELDS = _classify_hand_state_fields()
+_HAND_FLAT_CONTAINER_FIELD_SET = frozenset(_HAND_FLAT_CONTAINER_FIELDS)
+_HAND_NESTED_CONTAINER_FIELD_SET = frozenset(_HAND_NESTED_CONTAINER_FIELDS)
+
+
+def _new_hand_objects(sources) -> List:
+    """Shallow-clone simple state dataclasses (all fields are immutable scalars)."""
+    result = []
+    for source in sources:
+        clone = object.__new__(type(source))
+        clone.__dict__.update(source.__dict__)
+        result.append(clone)
+    return result
 
 
 def clone_hand_model(model: HandModel) -> HandModel:
     """建立跨线程只读快照，集中维护目标、零点和状态字段复制。"""
-    snapshot = HandModel()
-    snapshot.copy_state_from(model)
-    snapshot.set_target_angles(model.target_angles)
-    for index, encoder in enumerate(snapshot.encoders):
-        if index < len(getattr(model, "encoders", [])):
-            encoder.zero_raw = int(model.encoders[index].zero_raw)
+    snapshot = copy(model)
+    source = model.__dict__
+    target = snapshot.__dict__
+    target["encoders"] = _new_hand_objects(source["encoders"])
+    target["motors"] = _new_hand_objects(source["motors"])
+    for name in _HAND_FLAT_CONTAINER_FIELDS:
+        value = source[name]
+        value_type = type(value)
+        if value_type is list or value_type is dict:
+            target[name] = value.copy()
+        else:
+            target[name] = _copy_state_value(value)
+    for name in _HAND_NESTED_CONTAINER_FIELDS:
+        target[name] = _copy_state_value(source[name])
     return snapshot

@@ -14,6 +14,12 @@ from ..protocol import (PACKET_TYPE_CONTROL_TRACE, PACKET_TYPE_CONTROL_COMPONENT
                         split_p4_timestamp, parse_control_trace_packet, parse_control_components_packet)
 
 
+def signed_age_ms(cycle_start, sample):
+    # A mailbox producer can publish 1 ms after cycle_start was captured.
+    # Preserve that ordering instead of exporting a false 49-day feedback age.
+    return ((cycle_start-sample+0x80000000)&0xFFFFFFFF)-0x80000000
+
+
 class PacketRecorder:
     def __init__(self, write):
         self.write = write
@@ -61,7 +67,7 @@ class PacketRecorder:
                 "host_time": received_at, "p4_time_ms": stamp,
                 "control_trace_sequence": trace["sequence"], "target_token": trace["target_token"],
                 "command_age_ms": (stamp - trace["target_accepted_ms"]) & 0xFFFFFFFF,
-                "feedback_age_ms": (stamp - trace["encoder_timestamp_ms"]) & 0xFFFFFFFF,
+                "feedback_age_ms": signed_age_ms(stamp,trace["encoder_timestamp_ms"]),
                 "trace_period_ms": (stamp - self.previous[0]) & 0xFFFFFFFF if self.previous else "",
                 "trace_sequence_gap": max(0, delta - components['divisor']) if components and delta < 0x80000000 else '',
                 "trace_sample_divisor": components['divisor'] if components else '',
@@ -71,7 +77,7 @@ class PacketRecorder:
             }
             if detail:
                 row.update({k: detail[k] for k in ("control_dt_us", "servo_valid_mask", "recovery_applied_mask", "p4_trace_dropped")})
-                row["servo_feedback_age_ms"] = (stamp - detail["servo_timestamp"]) & 0xFFFFFFFF
+                row["servo_feedback_age_ms"] = signed_age_ms(stamp,detail["servo_timestamp"])
             for i in range(21):
                 row[f"J{i:02d}_slow_deg"] = components['slow_deg'][i] if components else ''
                 valid = bool(trace["valid_joint_mask"] & (1 << i))

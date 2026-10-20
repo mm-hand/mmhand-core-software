@@ -22,7 +22,6 @@ SafetyRuleId ruleForServoRejectReason(ServoRejectReason reason)
         case ServoRejectReason::Offline: return SafetyRuleId::ActuatorOffline;
         case ServoRejectReason::MultiTurnUnknown: return SafetyRuleId::ActuatorMultiTurnUnknown;
         case ServoRejectReason::StaleTarget: return SafetyRuleId::ActuatorStaleTarget;
-        case ServoRejectReason::LogicalRange: return SafetyRuleId::ActuatorLogicalRange;
         case ServoRejectReason::HardwareRange: return SafetyRuleId::ActuatorHardwareRange;
         case ServoRejectReason::TurnOverflow: return SafetyRuleId::ActuatorTurnOverflow;
         default: return SafetyRuleId::None;
@@ -51,7 +50,6 @@ SafetyRuleId ruleForFeedbackRejectReason(uint8_t reason)
         case FEEDBACK_REJECT_STATE: return SafetyRuleId::FeedbackStateRejected;
         case FEEDBACK_REJECT_WORKSPACE: return SafetyRuleId::FeedbackWorkspaceRejected;
         case FEEDBACK_REJECT_MULTITURN: return SafetyRuleId::FeedbackMultiTurnRejected;
-        case FEEDBACK_REJECT_ABS_LIMIT: return SafetyRuleId::FeedbackAbsLimitRejected;
         case FEEDBACK_REJECT_MODE_SWITCH: return SafetyRuleId::FeedbackModeSwitchRejected;
         case FEEDBACK_REJECT_EVENT_QUEUE: return SafetyRuleId::FeedbackEventQueueRejected;
         default: return SafetyRuleId::None;

@@ -20,31 +20,27 @@ struct JointControlResult {
     bool saturated = false;
     bool boundaryClamped = false;
     bool pushing = false;
-    bool reversalFailed = false;
 };
 class JointFeedbackController {
 public:
     JointControlResult compute(uint8_t joint, float target, const FeedbackEstimate& feedback,
-        uint32_t now, float dt, const ServoAngleData_t& servo,
+        uint32_t now, const ServoAngleData_t& servo,
         const JointCalibrationResult& calibration, uint32_t motorMask,
-        SystemRuntimeContext* system, const Parameters& parameters);
+        const Parameters& parameters);
     void reset(uint8_t joint);
-    void suspend(uint8_t joint, const ServoAngleData_t& servo, uint32_t now);
+    void suspend(uint8_t joint, uint32_t now);
     void resetAll();
 private:
-    enum Phase : uint8_t { Tracking, Pending, Takeup, Settling, Failed };
+    enum Phase : uint8_t { Tracking, Pending, Takeup };
     struct State {
         bool initialized = false, saturated = false;
-        uint32_t revision = 0, stableSince = 0, candidateSince = 0, phaseSince = 0, cooldownUntil = 0;
-        uint32_t errorSince = 0;
+        uint32_t revision = 0, candidateSince = 0, errorSince = 0;
         int8_t errorSign = 0;
         int8_t direction = 0, candidate = 0;
         Phase phase = Tracking;
-        float lastTarget = 0, stableTarget = 0, candidateAnchor = 0, responseAnchor = 0;
+        float lastTarget = 0, candidateAnchor = 0, responseAnchor = 0;
         float integral[MAX_JOINT_ACTUATORS] = {};
         float motorAnchor[MAX_JOINT_ACTUATORS] = {};
-        float lastCommand[MAX_JOINT_ACTUATORS] = {};
-        float hold[MAX_JOINT_ACTUATORS] = {};
     } states[ENCODER_TOTAL_NUM];
 };
 }

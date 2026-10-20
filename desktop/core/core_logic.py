@@ -1,7 +1,7 @@
 """core_logic.py - MMHand Desktop 模块契约。
 
 职责：封装面向业务的下位机命令序列和基础控制流程。
-线程：除 comm_layer 的串口收发线程外不主动创建 GUI 线程；共享状态必须按既有锁读取。
+线程：串口、反馈发布与独立锚点落盘线程；坐标事务共用互斥锁，周期落盘不得阻塞反馈发布。
 输入：P4 字节流、上层类型化命令、配置和持久化数据。
 输出：线程安全的 HandModel 快照、协议帧、ACK 和后端操作结果。
 状态所有权：通信对象拥有串口与解析缓存；HandModel 的写入只允许在核心同步边界内发生。
@@ -108,6 +108,8 @@ STARTUP_MULTITURN_RECOVERY_TIMEOUT_S = 20.0
 MULTITURN_ANCHOR_CAPTURE_TIMEOUT_S = 3.0
 MANUAL_PREPARE_RELEASE_COUNTS = 1500
 MANUAL_PREPARE_FEEDBACK_TIMEOUT_S = 2.0
+MANUAL_PREPARE_READY_TIMEOUT_S = 2.0
+MANUAL_PREPARE_TRANSIENT_GRACE_S = 1.0
 MANUAL_PREPARE_MOTION_TIMEOUT_S = 12.0
 MANUAL_PREPARE_TARGET_TOLERANCE_COUNTS = 80
 
@@ -173,6 +175,10 @@ class HandController:
         self._control_mode = ControlMode.JOINT_ANGLE
         self._started = False
         self._update_thread: Optional[threading.Thread] = None
+        self._persistence_queue = queue.Queue(maxsize=1)
+        self._persistence_stop = threading.Event()
+        self._persistence_thread = None
+        self._persistence_diagnostics = None
         self.last_sync_status = "Not connected"
         self._multiturn_store = MultiTurnRuntimeStore(MULTITURN_RUNTIME_PATH)
         self._multiturn_store_payload: Optional[dict] = None
@@ -237,6 +243,10 @@ class HandController:
         self._state_sync_waiting_logged = False
         self._host_calibration_io = None
         self._host_calibration_overlay = {}
+        # Manual Prepare（Release Rope）是破坏性维护事务：成功后同一设备再次
+        # 请求同一范围时不能重复 Reset Zero / 二次作废旧标定。
+        self._manual_prepare_done_motor_mask = 0
+        self._manual_prepare_done_device_id = ""
 
     def create_host_calibration_io(self, cancel_check, selected_joint_mask,
                                    selected_motor_mask, *, reset_motor_mask=0,
@@ -271,29 +281,6 @@ class HandController:
     def _raw_single_turn(value: int) -> int:
         """将舵机反馈归一到 0~4095 单圈坐标，供保持和 Turn0 恢复使用。"""
         return max(0, min(4095, int(value) % 4096))
-
-    def _clamp_motor_abs_for_current_session(
-        self, motor_index: int, value: int
-    ) -> int:
-        """按单台舵机当前上电会话的动态 logical 行程钳位直控目标。"""
-        idx = int(motor_index)
-        target = self._clamp_motor_abs(value)
-        with self.state_lock:
-            state = self.current_state
-            valid_bitmap = int(
-                getattr(state, "servo_logical_range_valid_bitmap", 0) or 0
-            )
-            mins = list(getattr(state, "servo_logical_range_min", []) or [])
-            maxs = list(getattr(state, "servo_logical_range_max", []) or [])
-        if (
-            0 <= idx < MOTOR_COUNT
-            and (valid_bitmap & (1 << idx)) != 0
-            and idx < len(mins)
-            and idx < len(maxs)
-            and int(mins[idx]) <= int(maxs[idx])
-        ):
-            target = max(int(mins[idx]), min(int(maxs[idx]), target))
-        return target
 
     def _safe_motor_hold_targets_from_state(self) -> Optional[List[int]]:
         with self.state_lock:
@@ -380,11 +367,6 @@ class HandController:
             reason = "logical ABS feedback is stale"
         elif mask & (~valid | state.multi_turn_unknown_bitmap):
             reason = "selected motor offline, unroutable or Turn Unknown"
-        elif len(targets) != MOTOR_COUNT or any(
-            targets[i] != self._clamp_motor_abs_for_current_session(i, targets[i])
-            for i in range(MOTOR_COUNT) if mask & (1 << i)
-        ):
-            reason = "current ABS outside command range; refusing a clamped hold"
         if not reason:
             if (state.system_state == SYSTEM_STATE_RUN_DIRECT and state.control_enabled
                     and state.servo_target_owner == 1 and state.active_motor_mask == mask):
@@ -401,10 +383,6 @@ class HandController:
 
                     return False, 'Current ABS became stale or unavailable', targets
                 targets = list(state.servo_angles)
-                if any(targets[i] != self._clamp_motor_abs_for_current_session(i, targets[i])
-                       for i in range(MOTOR_COUNT) if mask & (1 << i)):
-
-                    return False, 'Current ABS would require clamping', targets
                 token = (state.direct_target_token + 1) & 0xffffffff or 1
                 submitted_at = time.monotonic()
                 self.start()
@@ -447,6 +425,9 @@ class HandController:
 
 
     def initialize(self, comm_port: str) -> bool:
+        if not self._stop_persistence_worker():
+            self.last_sync_status='Previous anchor write is still completing; connection not changed'
+            return False
         self._reset_local_runtime_state("SYNCING")
         log_session("CTRL", f"initialize requested port={comm_port}")
         try:
@@ -473,6 +454,7 @@ class HandController:
 
         self.running = True
         self._started = False
+        self._start_persistence_worker()
         self._update_thread = threading.Thread(target=self._update_loop, daemon=True)
         self._update_thread.start()
 
@@ -518,6 +500,10 @@ class HandController:
     def _reset_local_runtime_state(self, calib_status: str = "IDLE") -> None:
         self._cancel_host_calibration()
         self._host_calibration_overlay = {}
+        # 重连可能意味着 P4/舵机被断电重启，turn counter 已重新随机化；
+        # 不能把上一个连接里的 “已执行 Release” 当成当前设备的真实状态。
+        self._manual_prepare_done_motor_mask = 0
+        self._manual_prepare_done_device_id = ""
         with self.state_lock:
             self.current_state = HandModel()
             self.current_state.calib_status = str(calib_status)
@@ -615,6 +601,7 @@ class HandController:
 
     def shutdown(self, stop_lower: bool = False):
         self._cancel_host_calibration()
+        self._stop_persistence_worker()
         """
         关闭串口与后台线程。
 
@@ -810,6 +797,59 @@ class HandController:
             [int(value) % 4096 for value in raw],
             True,
         )
+
+    def _start_persistence_worker(self):
+        if self._persistence_thread and self._persistence_thread.is_alive():
+            raise RuntimeError('Previous anchor writer has not stopped')
+        self._persistence_queue = queue.Queue(maxsize=1)
+        jobs=self._persistence_queue
+        self._persistence_stop.clear()
+        def worker():
+            while not self._persistence_stop.is_set():
+                try: state, context = jobs.get(timeout=.1)
+                except queue.Empty: continue
+                try:
+                    started=time.monotonic()
+                    with self._multiturn_io_lock:
+                        if context != self._persistence_context(): continue
+                        if any(stamp and ((state.servo_feedback_p4_time_ms-stamp)&0xFFFFFFFF)>=0x80000000
+                               for stamp in self._servo_abs_zero_generation_feedback_ms): continue
+                        self._persist_multiturn_state_locked(state)
+                        self._persistence_diagnostics=(context,state.host_multiturn_valid_mask,
+                            list(state.host_multiturn_saved_raw_positions),state.host_multiturn_status)
+                    elapsed=time.monotonic()-started
+                    if elapsed>.05:
+                        log_session('MULTITURN',f'background anchor save slow duration_ms={elapsed*1000:.1f}')
+                except Exception as exc:
+                    log_session('MULTITURN',f'background anchor save failed: {exc}')
+                finally: jobs.task_done()
+                self._persistence_stop.wait(.005)  # let explicit coordinate work acquire the shared lock
+        self._persistence_thread=threading.Thread(target=worker,name='mmhand-anchor-writer',daemon=True)
+        self._persistence_thread.start()
+
+    def _persistence_context(self):
+        return (id(self.comm),self._servo_abs_zero_connection_generation,
+                self._coordinate_cancel_generation,tuple(self._servo_abs_zero_generations))
+
+    def _queue_multiturn_persistence(self,state):
+        if self._persistence_stop.is_set(): return
+        item=(state,self._persistence_context())
+        try: self._persistence_queue.put_nowait(item)
+        except queue.Full:
+            try: self._persistence_queue.get_nowait(); self._persistence_queue.task_done()
+            except queue.Empty: pass
+            try: self._persistence_queue.put_nowait(item)
+            except queue.Full: pass
+
+    def _stop_persistence_worker(self):
+        self._persistence_stop.set()
+        thread=self._persistence_thread
+        if thread and thread.is_alive(): thread.join(timeout=5)
+        if thread and thread.is_alive():
+            log_session('MULTITURN','anchor writer still completing IO; final save remains serialized')
+            return False
+        self._persistence_thread=None
+        return True
 
     def _persist_multiturn_state(
         self, state: HandModel, *, force: bool = False
@@ -1436,6 +1476,7 @@ class HandController:
         return False, last_message
 
     def _update_loop(self):
+        restore_ack_events=[]
         while self.running:
             try:
                 if not self.comm:
@@ -1443,15 +1484,27 @@ class HandController:
                 new_model = self.comm.rx_queue.get(timeout=0.1)
                 # 状态使用 latest-value 邮箱；ACK/安全规则走独立事件通道，逐条合并。
                 ack_events = self.comm.drain_ack_events()
+                restore_ack_events.extend(event for event in ack_events if event.get('command')==CMD_RESTORE_MULTITURN)
                 safety_events = self.comm.drain_safety_events()
                 self._service_startup_state_sync(new_model)
-                self._service_servo_turn_zero_result(new_model)
-                self._service_servo_rebase_zero_capture(new_model)
-                self._persist_multiturn_state(new_model)
-                self._service_multiturn_anchor_capture(new_model)
-                self._service_multiturn_restore(new_model, ack_events=ack_events)
+                # Optional coordinate bookkeeping must not wait for periodic
+                # disk IO. Explicit coordinate transactions still use the same
+                # blocking lock and cannot race with an anchor write.
+                if self._multiturn_io_lock.acquire(blocking=False):
+                    try:
+                        self._service_servo_turn_zero_result(new_model)
+                        self._service_servo_rebase_zero_capture(new_model)
+                        self._service_multiturn_anchor_capture(new_model)
+                        self._service_multiturn_restore(new_model, ack_events=restore_ack_events)
+                        restore_ack_events.clear()
+                    finally: self._multiturn_io_lock.release()
                 with self.state_lock:
                     self.current_state.copy_state_from(new_model)
+                    diagnostics=self._persistence_diagnostics
+                    if diagnostics and diagnostics[0]==self._persistence_context():
+                        self.current_state.host_multiturn_valid_mask=diagnostics[1]
+                        self.current_state.host_multiturn_saved_raw_positions=list(diagnostics[2])
+                        self.current_state.host_multiturn_status=diagnostics[3]
                     if ack_events:
                         ack_history = list(self.current_state.proto_ack_history)
                         ack_history.extend(dict(event) for event in ack_events)
@@ -1501,6 +1554,9 @@ class HandController:
                             self._last_update_callback_error = message
                             log_session("CTRL", f"update callback failed: {message}")
                             print(f"Update callback failed: {message}")
+                # Publish received feedback before periodic fsync/backup IO.
+                # A slow disk must not delay this frame's state publication.
+                self._queue_multiturn_persistence(new_model)
             except queue.Empty:
                 continue
             except Exception as exc:
@@ -1564,13 +1620,10 @@ class HandController:
         return bool(self.comm.send_command(("joint_target_run", list(validated))))
 
     def set_motor_positions_absolute(self, motor_abs: List[int]) -> None:
-        """下发27路 logical ABS；每路先按 P4 当前会话动态行程独立钳位。"""
+        """下发27路 logical ABS；每路仅做硬件 ABS 边界钳位。"""
         if len(motor_abs) != MOTOR_COUNT:
             raise ValueError(f"Expected {MOTOR_COUNT} absolute motor positions")
-        raw = [
-            self._clamp_motor_abs_for_current_session(i, value)
-            for i, value in enumerate(motor_abs)
-        ]
+        raw = [self._clamp_motor_abs(value) for value in motor_abs]
         if self.comm and self._control_mode == ControlMode.DIRECT_MOTOR:
             self.comm.send_command(("motor_pos_abs", raw))
 
@@ -1578,7 +1631,7 @@ class HandController:
         idx = int(motor_index)
         if idx < 0 or idx >= MOTOR_COUNT:
             raise ValueError(f"motor index out of range: {idx}")
-        raw = self._clamp_motor_abs_for_current_session(idx, motor_abs)
+        raw = self._clamp_motor_abs(motor_abs)
         if self.comm and self._control_mode == ControlMode.DIRECT_MOTOR:
             self.comm.send_command(("motor_pos_abs_one", idx, raw))
 
@@ -2494,6 +2547,7 @@ class HandController:
             has_abs = (bool(getattr(state, "has_servo_angle_data", False))
                        and 0 <= time.monotonic() - state.received_at('servo_abs_last_rx_ts') <= 0.5
                        and state.servo_route_scan_state != 1)
+            device_id = self.servo_abs_zero_device_id(state)
 
         allowed_states = (
             SYSTEM_STATE_UNCONTROLLABLE,
@@ -2512,11 +2566,27 @@ class HandController:
         selected = [i for i in range(MOTOR_COUNT) if requested_mask & (1 << i)]
         if not selected or not has_routes or not has_abs:
             return empty._replace(message="Release Rope requires online motors with unique routes and ABS")
-        log_session("RELEASE_ROPE", f"frozen mask=0x{requested_mask:08X}")
+
+        if device_id:
+            if (self._manual_prepare_done_device_id
+                    and self._manual_prepare_done_device_id != device_id):
+                self._manual_prepare_done_motor_mask = 0
+            self._manual_prepare_done_device_id = device_id
+        done_mask = (self._manual_prepare_done_motor_mask
+                     if device_id and self._manual_prepare_done_device_id == device_id else 0)
+        pending_mask = requested_mask & ~done_mask
+        if pending_mask == 0:
+            return ManualPrepareResult(
+                True,
+                "selected motors already released on this device; no additional reset or calibration invalidation",
+                0, 0, 0, requested_mask,
+            )
+        selected = [i for i in range(MOTOR_COUNT) if pending_mask & (1 << i)]
+        log_session("RELEASE_ROPE", f"requested=0x{requested_mask:05X} pending=0x{pending_mask:05X}")
 
         ok, reset_message, reset_mask, failed_mask = (
             self.prepare_calibration_turn_zero(
-                requested_mask,
+                pending_mask,
                 invalidation_reason="manual_prepare",
                 cancelled=cancelled, motion_gate=motion_gate,
             )
@@ -2542,10 +2612,10 @@ class HandController:
                 0,
             )
 
-        if not ok or reset_mask != requested_mask:
+        if not ok or reset_mask != pending_mask:
             return ManualPrepareResult(
                 False, reset_message, reset_mask,
-                failed_mask | (requested_mask & ~reset_mask), invalidated_joint_mask, 0,
+                failed_mask | (pending_mask & ~reset_mask), invalidated_joint_mask, 0,
             )
         if cancelled():
             return empty._replace(message='Release Rope cancelled after reset; Auto/LUT invalidated', reset_motor_mask=reset_mask, invalidated_joint_mask=invalidated_joint_mask)
@@ -2554,6 +2624,7 @@ class HandController:
         # 固定猜测圈数，避免把复位前缓存作为 -1500 counts 的基准。
         feedback_deadline = time.monotonic() + MANUAL_PREPARE_FEEDBACK_TIMEOUT_S
         baseline: Optional[List[int]] = None
+        align_reason = "waiting for post-reset ABS/raw alignment"
         while time.monotonic() < feedback_deadline:
             if cancelled():
                 break
@@ -2561,16 +2632,16 @@ class HandController:
                 state = self.current_state
                 unknown = int(
                     getattr(state, "multi_turn_unknown_bitmap", 0) or 0
-                ) & requested_mask
+                ) & pending_mask
                 online = int(getattr(state, "servo_online_bitmap", 0) or 0)
                 fresh = 0 <= time.monotonic() - state.received_at('servo_abs_last_rx_ts') <= 0.5
-                routable = (state.servo_route_controllable_bitmap & requested_mask) == requested_mask
+                routable = (state.servo_route_controllable_bitmap & pending_mask) == pending_mask
                 servo_abs = list(getattr(state, "servo_angles", []) or [])
                 servo_raw = list(getattr(state, "servo_raw_positions", []) or [])
                 raw_online = list(getattr(state, "servo_raw_online", []) or [])
             aligned = (
                 fresh and routable and unknown == 0
-                and (online & requested_mask) == requested_mask
+                and (online & pending_mask) == pending_mask
                 and len(servo_abs) >= MOTOR_COUNT
                 and len(servo_raw) >= MOTOR_COUNT
                 and len(raw_online) >= MOTOR_COUNT
@@ -2583,11 +2654,16 @@ class HandController:
             if aligned:
                 baseline = [int(servo_abs[i]) for i in range(MOTOR_COUNT)]
                 break
+            align_reason = (
+                "post-reset ABS/raw feedback not aligned "
+                f"(fresh={fresh} routable={routable} unknown=0x{unknown:05X} "
+                f"online=0x{(online & pending_mask):05X})"
+            )
             time.sleep(0.02)
         if baseline is None:
             return ManualPrepareResult(
                 False,
-                "turn counters reset, but post-reset ABS/raw feedback did not align",
+                f"turn counters reset, but {align_reason}",
                 reset_mask,
                 0,
                 invalidated_joint_mask,
@@ -2595,13 +2671,12 @@ class HandController:
             )
 
         targets = [
-            self._clamp_motor_abs_for_current_session(
-                motor_idx,
-                motor_abs_after_tendon_action(baseline[motor_idx], motor_idx, -MANUAL_PREPARE_RELEASE_COUNTS),
+            self._clamp_motor_abs(
+                motor_abs_after_tendon_action(baseline[motor_idx], motor_idx, -MANUAL_PREPARE_RELEASE_COUNTS)
             ) if motor_idx in selected else baseline[motor_idx]
             for motor_idx in range(MOTOR_COUNT)
         ]
-        if not self.set_active_scope(requested_mask, 0, False):
+        if not self.set_active_scope(pending_mask, 0, False):
             return ManualPrepareResult(
                 False,
                 "turn counters reset, but selected-motor direct scope was rejected",
@@ -2628,48 +2703,134 @@ class HandController:
                 0,
             )
 
+        # P4 在 RESET/切直控后需要一拍才能给出 DIRECT_TARGET 结果。这里只做
+        # “就绪”等待，不把瞬时缺失当作失败；真正的到位判定交给运动循环。
+        ready_deadline = time.monotonic() + MANUAL_PREPARE_READY_TIMEOUT_S
+        ready_reason = "waiting for P4 direct-target result"
+        ready_rejected_mask = 0
+        while time.monotonic() < ready_deadline and not cancelled():
+            with self.state_lock:
+                state = self.current_state
+                d_status = int(getattr(state, "direct_target_status", 0) or 0)
+                d_applied = int(getattr(state, "direct_target_applied_mask", 0) or 0)
+                d_rejected = int(getattr(state, "direct_target_rejected_mask", 0) or 0)
+                has_direct_result = bool(getattr(state, "has_direct_target_result", False))
+                run_state = int(getattr(state, "system_state", -1) or 0)
+                fresh = 0 <= time.monotonic() - state.received_at('servo_abs_last_rx_ts') <= 0.5
+            if d_rejected & pending_mask:
+                ready_rejected_mask = d_rejected & pending_mask
+                break
+            if has_direct_result:
+                if d_status == 2 and (d_applied & pending_mask) == pending_mask:
+                    ready_reason = "direct target applied"
+                    break
+                if d_status == 3:
+                    ready_rejected_mask = d_rejected or pending_mask
+                    break
+            elif run_state == SYSTEM_STATE_RUN_DIRECT and fresh:
+                ready_reason = "P4 entered RUN_DIRECT"
+                break
+            time.sleep(0.02)
+        if ready_rejected_mask:
+            self.reset()
+            return ManualPrepareResult(
+                False,
+                f"turn counters reset, but P4 rejected the direct release target on 0x{ready_rejected_mask:05X}",
+                reset_mask,
+                0,
+                invalidated_joint_mask,
+                0,
+            )
+
         reached_mask = 0
         motion_deadline = time.monotonic() + MANUAL_PREPARE_MOTION_TIMEOUT_S
+        invalid_since: Optional[float] = None
+        motion_reason = ready_reason
+        cancelled_during_motion = False
         while time.monotonic() < motion_deadline:
             if cancelled():
+                cancelled_during_motion = True
                 break
             with self.state_lock:
                 state = self.current_state
                 online = int(getattr(state, "servo_online_bitmap", 0) or 0)
                 unknown = int(
                     getattr(state, "multi_turn_unknown_bitmap", 0) or 0
-                ) & requested_mask
+                ) & pending_mask
                 fresh = 0 <= time.monotonic() - state.received_at('servo_abs_last_rx_ts') <= 0.5
-                routable = (state.servo_route_controllable_bitmap & requested_mask) == requested_mask
+                routable = (state.servo_route_controllable_bitmap & pending_mask) == pending_mask
                 servo_abs = list(getattr(state, "servo_angles", []) or [])
-            if not fresh or not routable or unknown or (online & requested_mask) != requested_mask:
-                break
-            if len(servo_abs) >= MOTOR_COUNT:
-                reached_mask = 0
-                for motor_idx in selected:
-                    if abs(int(servo_abs[motor_idx]) - targets[motor_idx]) <= (
-                        MANUAL_PREPARE_TARGET_TOLERANCE_COUNTS
-                    ):
-                        reached_mask |= 1 << motor_idx
-                if reached_mask == requested_mask:
+            transient = ""
+            if not fresh:
+                transient = "servo ABS feedback stale"
+            elif not routable:
+                transient = "servo route not controllable"
+            elif unknown:
+                transient = f"multi-turn unknown 0x{unknown:05X}"
+            elif (online & pending_mask) != pending_mask:
+                transient = f"servo offline 0x{online & ~pending_mask & ((1 << MOTOR_COUNT) - 1):05X}"
+            if transient:
+                now = time.monotonic()
+                if invalid_since is None:
+                    invalid_since = now
+                    motion_reason = transient
+                elif now - invalid_since > MANUAL_PREPARE_TRANSIENT_GRACE_S:
+                    motion_reason = f"{transient} for >{MANUAL_PREPARE_TRANSIENT_GRACE_S:.1f}s"
                     break
+            else:
+                invalid_since = None
+                if len(servo_abs) >= MOTOR_COUNT:
+                    reached_now = 0
+                    for motor_idx in selected:
+                        if abs(int(servo_abs[motor_idx]) - targets[motor_idx]) <= (
+                            MANUAL_PREPARE_TARGET_TOLERANCE_COUNTS
+                        ):
+                            reached_now |= 1 << motor_idx
+                    reached_mask = reached_now
+                    if reached_mask == pending_mask:
+                        motion_reason = "reached all selected motors"
+                        break
             time.sleep(0.05)
 
         # Manual Prepare 是一次维护动作；完成或超时后均释放 owner，禁止在
         # Device Check 页面遗留 RUN_DIRECT。舵机继续保持最后收到的位置目标。
         self.reset()
-        if reached_mask != requested_mask:
+        if cancelled_during_motion:
             return ManualPrepareResult(
                 False,
                 (
-                    "turn counters reset and old Auto/LUT invalidated, but release "
-                    f"did not settle on all motors; reached=0x{reached_mask:08X}"
+                    "Release Rope cancelled during release motion; turn counters reset and old "
+                    "Auto/LUT invalidated"
                 ),
                 reset_mask,
                 0,
                 invalidated_joint_mask,
                 reached_mask,
             )
+        if reached_mask != pending_mask:
+            try:
+                with self.state_lock:
+                    actual = list(getattr(self.current_state, "servo_angles", []) or [])
+                detail = " ".join(
+                    f"M{motor_idx:02d}:{actual[motor_idx] if motor_idx < len(actual) else '?'}"
+                    f"->{targets[motor_idx]}"
+                    for motor_idx in selected[:8]
+                )
+            except Exception:
+                detail = "diagnostics unavailable"
+            return ManualPrepareResult(
+                False,
+                (
+                    "turn counters reset and old Auto/LUT invalidated, but release "
+                    f"did not settle; reached=0x{reached_mask:05X}/0x{pending_mask:05X}; "
+                    f"reason={motion_reason}; {detail}"
+                ),
+                reset_mask,
+                0,
+                invalidated_joint_mask,
+                reached_mask,
+            )
+        self._manual_prepare_done_motor_mask |= reset_mask
         return ManualPrepareResult(
             True,
             (
@@ -2933,6 +3094,10 @@ class HandController:
         if loaded == 0:
             return False, "no valid joint calibration result in snapshot"
         log_session("CALIB_LOAD", manual_message)
+        # 成功加载标定后，Manual Prepare 的历史释放记录必须失效：下一次
+        # Release Rope 需要重新 Reset Zero 才能建立新的 turn0 基准。
+        self._manual_prepare_done_motor_mask = 0
+        self._manual_prepare_done_device_id = ""
         return True, f"loaded {loaded} joints"
 
     def start(self):

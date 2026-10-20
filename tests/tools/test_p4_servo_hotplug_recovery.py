@@ -308,18 +308,12 @@ static void safetyScenario(const std::string& name) {
     batch.timestamp = 1000;
     batch.commands[0].motorChannel = 0;
     batch.commands[0].position = 8392;
-    int32_t mins[SERVO_TOTAL_NUM] = {}, maxs[SERVO_TOTAL_NUM] = {};
-    mins[0] = -30719;
-    maxs[0] = 30719;
     p4::actuator::ServoSafetyContext context{};
     context.activeOwner = SERVO_TARGET_OWNER_CONTROL;
     context.systemState = SYSTEM_STATE_RUN_DIRECT;
     context.nowMs = 1000;
     context.maxTargetAgeMs = 500;
     context.onlineMotorMask = context.routedMotorMask = context.controllableRouteMask = 1;
-    context.logicalRangeValidMask = 1;
-    context.logicalMin = mins;
-    context.logicalMax = maxs;
     context.requireOnline = context.requireMultiTurnKnown = true;
     ServoRejectReason expected = ServoRejectReason::None;
     if (name == "identity") {
@@ -332,7 +326,6 @@ static void safetyScenario(const std::string& name) {
         return;
     }
     if (name == "hard_boundary") {
-        context.logicalRangeValidMask = 0;
         for (int value : {INT_MIN, -30720, 30720, INT_MAX}) {
             batch.commands[0].position = value;
             const auto result = p4::actuator::evaluateCommand(batch, 0, context);
@@ -348,9 +341,6 @@ static void safetyScenario(const std::string& name) {
     } else if (name == "overflow") {
         context.turnOverflowMask = 1;
         expected = ServoRejectReason::TurnOverflow;
-    } else if (name == "logical_boundary") {
-        maxs[0] = 8000;
-        expected = ServoRejectReason::LogicalRange;
     } else require(false, "unknown safety scenario");
     const auto result = p4::actuator::evaluateCommand(batch, 0, context);
     require(!result.allowed && result.reason == expected &&
@@ -572,7 +562,7 @@ def hotplug_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dic
 
 SCENARIOS = (
     "safety_checked_conversion", "safety_identity", "safety_hard_boundary",
-    "safety_unknown_before_range", "safety_overflow", "safety_logical_boundary",
+    "safety_unknown_before_range", "safety_overflow",
     "hotplug_nearest_turn", "hotplug_no_anchor", "hotplug_range_rejected",
     "hotplug_success", "hotplug_negative_success", "hotplug_partial_two_motors",
     "hotplug_reconnect_during_write", "hotplug_before_write_retry", "hotplug_ack_lost_retry",

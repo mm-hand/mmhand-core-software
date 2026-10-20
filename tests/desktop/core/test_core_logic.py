@@ -288,6 +288,8 @@ class TestSetMotorPositionsAbsolute:
     ):
         controller.comm = mock_comm
         controller._control_mode = ControlMode.DIRECT_MOTOR
+        # Session-range enforcement was removed; targets pass through with only
+        # the hardware ABS clamp applied, even when stale range data exists.
         controller.current_state.servo_logical_range_valid_bitmap = (
             (1 << 0) | (1 << 1)
         )
@@ -302,8 +304,8 @@ class TestSetMotorPositionsAbsolute:
         controller.set_motor_positions_absolute(targets)
 
         sent = mock_comm.send_command.call_args[0][0][1]
-        assert sent[0] == 200
-        assert sent[1] == 1000
+        assert sent[0] == 500
+        assert sent[1] == 500
         assert sent[2] == 0
 
     # --- Paused State Tests ---

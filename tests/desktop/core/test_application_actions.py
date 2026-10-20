@@ -3,12 +3,79 @@
 from _clock_helpers import stamp
 import threading
 import time
+import queue
 from unittest.mock import Mock
 import pytest
 from desktop.core.application_actions import validate_manual_pair
 from desktop.core.hand_backend import HandBackend
 from desktop.core.protocol import SYSTEM_STATE_READY, SYSTEM_STATE_RUN_DIRECT, HOST_PROTOCOL_VERSION, STATE_SYNC_ALL
 from desktop.core.core_logic import HandController, ServoRebaseZeroResult
+
+
+@pytest.mark.parametrize('kind',['joint','motor'])
+@pytest.mark.parametrize('active',[False,True])
+def test_selection_uses_actual_motion_not_ready_started_flag(hand,monkeypatch,kind,active):
+    hand._controller._started=True
+    state=hand._controller.current_state
+    state.control_enabled=active
+    state.servo_target_owner=1 if active else 0
+    stopped=Mock()
+    monkeypatch.setattr(hand,'stop_motion',stopped)
+    if kind=='joint': hand.select_joints([13])
+    else: hand.select_motors([17])
+    assert stopped.call_count==int(active)
+
+
+def test_received_feedback_is_published_before_periodic_disk_save(monkeypatch):
+    from desktop.core.data_models import HandModel
+    c=HandController(); c.running=True
+    q=queue.Queue(); sample=HandModel(); sample.p4_time_ms=12345
+    q.put(sample)
+    c.comm=Mock(rx_queue=q,drain_ack_events=lambda:[],drain_safety_events=lambda:[])
+    for name in ('_service_startup_state_sync','_service_servo_turn_zero_result',
+                 '_service_servo_rebase_zero_capture','_service_multiturn_anchor_capture','_service_multiturn_restore'):
+        monkeypatch.setattr(c,name,Mock())
+    observed=[]
+    def save(_state):
+        observed.append(c.current_state.p4_time_ms)
+        c.running=False
+    monkeypatch.setattr(c,'_queue_multiturn_persistence',save)
+    c._update_loop()
+    assert observed==[12345]
+
+
+def test_slow_periodic_anchor_writer_does_not_block_feedback_publication(monkeypatch):
+    from desktop.core.data_models import HandModel
+    c=HandController(); entered=threading.Event(); finish=threading.Event()
+    def slow(_state):
+        entered.set(); assert finish.wait(2)
+    monkeypatch.setattr(c,'_persist_multiturn_state_locked',slow)
+    c._start_persistence_worker()
+    try:
+        c._queue_multiturn_persistence(HandModel()); assert entered.wait(1)
+        q=queue.Queue(); sample=HandModel(); sample.p4_time_ms=54321; q.put(sample)
+        c.comm=Mock(rx_queue=q,drain_ack_events=lambda:[],drain_safety_events=lambda:[])
+        c.running=True
+        monkeypatch.setattr(c,'_service_startup_state_sync',Mock())
+        monkeypatch.setattr(c,'_queue_multiturn_persistence',lambda _s:setattr(c,'running',False))
+        before=time.monotonic(); c._update_loop()
+        assert time.monotonic()-before<.15
+        assert c.current_state.p4_time_ms==54321
+    finally:
+        finish.set(); c._stop_persistence_worker()
+
+
+def test_queued_anchor_older_than_verified_zero_feedback_is_discarded(monkeypatch):
+    from desktop.core.data_models import HandModel
+    c=HandController(); c._servo_abs_zero_generation_feedback_ms[0]=200
+    saved=Mock(); monkeypatch.setattr(c,'_persist_multiturn_state_locked',saved)
+    c._start_persistence_worker()
+    try:
+        sample=HandModel(); sample.servo_feedback_p4_time_ms=150
+        c._queue_multiturn_persistence(sample)
+        c._persistence_queue.join()
+        assert not saved.called
+    finally: c._stop_persistence_worker()
 
 
 @pytest.fixture
@@ -116,9 +183,6 @@ def test_direct_targets_reject_real_overload_in_both_directions(hand, monkeypatc
 @pytest.mark.parametrize('fault,expected', [
     ('unknown', 'M11 multi-turn ABS is unknown'),
     ('offline', 'M11 is offline'),
-    ('range_missing', 'M11 logical ABS range is unavailable'),
-    ('outside', 'M11 target 3000 is outside logical ABS limits [-30719, 2999]'),
-    ('calibrated_limit', 'M11 target exceeds calibrated limits'),
 ])
 def test_direct_targets_report_the_specific_position_gate(hand, monkeypatch, fault, expected):
     comm = direct_target_device(hand, monkeypatch)
@@ -127,13 +191,6 @@ def test_direct_targets_report_the_specific_position_gate(hand, monkeypatch, fau
         state.multi_turn_unknown_bitmap = 1 << 11
     elif fault == 'offline':
         state.servo_online_bitmap &= ~(1 << 11)
-    elif fault == 'range_missing':
-        state.servo_logical_range_valid_bitmap &= ~(1 << 11)
-    elif fault == 'outside':
-        state.servo_logical_range_max[11] = 2999
-    else:
-        state.motor_abs_limit_valid_bitmap = 1 << 11
-        state.motor_abs_limit_min[11], state.motor_abs_limit_max[11] = 0, 2999
     result = wait_operation(hand, hand.request_motors({11: 3000}))
     assert result['status'] == 'FAILED' and expected in result['message']
     comm.send_command.assert_not_called()

@@ -1,5 +1,7 @@
 """TASK_DIAG 窗口归并回归：UI 不得混合不同秒的任务统计行。"""
 
+import desktop.core.communication.state_reducer as state_reducer_module
+
 from desktop.core.communication.ack_tracker import AckTracker
 from desktop.core.communication.packet_router import P4PacketRouter
 from desktop.core.communication.state_reducer import StateReducer
@@ -34,7 +36,9 @@ def _packets(sequence: int):
     return [(1, bytes((task_id, sequence))) for task_id in range(7)]
 
 
-def test_task_runtime_is_published_only_after_full_window() -> None:
+def test_task_runtime_is_published_only_after_full_window(monkeypatch) -> None:
+    # 连续批次都要拿到快照：关闭发布节流（默认 20 ms 只约束高频遥测）。
+    monkeypatch.setattr(state_reducer_module, "STATE_SNAPSHOT_MIN_INTERVAL_S", 0.0)
     reducer = _reducer()
     owner = _Owner()
     partial = reducer.process_packets(owner, _packets(1)[:6])
@@ -49,7 +53,8 @@ def test_task_runtime_is_published_only_after_full_window() -> None:
     assert {diag["window_sequence"] for diag in model.task_runtime.values()} == {1}
 
 
-def test_new_window_discards_partial_old_window() -> None:
+def test_new_window_discards_partial_old_window(monkeypatch) -> None:
+    monkeypatch.setattr(state_reducer_module, "STATE_SNAPSHOT_MIN_INTERVAL_S", 0.0)
     reducer = _reducer()
     owner = _Owner()
     assert reducer.process_packets(owner, _packets(1)[:6]) is not None

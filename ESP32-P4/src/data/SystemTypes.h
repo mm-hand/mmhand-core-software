@@ -61,7 +61,7 @@ inline constexpr uint8_t FEEDBACK_REJECT_MANUAL_REFERENCE = 1;
 inline constexpr uint8_t FEEDBACK_REJECT_STATE = 2;
 inline constexpr uint8_t FEEDBACK_REJECT_WORKSPACE = 3;
 inline constexpr uint8_t FEEDBACK_REJECT_MULTITURN = 4;
-inline constexpr uint8_t FEEDBACK_REJECT_ABS_LIMIT = 5;
+// 5 是已删除的 ABS 限位拒绝，永久保留编号，不再产生；边界收敛为 LUT±扩放量。
 inline constexpr uint8_t FEEDBACK_REJECT_MODE_SWITCH = 6;
 inline constexpr uint8_t FEEDBACK_REJECT_EVENT_QUEUE = 7;
 

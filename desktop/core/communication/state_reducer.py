@@ -1,10 +1,10 @@
 """state_reducer.py - P4 状态快照的单写入归并器。
 
-职责：复制上一帧 HandModel、按接收顺序应用路由包，并发布新的完整状态快照。
-线程：仅由 P4 RX 线程写入；其他线程只能通过兼容门面读取最后快照。
+职责：维护一个常驻工作模型，按接收顺序应用路由包，并按节流策略发布新的只读快照。
+线程：仅由 P4 RX 线程写入；其他线程只能通过兼容门面读取最后**已发布**快照。
 输入：RoutedPacket 序列和一个无持久状态的单包归并函数。
-输出：发生有效状态变化时返回新 HandModel，否则返回 ``None``。
-状态所有权：本类唯一持有最新 HandModel；业务处理函数不得另存可变模型引用。
+输出：发生可见状态变化时返回新的只读 HandModel 快照，否则返回 ``None``。
+状态所有权：本类唯一持有工作模型与最新已发布快照；业务处理函数不得另存可变模型引用。
 禁止依赖：禁止打开串口、编码命令、访问 Qt/UI 或直接操作 RX/TX 队列。
 """
 
@@ -19,6 +19,7 @@ from ..data_models import (
     TACTILE_DATA_LEVEL_FULL,
     TACTILE_DATA_LEVEL_SUMMARY,
     TACTILE_SOURCE_P4_CAN_RELAY,
+    clone_hand_model,
 )
 from ..protocol import (
     CMD_PROTOCOL_HELLO,
@@ -61,6 +62,31 @@ from .packet_router import P4PacketRouter
 ModelFinalizer = Callable[[HandModel], None]
 
 
+# 高频遥测批次不逐批物化快照：工作模型常驻，只有距上次发布达到该间隔才复制一份
+# 只读快照，避免 _update_loop 每次消费都做一次全量拷贝。测试可 monkeypatch 为 0
+# 关闭节流（发布间隔=0 表示每批都发布），不会掩盖真实节流行为。
+STATE_SNAPSHOT_MIN_INTERVAL_S = 0.02
+
+# 控制/标定/安全状态不能等待节流窗口：这些包到达时立即发布快照，保证 ACK、
+# 系统状态、事务结果与安全事件的可见性不取决于高频流量的发布相位。
+STATE_SNAPSHOT_CRITICAL_PACKET_KINDS = frozenset({
+    "protocol_ack",             # ACK（含 HELLO 握手、STOP/RESET、标定命令应答）
+    "system_status",            # 系统状态/连接性/标定状态权威来源
+    "direct_target_result",     # 直接目标执行最终结果
+    "joint_calibration_snapshot",   # 关节标定快照
+    "calibration_diagnostic",   # 标定诊断进度
+    "manual_reference",         # Manual 参考表回读
+    "servo_rebase_zero_result",     # 当前位置设零最终结果
+    "multiturn_restore_result",     # 多圈恢复最终结果
+    "safety_event",             # 安全规则事件
+    "fault_status",             # 过载故障位图
+    "servo_route_status",       # 舵机路由/扫描配置
+    "product_fingerprint",      # 产品指纹（启动握手依赖）
+    "motor_abs_limit",          # ABS 可达范围
+    "servo_logical_range",      # 舵机逻辑行程
+})
+
+
 class StateReducer:
     """把增量协议包归并为完整设备快照。"""
 
@@ -70,7 +96,11 @@ class StateReducer:
         ack_tracker: Optional[AckTracker] = None,
         safety_event_channel: Optional[EventChannel[dict]] = None,
     ) -> None:
+        # 工作模型只在 RX 线程内原地更新；_last_model 始终指向最近一次**已发布**
+        # 的只读快照，供其他线程/测试安全读取，绝不让外部看到可变工作模型。
+        self._working: Optional[HandModel] = None
         self._last_model: Optional[HandModel] = None
+        self._last_publish_monotonic = 0.0
         self._packet_router = packet_router
         self._ack_tracker = ack_tracker
         self._safety_event_channel = safety_event_channel
@@ -89,17 +119,21 @@ class StateReducer:
 
     @property
     def last_model(self) -> Optional[HandModel]:
-        """返回最近快照引用；兼容层对外发布前仍应遵守原有只读约定。"""
+        """返回最近一次已发布快照引用；调用方按只读契约使用。"""
         return self._last_model
 
     @last_model.setter
     def last_model(self, model: Optional[HandModel]) -> None:
-        # 断线模型恢复与组件级测试通过此入口替换快照；协议包仍必须经 begin/commit 归并。
+        # 断线模型恢复与组件级测试通过此入口替换快照；下一次 begin 会以该快照
+        # 为基线重建工作模型，协议包仍必须经 begin/commit 归并。
         self._last_model = model
+        self._working = None
 
     def reset(self) -> None:
         """连接新设备时清空旧设备状态，避免跨设备沿用在线位图或标定结果。"""
+        self._working = None
         self._last_model = None
+        self._last_publish_monotonic = 0.0
         self.feedback_history.reset()
         self._feedback_status_clock_ms = None
         self._task_runtime_window_sequence = None
@@ -108,34 +142,49 @@ class StateReducer:
         self._control_parts.clear()
 
     def begin(self) -> tuple[HandModel, float]:
-        """创建本批数据的工作副本，并继承不能被单包覆盖的通信有效位。"""
-        model = HandModel()
-        if self._last_model is not None:
-            model.copy_state_from(self._last_model)
-            model.calib_status = self._last_model.calib_status
-            model.has_sensor_data = bool(self._last_model.has_sensor_data)
-            model.has_encoder_raw_data = bool(
-                getattr(self._last_model, "has_encoder_raw_data", False)
-            )
-            model.encoder_raw_last_rx_ts = float(
-                getattr(self._last_model, "encoder_raw_last_rx_ts", 0.0) or 0.0
-            )
-            model.has_servo_angle_data = bool(self._last_model.has_servo_angle_data)
-            model.has_servo_raw_data = bool(self._last_model.has_servo_raw_data)
+        """返回本批数据归并用的常驻工作模型，不做整模型拷贝。"""
+        working = self._working
+        if working is None:
+            working = HandModel()
+            previous = self._last_model
+            if previous is not None:
+                # 外部替换过快照（断线模型/测试基线）时只在这里做一次性继承；
+                # 正常在线路径的工作模型常驻，begin 不再复制。
+                working.copy_state_from(previous)
+            self._working = working
         host_received_at = time.time()
-        model.host_rx_time = host_received_at
-        return model, host_received_at
+        working.host_rx_time = host_received_at
+        return working, host_received_at
 
     def commit(
         self,
         model: HandModel,
         emitted: bool,
         finalize_model: ModelFinalizer,
+        *,
+        publish_now: bool = False,
     ) -> Optional[HandModel]:
-        """完成在线可见性等统一收尾，并原子替换最新模型引用。"""
+        """完成在线可见性等统一收尾，并按节流策略发布只读快照。
+
+        ``publish_now`` 表示本批含控制/标定/安全关键包，必须立即发布。
+        返回 ``None`` 表示本批状态已被常驻工作模型吸收、无需向状态邮箱入队。
+        """
         finalize_model(model)
-        self._last_model = model
-        return model if emitted else None
+        if not emitted:
+            return None
+        now = time.monotonic()
+        interval = STATE_SNAPSHOT_MIN_INTERVAL_S
+        if (
+            not publish_now
+            and interval > 0.0
+            and (now - self._last_publish_monotonic) < interval
+        ):
+            # 工作模型继续吸收本批更新；下一批到期后发布的快照自然包含它们。
+            return None
+        snapshot = clone_hand_model(model)
+        self._last_publish_monotonic = now
+        self._last_model = snapshot
+        return snapshot
 
     def process_packets(self, owner, packets: list[tuple]) -> Optional[HandModel]:
         """归并一批 P4 包。
@@ -149,11 +198,14 @@ class StateReducer:
             owner._heartbeat_enabled = True
         model, _host_received_at = self.begin()
         emitted = False
+        publish_now = False
 
         for routed_packet in self._packet_router.route_many(packets):
             packet_kind = routed_packet.kind
             payload = routed_packet.payload
             packet_p4_time_ms = routed_packet.p4_time_ms
+            if packet_kind in STATE_SNAPSHOT_CRITICAL_PACKET_KINDS:
+                publish_now = True
             if packet_p4_time_ms is not None:
                 model.p4_time_ms = int(packet_p4_time_ms)
                 model.has_p4_time = True
@@ -213,6 +265,7 @@ class StateReducer:
             model,
             emitted,
             owner._apply_connectivity_visibility,
+            publish_now=publish_now,
         )
 
     def _apply_sensor(self, owner, model, payload, packet_p4_time_ms, _host_received_at):

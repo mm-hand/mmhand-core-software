@@ -749,13 +749,6 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                                            FEEDBACK_REJECT_MULTITURN);
                 break;
             }
-            if (!activeMotorsAbsLimitsCalibrated(sharedData)) {
-                FW_LOG_INFO_PRINTLN("[STATE] reject RUN_FEEDBACK: active joints are not calibrated");
-                setFeedbackAdmissionResult(sharedData, event.token,
-                                           FEEDBACK_ADMISSION_REJECTED,
-                                           FEEDBACK_REJECT_ABS_LIMIT);
-                break;
-            }
             if (!setCommandModeJoint(sharedData)) {
                 FW_LOG_INFO_PRINTLN("[STATE] reject RUN_FEEDBACK: command mode mutex busy");
                 setFeedbackAdmissionResult(sharedData, event.token,

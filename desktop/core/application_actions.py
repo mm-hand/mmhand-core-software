@@ -42,6 +42,10 @@ from .protocol import (
     SERVO_TARGET_OWNER_CONTROL,
 )
 
+# 串口枚举在 Windows 上每次约 20-100ms；0.2s 轮询会持续占用 ~12% 单核。
+# 设备列表 1s 刷新一次即可满足人工连接操作，连接失败时随后快速重试。
+DEVICE_DISCOVERY_INTERVAL_S = 1.0
+
 
 @dataclass(frozen=True)
 class OperationResult:
@@ -72,6 +76,10 @@ class ApplicationActions(IdResetActions):
         self._init_id_reset()
         self._control_parameters = ControlParameterStore()
         self._control_parameter_sync = 'INVALID' if self._control_parameters.error else 'PENDING'
+        # P4 在 RESET/状态过渡时会短暂拒绝参数 SET（ACK status=8）。保留次数与
+        # 下次重试时间，让后台轮询按 0.5/1/2s 退避重试，而不是一次失败就卡死。
+        self._control_parameter_retry_count = 0
+        self._control_parameter_retry_after = 0.0
         self._application_lock = threading.RLock()
         self._application_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='mmhand-operation')
         self._application_epoch = 0
@@ -130,14 +138,28 @@ class ApplicationActions(IdResetActions):
         try:
             self._control_parameters.save(proposed)
             self._control_parameter_sync = 'PENDING'
+            self._control_parameter_retry_count = 0
+            self._control_parameter_retry_after = 0.0
             return OperationResult(True, None, 'Parameters saved; P4 synchronization pending until idle')
         except (OSError, ValueError, TypeError) as exc:
             return OperationResult(False, None, str(exc))
+
+    def request_apply_control_parameters(self, proposed):
+        """保存并立即尝试同步；P4 非 idle 时由设备轮询稍后应用。"""
+        saved = self.request_save_control_parameters(proposed)
+        if not saved.accepted:
+            return saved
+        self._schedule_control_parameter_sync()
+        if self._control_parameter_sync.startswith('APPLIED'):
+            return OperationResult(True, None, self._control_parameter_sync)
+        return OperationResult(True, None, 'Parameters saved; P4 synchronization pending until idle')
 
     def request_restore_control_defaults(self):
         try:
             self._control_parameters.restore_defaults()
             self._control_parameter_sync = 'PENDING'
+            self._control_parameter_retry_count = 0
+            self._control_parameter_retry_after = 0.0
             return OperationResult(True, None, 'Default parameters restored; P4 synchronization pending until idle')
         except (OSError, ValueError, TypeError) as exc:
             return OperationResult(False, None, str(exc))
@@ -157,15 +179,32 @@ class ApplicationActions(IdResetActions):
                 self._control_parameter_sync = 'PENDING'
                 return False, 'Parameters changed during synchronization; apply the new revision first'
             self._control_parameter_sync = f"APPLIED revision {data['revision']} / {data['crc32']:08X}"
+            self._control_parameter_retry_count = 0
+            self._control_parameter_retry_after = 0.0
             self._update_input_filter()
             return True, 'P4 control parameters applied and read back'
+        except InterruptedError as exc:
+            self._control_parameter_sync = 'PENDING'
+            self._control_parameter_retry_after = 0.0
+            return False, str(exc)
         except Exception as exc:
+            self._control_parameter_retry_count += 1
+            if self._control_parameter_retry_count < 3:
+                delay = 0.5 * (2 ** (self._control_parameter_retry_count - 1))
+                self._control_parameter_retry_after = time.monotonic() + delay
+                self._control_parameter_sync = (
+                    f'PENDING retry {self._control_parameter_retry_count}/3 after {delay:.1f}s: {exc}'
+                )
+                return False, str(exc)
+            self._control_parameter_retry_after = 0.0
             self._control_parameter_sync = f'FAILED: {exc}'
             return False, str(exc)
 
     def _schedule_control_parameter_sync(self):
-        if (self._control_parameter_sync != 'PENDING' or not self.is_comm_connected()
+        if (not self._control_parameter_sync.startswith('PENDING') or not self.is_comm_connected()
                 or not getattr(self.comm, '_protocol_compatible', False)): return
+        if time.monotonic() < self._control_parameter_retry_after:
+            return
         state = self.get_state_snapshot()
         if (self._application_busy or not self._fresh_application_state() or
                 state.control_enabled or state.servo_target_owner or
@@ -186,17 +225,24 @@ class ApplicationActions(IdResetActions):
                 discover = list_ports
 
             def poll():
+                next_device_scan = 0.0
                 while not self._application_stop.is_set():
-                    try:
-                        choices = tuple(DeviceChoice(str(port), str(description))
-                                        for port, description in discover())
-                        with self._application_lock:
-                            self._devices = choices
-                            self._discovery_error = ''
-                    except Exception as exc:
-                        with self._application_lock:
-                            self._devices = ()
-                            self._discovery_error = f'Device discovery failed: {exc}'
+                    now = time.monotonic()
+                    if now >= next_device_scan:
+                        next_device_scan = now + DEVICE_DISCOVERY_INTERVAL_S
+                        try:
+                            choices = tuple(DeviceChoice(str(port), str(description))
+                                            for port, description in discover())
+                            with self._application_lock:
+                                self._devices = choices
+                                self._discovery_error = ''
+                        except Exception as exc:
+                            with self._application_lock:
+                                self._devices = ()
+                                self._discovery_error = f'Device discovery failed: {exc}'
+                            # Enumeration failure hides UI state; retry soon once,
+                            # then fall back to the normal 2 s cadence.
+                            next_device_scan = time.monotonic() + 0.5
                     comm = self.tactile_comm
                     if comm is not None and self.tactile_port and not self.is_tactile_serial_connected() and time.time() >= self._next_tactile_reconnect_ts:
                         self._next_tactile_reconnect_ts = time.time() + 1.0
@@ -475,7 +521,8 @@ class ApplicationActions(IdResetActions):
         with self._application_lock:
             changed = chosen != self._selected_joints
             busy = bool(self._application_busy or self._calibration_workflow.is_host_calibration_active())
-        if changed and (busy or self.is_started() or self.ros2_output_armed()):
+        state = self.get_state_snapshot()
+        if changed and (busy or state.control_enabled or state.servo_target_owner or self.ros2_output_armed()):
             self.stop_motion(source='joint selection changed during an active operation')
         with self._application_lock:
             self._selected_joints = chosen
@@ -952,7 +999,8 @@ class ApplicationActions(IdResetActions):
         chosen = tuple(sorted(set(int(m) for m in motors)))
         if any(m not in range(MOTOR_COUNT) for m in chosen):
             return OperationResult(False, None, 'Motor selection is out of range')
-        if chosen != self._selected_motors and (self.is_started() or self._application_busy):
+        state = self.get_state_snapshot()
+        if chosen != self._selected_motors and (state.control_enabled or state.servo_target_owner or self._application_busy):
             self.stop_motion(source='motor selection changed during an active operation')
         self._selected_motors = chosen
         return OperationResult(True, None, 'Motor scope updated')
@@ -1118,7 +1166,10 @@ class ApplicationActions(IdResetActions):
             state = self.get_state_snapshot()
             if state.control_enabled or state.servo_target_owner or epoch != self._application_epoch:
                 return False, 'Stop motion before releasing selected tendons'
-            result = self.manual_prepare_all_motors(motor_mask=motor_mask)
+            result = self.manual_prepare_all_motors(
+                motor_mask=motor_mask,
+                cancelled=lambda: epoch != self._application_epoch,
+            )
             with self._application_lock:
                 for j in range(ENCODER_COUNT):
                     if result.invalidated_joint_mask & (1 << j):
@@ -1192,22 +1243,15 @@ class ApplicationActions(IdResetActions):
             return False, 'Selected motor route is unavailable or conflicting'
         for m, target in targets.items():
             bit = 1 << m
-            if not state.servo_logical_range_valid_bitmap & bit:
-                return False, f'M{m:02d} logical ABS range is unavailable. Request state sync or reconnect.'
             if not state.servo_online_bitmap & bit:
                 return False, f'M{m:02d} is offline. Check Diagnostics.'
             if state.multi_turn_unknown_bitmap & bit:
                 return False, f'M{m:02d} multi-turn ABS is unknown. Use the controlled recovery or calibration procedure.'
-            lo, hi = state.servo_logical_range_min[m], state.servo_logical_range_max[m]
-            if not lo <= target <= hi:
-                return False, f'M{m:02d} target {target} is outside logical ABS limits [{lo}, {hi}].'
             # P4 telemetry already encodes load as a signed value. Masking a
             # negative value would turn a light reverse load into an overload.
             load = abs(int(state.servo_load[m]))
             if load >= 800:
                 return False, f'M{m:02d} load magnitude {load} is at or above the direct-control limit 800. Check Diagnostics.'
-            if state.motor_abs_limit_valid_bitmap & (1 << m) and not state.motor_abs_limit_min[m] <= target <= state.motor_abs_limit_max[m]:
-                return False, f'M{m:02d} target exceeds calibrated limits'
         from .motor_mapping import MOTOR_TO_JOINT_INDEX
         joints = sum(1 << j for j in {MOTOR_TO_JOINT_INDEX[m] for m in targets})
         if not self.set_active_scope(mask, joints, False):

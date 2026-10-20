@@ -77,7 +77,7 @@ inline constexpr uint8_t CMD_MOTOR_ABS_ZERO = 0xF1; ///< Direct电机页按非�
 inline constexpr uint8_t CMD_MOTOR_DIRECT_RELEASE = 0xF2; ///< 结束当前普通直控并保留扭矩和故障；非零token匹配已执行事务，零匹配当前直控代际
 inline constexpr uint8_t CMD_PROTOCOL_HELLO = 0xF3; ///< 双向版本及控制模型与反馈拓扑契约握手，不授权运动
 inline constexpr uint8_t CMD_CONTROL_RELEASE = 0xF6; ///< 释放普通控制权，不锁存急停，不恢复旧目标
-inline constexpr uint8_t CMD_CONTROL_PARAMETERS_SET = 0xF8; ///< 原子设置39个控制与输入滤波参数，版本1、修订、浮点数组、CRC32
+inline constexpr uint8_t CMD_CONTROL_PARAMETERS_SET = 0xF8; ///< 原子设置32个控制与输入滤波参数，版本1、修订、浮点数组、CRC32
 inline constexpr uint8_t CMD_CONTROL_PARAMETERS_QUERY = 0xF9; ///< 读回P4当前控制参数修订、CRC和已配置状态
 inline constexpr uint8_t PROTO_ACK_STATUS_OK = 0; ///< 命令已同步执行成功
 inline constexpr uint8_t PROTO_ACK_STATUS_UNSUPPORTED_MODE = 1; ///< 当前状态或 owner 不允许该命令
@@ -154,7 +154,7 @@ inline constexpr size_t generatedCommandPayloadLength(uint8_t command)
         case CMD_MOTOR_DIRECT_RELEASE: return kMotorDirectReleasePayloadBytes;
         case CMD_PROTOCOL_HELLO: return 9;
         case CMD_CONTROL_RELEASE: return 0;
-        case CMD_CONTROL_PARAMETERS_SET: return 165;
+        case CMD_CONTROL_PARAMETERS_SET: return 137;
         case CMD_CONTROL_PARAMETERS_QUERY: return 0;
         default: return SIZE_MAX;
     }

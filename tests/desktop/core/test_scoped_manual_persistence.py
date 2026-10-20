@@ -1,6 +1,6 @@
 """Exercise controller persistence against a partial P4 session without hardware."""
 
-from _clock_helpers import stamp
+from _clock_helpers import live_servo_feedback, stamp
 from copy import deepcopy
 import time
 from unittest.mock import Mock
@@ -78,10 +78,16 @@ def test_release_preserves_other_finger_in_runtime_and_json(controller):
         if isinstance(command, tuple) and command[0] == 'motor_pos_abs':
             assert command[1][14] == 2000
             state.servo_angles[19] = command[1][19]
+            state.has_direct_target_result = True
+            state.direct_target_status = 2
+            state.direct_target_applied_mask = 1 << 19
+            state.system_state = 6
+            state.control_enabled = True
         return True
 
     controller.comm.send_command.side_effect = move
-    result = controller.manual_prepare_all_motors(motor_mask=1 << 19)
+    with live_servo_feedback(state):
+        result = controller.manual_prepare_all_motors(motor_mask=1 << 19)
     assert result.ok and result.invalidated_joint_mask == 1 << 15
     assert state.joint_calib_results[11] == before['joint_calib_results'][11]
     assert state.motor_abs_limit_valid_bitmap == 1 << 14

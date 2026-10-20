@@ -24,7 +24,9 @@ TITLES = {
 def build(hand, act):
     controls = {}
     with ui.row().classes('page-toolbar'):
-        save = ui.button('Save Parameters')
+        save = ui.button('Apply Parameters')
+        with save:
+            ui.tooltip('Apply the drafted parameter revision. The host writes it to the configuration and P4 applies the whole revision when idle.')
         defaults = ui.button('Restore Defaults', on_click=lambda: act(hand.request_restore_control_defaults))
         status = ui.label().classes('text-sm')
     ui.label('Settings are shared by all single-tendon or all dual-tendon joints; there are no per-joint overrides. P4 applies an entire revision only when idle.').classes('text-sm')
@@ -42,7 +44,7 @@ def build(hand, act):
         proposed.pop('crc32', None)
         for (group, name), widget in controls.items():
             proposed[group][name] = widget.value
-        act(lambda: hand.request_save_control_parameters(proposed))
+        act(lambda: hand.request_apply_control_parameters(proposed))
     save.on('click', submit)
 
     def refresh(snapshot):

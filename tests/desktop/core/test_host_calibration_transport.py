@@ -6,6 +6,7 @@ import struct
 
 import pytest
 
+import desktop.core.communication.state_reducer as state_reducer_module
 from desktop.core.comm_layer import LowerComputerComm
 from desktop.core.data_models import HandModel
 from desktop.core.protocol import (
@@ -236,7 +237,11 @@ def test_each_feedback_source_keeps_its_own_timestamp_and_copy():
     assert copied.servo_logical_range_last_rx_ts == model.servo_logical_range_last_rx_ts
 
 
-def test_paired_position_packets_can_arrive_in_separate_rx_batches_without_losing_pair():
+def test_paired_position_packets_can_arrive_in_separate_rx_batches_without_losing_pair(
+    monkeypatch,
+):
+    # 每批都要拿到快照：关闭发布节流（默认 20 ms 只约束高频遥测，不改变配对语义）。
+    monkeypatch.setattr(state_reducer_module, "STATE_SNAPSHOT_MIN_INTERVAL_S", 0.0)
     comm = LowerComputerComm('')
     previous = comm._process_packets([
         (PACKET_TYPE_SERVO_RAW, struct.pack('>27hI', *([100] * 27), 1000)),

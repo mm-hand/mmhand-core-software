@@ -51,9 +51,13 @@ OBSOLETE_FIRMWARE_INDEX_FILES = (
 _ROW_RE = re.compile(r"^P4_SAFETY_RULE\((.*)\)\s*$")
 # 旧固件自动标定编号继续解释历史日志，不再登记运行调用链。
 # CAW 是上传 LUT 的装配质量告警，继续保留活动绑定。
+# LogicalRange/FeedbackAbsLimit 随 2026-10 限位简化退役：唯一边界收敛为
+# LUT±可调扩放量，编号保留用于解读历史日志。
 RETIRED_RULE_NAMES = frozenset({
     "SystemCalibrationStateRejected",
     "FaultCalibration",
+    "ActuatorLogicalRange",
+    "FeedbackAbsLimitRejected",
 })
 _ACTION_TEXT = {
     "Allow": "Allow",

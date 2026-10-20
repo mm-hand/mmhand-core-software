@@ -170,14 +170,6 @@ bool activeMotorsMultiTurnKnown(SystemRuntimeContext* runtime)
            (sharedAtomicLoad(&runtime->servo_turn_overflow_bitmap) & activeMask) == 0;
 }
 
-bool activeMotorsAbsLimitsCalibrated(SystemRuntimeContext* runtime)
-{
-    const uint32_t activeMask = requiredMotorMask(runtime);
-    return runtime && activeMask != 0 &&
-           (activeMask &
-            ~sharedAtomicLoad(&runtime->motor_abs_limit_valid_bitmap)) == 0;
-}
-
 FeedbackReadinessDecision evaluateFeedbackReadiness(
     SystemRuntimeContext* runtime,
     uint32_t nowMs)
@@ -202,9 +194,6 @@ FeedbackReadinessDecision evaluateFeedbackReadiness(
             : reject(FEEDBACK_READY_REJECT_MULTITURN,
                      motorMask,
                      sharedAtomicLoad(&runtime->multi_turn_unknown_bitmap));
-    }
-    if (!activeMotorsAbsLimitsCalibrated(runtime)) {
-        return reject(FEEDBACK_READY_REJECT_CALIBRATION_MISSING);
     }
 
     const uint32_t activeMask =

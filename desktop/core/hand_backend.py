@@ -1000,10 +1000,24 @@ class HandBackend(ApplicationActions):
     def rope_init(self, active_joint_mask: int) -> bool:
         return self._run_user_output(lambda: self._controller.rope_init(active_joint_mask), False)
 
-    def manual_prepare_all_motors(self, *, motor_mask=None) -> ManualPrepareResult:
-        """停止外部连续输入后执行指定电机的 turn0 与 1500-count 预松事务。"""
+    def manual_prepare_all_motors(self, *, motor_mask=None, cancelled=None) -> ManualPrepareResult:
+        """停止外部连续输入后执行指定电机的 turn0 与 1500-count 预松事务。
+
+        ``cancelled`` 是额外取消源（例如 STOP 使应用 epoch 失效）；它与
+        Manual 事务自己的 ``_manual_cancel`` 合并，任一成立即停止等待。
+        """
+        def run(manual_cancelled):
+            def is_cancelled():
+                if manual_cancelled():
+                    return True
+                return bool(cancelled is not None and cancelled())
+            return self._controller.manual_prepare_all_motors(
+                motor_mask=motor_mask,
+                cancelled=is_cancelled,
+                motion_gate=self._submit_manual_motion,
+            )
         return self._run_manual_transaction(
-            lambda cancelled: self._controller.manual_prepare_all_motors(motor_mask=motor_mask, cancelled=cancelled, motion_gate=self._submit_manual_motion),
+            run,
             ManualPrepareResult(False, 'host calibration is active or device transaction is finishing', 0, 0, 0, 0))
 
     def start(self) -> None:

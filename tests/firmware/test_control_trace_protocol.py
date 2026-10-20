@@ -2,6 +2,8 @@
 
 import struct
 
+import desktop.core.communication.state_reducer as state_reducer_module
+
 from desktop.core.communication.ack_tracker import AckTracker
 from desktop.core.communication.packet_router import P4PacketRouter
 from desktop.core.communication.state_reducer import StateReducer
@@ -123,7 +125,11 @@ def test_servo_abs_reducer_keeps_its_own_p4_timestamp() -> None:
     assert model.servo_angles[19] == 1019
 
 
-def test_control_parts_match_both_timestamp_and_cycle_and_reset_on_disconnect():
+def test_control_parts_match_both_timestamp_and_cycle_and_reset_on_disconnect(
+    monkeypatch,
+):
+    # 连续批次都要拿到快照：关闭发布节流（默认 20 ms 只约束高频遥测）。
+    monkeypatch.setattr(state_reducer_module, "STATE_SNAPSHOT_MIN_INTERVAL_S", 0.0)
     from desktop.core.protocol import parse_control_components_packet
     class Owner:
         _heartbeat_enabled = False

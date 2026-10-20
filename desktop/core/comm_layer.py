@@ -1463,21 +1463,45 @@ class LowerComputerComm:
     def apply_control_parameters(self, data, *, cancelled=lambda: False, timeout=3.0):
         from .control_parameters import configuration_frame, configuration_crc
         wanted = (0, data['revision'], configuration_crc(data))
-        with self._control_parameter_condition:
-            self._control_parameter_result = None
-        if not self.send_command(('maintenance_frame', configuration_frame(data))):
-            raise ConnectionError('P4 parameter transaction could not be queued')
-        deadline = time.monotonic() + timeout
-        with self._control_parameter_condition:
-            while self._control_parameter_result is None:
-                if cancelled() or not self.is_connected():
-                    raise InterruptedError('P4 parameter synchronization cancelled')
-                remaining = deadline - time.monotonic()
-                if remaining <= 0: raise TimeoutError('P4 parameter application result timed out')
-                self._control_parameter_condition.wait(min(remaining, 0.05))
-            actual = self._control_parameter_result
-        if actual != wanted:
-            raise ValueError(f'P4 parameter revision/CRC not applied: {actual}')
+        # P4 在 RESET/状态过渡时会用 status=8（协议/运动模型契约暂时不匹配）
+        # 拒绝一次 SET；同一 revision 重发是安全且幂等的。最多 3 次，期间仍
+        # 保留 cancelled/断开检查，最终仍未应用才抛错。
+        last_error: Optional[Exception] = None
+        for attempt in range(1, 4):
+            if cancelled():
+                raise InterruptedError('P4 parameter synchronization cancelled')
+            with self._control_parameter_condition:
+                self._control_parameter_result = None
+            if not self.send_command(('maintenance_frame', configuration_frame(data))):
+                raise ConnectionError('P4 parameter transaction could not be queued')
+            deadline = time.monotonic() + timeout
+            with self._control_parameter_condition:
+                while self._control_parameter_result is None:
+                    if cancelled() or not self.is_connected():
+                        raise InterruptedError('P4 parameter synchronization cancelled')
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        last_error = TimeoutError(
+                            f'P4 parameter application result timed out (attempt {attempt}/3)'
+                        )
+                        break
+                    self._control_parameter_condition.wait(min(remaining, 0.05))
+                actual = self._control_parameter_result
+            if actual is None:
+                if attempt < 3:
+                    time.sleep(0.2)
+                continue
+            if actual == wanted:
+                last_error = None
+                break
+            last_error = ValueError(
+                'P4 parameter revision/CRC not applied: '
+                f'{actual} (status={actual[0]}, attempt {attempt}/3)'
+            )
+            if attempt < 3:
+                time.sleep(0.2)
+        if last_error is not None:
+            raise last_error
         # Query separately so a queued ACK can never stand in for RAM readback.
         with self._control_parameter_condition:
             self._control_parameter_result = None
