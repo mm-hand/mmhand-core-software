@@ -48,7 +48,7 @@ def test_matrix_never_exceeds_internal_workspace_and_triangle_starts_at_center()
 
 
 def test_calibration_success_with_flat_lut_is_rejected():
-    lut=dict(success=True,tendonLutValid=True,currentMinDeg=0,currentMaxDeg=30,
+    lut=dict(success=True,tendonLutValid=True,angleMin=0,angleMax=30,
              tendonLutCount=4,tendonLutAngleStepDeg=10,tendonLutAngleStartDeg=0,
              tendonLutMotor=[0,255],tendonLutMotorAbs=[[0,100,100,100]])
     bundle=dict(joint_calib_results=[lut],manual_reference_valid_bitmap='0x1',
@@ -57,6 +57,17 @@ def test_calibration_success_with_flat_lut_is_rejected():
     assert not audit['eligible']
     assert audit['flat_segments'][0]['low_deg']==10
     assert lut['tendonLutMotorAbs'][0]==[0,100,100,100]
+
+
+def test_calibration_audit_accepts_legacy_current_range_for_old_bundles():
+    lut=dict(success=True,tendonLutValid=True,currentMinDeg=0,currentMaxDeg=30,
+             tendonLutCount=4,tendonLutAngleStepDeg=10,tendonLutAngleStartDeg=0,
+             tendonLutMotor=[0,255],tendonLutMotorAbs=[[0,10,20,30]])
+    bundle=dict(joint_calib_results=[lut],manual_reference_valid_bitmap='0x1',
+                motor_abs_limit_valid_bitmap=1,motor_abs_limit_min=[-10],motor_abs_limit_max=[200])
+    audit=calibration_audit(bundle)[0]
+    assert audit['eligible']
+    assert (audit['low_deg'], audit['high_deg']) == (0.0, 30.0)
 
 
 def test_missing_trace_does_not_produce_success_or_pair_measurement():

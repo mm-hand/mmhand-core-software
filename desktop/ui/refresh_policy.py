@@ -111,3 +111,22 @@ def should_auto_reload(visible, elapsed_s, reload_count, max_reloads=MAX_AUTO_RE
     if not heartbeat_stale(elapsed_s):
         return False
     return not reload_budget_exhausted(reload_count, max_reloads)
+
+
+ALERT_MAX_AGE_S = 15 * 60
+
+
+def calibration_alert_visible(operation, active_leaf, now, max_age_s=ALERT_MAX_AGE_S):
+    """Only the page that started a calibration shows its alert, once."""
+    if not isinstance(operation, dict):
+        return False
+    alert = operation.get('calibration_alert')
+    if not alert or operation.get('alert_acknowledged'):
+        return False
+    origin = operation.get('origin')
+    if not origin or origin != active_leaf:
+        return False
+    finished_at = operation.get('finished_at')
+    if finished_at and now - float(finished_at) > max_age_s:
+        return False
+    return True

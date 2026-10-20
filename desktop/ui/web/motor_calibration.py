@@ -8,13 +8,29 @@
 禁止依赖：禁止直接操作协议、串口和控制器。
 """
 from nicegui import ui
-from .common import FINGERS, finger_cards, selection, label, show, quality, table, set_rows
+from .common import (FINGERS, finger_cards, selection, label, show, quality, table, set_rows,
+                     maintenance_allowed, maintenance_button, auto_span, request_calibration)
+
+
+def detail_text(row, limits='—'):
+    """Two compact lines: Auto endpoints/angle, then limits and warning counts."""
+    result = row.get('result') or {}
+    offset = result.get('autoMinOffsetCounts')
+    shortfall = result.get('autoMaxShortfallCounts')
+    return '\n'.join([
+        f"Auto Min: {show(row.get('auto_min'))}   Auto Max: {show(row.get('auto_max'))}   "
+        f"Auto Span: {show(auto_span(row))}   Joint Angle: {show(row.get('angle'), '°')}",
+        f"ABS Limits: {limits}   Return offset: {show(offset)}   "
+        f"Travel shortfall: {show(shortfall)} counts",
+    ])
+
 
 def build(hand, act, load_calibration):
     refreshers = []
     with ui.row().classes('page-toolbar'):
         ui.button('Load Joint & Motor Calibration', on_click=load_calibration)
-        ui.button('Calibrate Selected', on_click=lambda: act(hand.request_calibration))
+        calibrate = maintenance_button(ui.button(
+            'Calibrate Selected', on_click=lambda: act(lambda: request_calibration(hand, 'Motor Calibration'))))
         selected = label()
     with finger_cards():
         for name, indices in FINGERS:
@@ -25,8 +41,8 @@ def build(hand, act, load_calibration):
                         with ui.row().classes('items-center'):
                             refreshers.append(selection(hand, 'selected_joints', [j], f'J{j:02d}'))
                             badge = quality()
-                        motors = table([(k, v) for k, v in [('motor', 'Motor'), ('bus', 'BUS'), ('route', 'Route'), ('turn', 'Turn'), ('raw', 'RawNow'), ('saved_raw', 'SavedRaw'), ('abs', 'AbsNow'), ('load', 'Load')]], 'motor')
-                        info = label()
+                        motors = table([(k, v) for k, v in [('motor', 'Motor'), ('raw', 'RawNow'), ('abs', 'AbsNow'), ('load', 'Load')]], 'motor')
+                        info = label().classes('text-xs leading-tight')
                     def refresh(snapshot, j=j, badge=badge, motors=motors, info=info):
                         row, result = snapshot['joints'][j], snapshot['joints'][j]['result']
                         offset, shortfall = result.get('autoMinOffsetCounts'), result.get('autoMaxShortfallCounts')
@@ -36,9 +52,10 @@ def build(hand, act, load_calibration):
                         badge(row['motor_quality'], hint)
                         set_rows(motors, [dict(m, motor=f"M{m['motor']:02d}") for m in snapshot['motors'] if m['joint'] == j])
                         limits = ' / '.join(f"M{m['motor']:02d}: {show(m['limits'])}" for m in snapshot['motors'] if m['joint'] == j)
-                        info.set_text(f"Joint Angle: {show(row['angle'], '°')}   ABS Limits: {limits}\nReturn offset: {show(offset)} counts   Travel shortfall: {show(shortfall)} counts")
+                        info.set_text(detail_text(row, limits))
                     refreshers.append(refresh)
     def refresh(snapshot):
+        calibrate.set_enabled(maintenance_allowed(snapshot))
         chosen = set(snapshot['selected_joints'])
         selected.set_text(f"Selected: {len(chosen)} joints / {sum(m['joint'] in chosen for m in snapshot['motors'])} motors")
         for update in refreshers:

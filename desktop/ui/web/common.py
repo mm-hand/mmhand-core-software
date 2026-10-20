@@ -7,9 +7,17 @@
 状态所有权：仅目标草稿和显示缓存；设备真值归后端。
 禁止依赖：禁止直接操作协议、串口和控制器。
 """
+from __future__ import annotations
+
+import inspect
+
 from nicegui import ui
 
 FINGERS = [('Thumb', range(16, 21)), ('Index', range(12, 16)), ('Middle', range(8, 12)), ('Ring', range(4, 8)), ('Pinky', range(0, 4))]
+
+# Shown on maintenance buttons that are only safe while P4 is idle.
+MAINTENANCE_TOOLTIP = 'Press STOP first; Clear Faults before re-enable.'
+CONTROL_ACTIVE_MODES = ('FEEDBACK', 'DIRECT')
 
 def show(value, suffix=''):
     return '—' if value is None else (f'{value:.2f}' if isinstance(value, float) else str(value)) + suffix
@@ -18,7 +26,88 @@ def label():
     return ui.label().classes('text-xs text-slate-600 whitespace-pre-wrap')
 
 def quality_name(value):
-    return 'Magnetic Encoder or Joint Installation Error' if value == 'OFFSET' else value
+    if value == 'OFFSET':
+        return 'Magnetic Encoder or Joint Installation Error'
+    if value == 'PENDING':
+        return 'NEED CALIBRATION'
+    return value
+
+def control_active(snapshot):
+    """True while P4 owns a joint or direct control mode (new snapshot field first)."""
+    mode = snapshot.get('control_mode')
+    if mode is not None:
+        return str(mode).upper() in CONTROL_ACTIVE_MODES
+    if snapshot.get('device') in ('Controlling', 'Calibrating'):
+        return True
+    return (any(row.get('feedback_control_status') == 'ENABLED' for row in snapshot.get('joints', ()))
+            or any(row.get('direct_control_status') == 'ENABLED' for row in snapshot.get('motors', ())))
+
+def stop_latched(snapshot):
+    """True when the last STOP is still latched and Clear Faults has not run."""
+    value = snapshot.get('stop_latched')
+    if value is not None:
+        return bool(value)
+    return snapshot.get('device') == 'Stopped'
+
+def maintenance_allowed(snapshot):
+    """Maintenance actions need fresh P4 status, no operation, and an idle controller."""
+    if snapshot.get('communication') != 'Online' or snapshot.get('busy'):
+        return False
+    if stop_latched(snapshot) or control_active(snapshot):
+        return False
+    mode = snapshot.get('control_mode')
+    if mode is None:
+        # Legacy snapshot without the explicit mode field: control_active's
+        # fallbacks already checked for active ownership.
+        return True
+    return str(mode).upper() == 'IDLE'
+
+def maintenance_button(button):
+    """Attach the shared STOP/Clear Faults hint and return the button."""
+    with button:
+        ui.tooltip(MAINTENANCE_TOOLTIP)
+    return button
+
+def control_note():
+    """Explain tab versus handover semantics on both control pages."""
+    return ui.label('Tabs only change the view; ENABLE Selected requests a P4 handover to this page. '
+                    'After STOP latches, Clear Faults must be pressed before enabling again.').classes(
+                        'text-sm text-slate-600 whitespace-pre-wrap')
+
+def json_status(row):
+    """Saved|Unknown manual JSON status; falls back to the legacy persistence text."""
+    value = row.get('json_status')
+    if value is not None:
+        return 'Saved' if str(value).strip().lower() in ('saved', 'true', '1') else 'Unknown'
+    persistence = row.get('persistence') or ''
+    if isinstance(persistence, str) and (persistence == 'Saved'
+                                        or persistence.startswith('Saved in JSON')
+                                        or persistence == 'RAM differs from saved JSON'):
+        return 'Saved'
+    return 'Unknown'
+
+def auto_span(row):
+    """Direction-corrected Auto span in counts; falls back to the calibration result."""
+    value = row.get('auto_span')
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return int(value)
+    result = row.get('result') or {}
+    for key in ('autoSpanCounts', 'assemblyAutoSpanCounts'):
+        value = result.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return int(value)
+    return None
+
+def request_calibration(hand, origin):
+    """Call the calibration entry point with the page origin when the backend accepts it."""
+    entry = hand.request_calibration
+    try:
+        parameters = inspect.signature(entry).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    accepts_origin = 'origin' in parameters or any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values())
+    return entry(origin=origin) if accepts_origin else entry()
 
 def quality():
     container, previous = ui.row().classes('gap-1 items-center'), [None]

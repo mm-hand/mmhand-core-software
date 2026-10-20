@@ -13,7 +13,6 @@ from .common import label, table, set_rows, quality_name
 
 def build(hand, act):
     with ui.row().classes('page-toolbar'):
-        ui.button('Clear Faults', on_click=lambda: act(hand.request_clear_faults))
         headline = label()
     with ui.row().classes('w-full items-start flex-nowrap diagnostic-layout'):
         issues = table([('severity', 'Severity'), ('channel', 'Channel'), ('problem', 'Problem')], 'id').classes('flex-1')

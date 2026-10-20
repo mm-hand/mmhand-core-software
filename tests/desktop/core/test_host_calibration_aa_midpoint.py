@@ -311,7 +311,7 @@ def test_thumb_cmc_does_not_require_or_move_aa(centered_io):
 def test_general_lut_interpolation_preserves_short_last_interval_and_rejects_extrapolation():
     result = dict(success=True, scaled=True, mappingVersion=4, tendonLutValid=True,
         tendonLutCount=3, tendonLutMotor=[0, 1], tendonLutMotorAbs=[[0, 10, 20], [0, -10, -20]],
-        tendonLutAngleStartDeg=-8, tendonLutAngleStepDeg=5, currentMaxDeg=1)
+        tendonLutAngleStartDeg=-8, tendonLutAngleStepDeg=5, angleMax=1)
     assert dual_lut_targets(result, (0, 1), 0) == {0: 18, 1: -18}
     assert dual_lut_targets(result, (0, 1), -3.5) == {0: 9, 1: -9}
     assert dual_lut_targets(result, (0, 1), 2) is None

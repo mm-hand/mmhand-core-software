@@ -23,12 +23,16 @@ SUBTABS = {
 }
 def status_background(value):
     status = str(value).upper()
+    if status.startswith('NEED CALIBRATION') or status.startswith('PENDING'):
+        return '#fde68a'
+    if status.startswith('READY'):
+        return '#bbf7d0'
+    if status in ('FEEDBACK', 'DIRECT', 'CALIBRATING', 'RUNNING', 'CONTROLLING'):
+        return '#bfdbfe'
     if status in ('FAILED', 'FAULT', 'ERROR', 'ACTIVE', 'HOLD', 'MISSING', 'STOPPED'):
         return '#fecaca'
     if status in ('READY', 'KNOWN', 'CLEAR', 'SUCCESS', 'OFF', 'ARMED'):
         return '#bbf7d0'
-    if status in ('RUNNING', 'CALIBRATING', 'CONTROLLING'):
-        return '#bfdbfe'
     if status in ('WARN', 'WARNING', 'PENDING', 'SYNCING'):
         return '#fde68a'
     return '#e2e8f0'
@@ -229,17 +233,22 @@ def build_page(hand):
         calibration_message = ui.label().classes('whitespace-pre-wrap text-sm')
         ui.button('Close', on_click=calibration_dialog.close).props('dense')
     def refresh_calibration_alerts(snapshot):
+        leaf = current_leaf()
+        now = time.time()
         for operation in snapshot['operations']:
+            if not policy.calibration_alert_visible(operation, leaf, now):
+                continue
             operation_id = operation['operation_id']
-            alert = operation.get('calibration_alert')
-            if alert and operation_id not in displayed_calibration_alerts:
-                displayed_calibration_alerts.add(operation_id)
-                pending_calibration_alerts.append(alert)
+            if operation_id in displayed_calibration_alerts:
+                continue
+            displayed_calibration_alerts.add(operation_id)
+            pending_calibration_alerts.append((operation_id, operation['calibration_alert']))
         if pending_calibration_alerts and not calibration_dialog.value:
-            alert = pending_calibration_alerts.pop(0)
+            operation_id, alert = pending_calibration_alerts.pop(0)
             calibration_title.set_text(alert['title'])
             calibration_title.style('color:#dc2626' if alert['severity'] == 'negative' else 'color:#ea880c')
             calibration_message.set_text(alert['message'])
+            hand.acknowledge_calibration_alert(operation_id)
             calibration_dialog.open()
     def act(action):
         try:
@@ -280,6 +289,12 @@ def build_page(hand):
         storage.set_text(f"Current device save path: {paths['current']}\nDefault data directory: {paths['data_dir']}\nEarlier default snapshot: {paths['default']}")
         import_info.set_text('Choose a calibration file to validate.'); load.set_enabled(False)
         importer.open()
+    def top_stop_action():
+        snapshot = hand.application_snapshot(include_curves=False)
+        if snapshot.get('stop_latched'):
+            act(hand.request_clear_faults)
+        else:
+            act(hand.stop_motion)
     with ui.element('div').classes('console-shell'):
         with ui.row().classes('connection-bar items-center w-full'):
             ui.label('MM-Hand Console').classes('font-semibold text-base whitespace-nowrap')
@@ -295,9 +310,9 @@ def build_page(hand):
                 with ages[name]: ui.tooltip('Time since the latest data received on this connection, in milliseconds.')
             ui.space()
             save = ui.button('Save Data: ON', on_click=lambda: act(lambda: hand.request_recording(not hand.application_snapshot(include_curves=False)['recording']['enabled']))).props('dense outline')
-            ui.button('■ STOP', on_click=lambda: act(hand.stop_motion), color='negative').props('dense').classes('font-bold px-5')
+            top_stop = ui.button('■ STOP', on_click=top_stop_action, color='negative').props('dense').classes('font-bold px-5')
         with ui.row().classes('status-bar items-center w-full'):
-            badges = {name: ui.label().classes('status-chip text-xs cursor-pointer') for name in ['System', 'Calibration', 'Overload', 'Collision', 'Multi-turn']}
+            badges = {name: ui.label().classes('status-chip text-xs cursor-pointer') for name in ['System', 'Calibration', 'Mode', 'Overload', 'Collision', 'Multi-turn']}
         with ui.tabs(value=TABS[0]).classes('console-tabs w-full').props('dense no-caps active-color=primary outside-arrows mobile-arrows') as tabs:
             for name in TABS: ui.tab(name)
         for badge in badges.values(): badge.on('click', lambda: tabs.set_value('Settings'))
@@ -340,8 +355,22 @@ def build_page(hand):
         child = subtabs[group].value if group in subtabs else None
         return policy.active_leaf(group, child, TABS, SUBTABS)
 
+    def warn_control_page_switch(*_args):
+        snapshot = hand.application_snapshot(include_curves=False)
+        mode = snapshot.get('control_mode')
+        leaf = current_leaf()
+        if mode == 'FEEDBACK' and leaf != 'Feedback Control':
+            ui.notify('Feedback control is active; changing pages does not stop motion. Press STOP to stop.', type='warning')
+        elif mode == 'DIRECT' and leaf != 'Direct Control':
+            ui.notify('Direct control is active; changing pages does not stop motion. Press STOP to stop.', type='warning')
+
+    tabs.on_value_change(warn_control_page_switch)
+    for child_tabs in subtabs.values():
+        child_tabs.on_value_change(warn_control_page_switch)
+
     # Display caches: NiceGUI values are only written when they actually changed.
     text_cache, enabled_cache, style_cache = {}, {}, {}
+    top_stop_color = [None]
     running = {'fast': False, 'heavy': False, 'plots': False}
     slow_ticks = {'fast': 0, 'heavy': 0, 'plots': 0}
     heartbeat_at = [0.0]
@@ -396,6 +425,18 @@ def build_page(hand):
             display_value = 'UNKNOWN' if name == 'Multi-turn' and value == 'MISSING' else value
             set_text(('badge', name), badges[name], f'{display_name}: {display_value}')
             set_style(('badge-style', name), badges[name], f'background-color:{status_background(value)}')
+        mode_value = snapshot.get('control_mode', 'UNKNOWN')
+        set_text(('badge', 'Mode'), badges['Mode'], f'Mode: {mode_value}')
+        set_style(('badge-style', 'Mode'), badges['Mode'], f'background-color:{status_background(mode_value)}')
+        stop_latched = bool(snapshot.get('stop_latched'))
+        stop_label = 'Clear Faults' if stop_latched else '■ STOP'
+        set_text('top-stop', top_stop, stop_label)
+        color = 'warning' if stop_latched else 'negative'
+        if top_stop_color[0] != color:
+            top_stop_color[0] = color
+            top_stop.props(f'color={color}')
+        set_enabled('top-stop', top_stop,
+                    snapshot['communication'] == 'Online' and not snapshot['busy'])
         set_text('save', save, 'Save Data: ON' if snapshot['recording']['enabled'] else 'Save Data: OFF')
         preview = snapshot['import_preview']
         if preview and importer.value and preview['token'] != preview_token[0]:

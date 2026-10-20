@@ -37,15 +37,16 @@ def dual_lut_targets(result, motors, angle):
             return None
         first = f32(result['tendonLutAngleStartDeg'])
         step = f32(result['tendonLutAngleStepDeg'])
-        current_max = f32(result.get('currentMaxDeg', float('nan')))
+        # LUT 末段按静态 angleMax/URDF max 截断；currentMaxDeg 概念已从 host 删除。
+        angle_max = f32(result.get('angleMax', float('nan')))
         if not math.isfinite(first) or not math.isfinite(step) or step <= 0:
             return None
 
         def sample_angle(index):
             nominal = f32(first + f32(step * f32(index)))
-            if (index == count - 1 and math.isfinite(current_max) and
-                    first < current_max < nominal):
-                return current_max
+            if (index == count - 1 and math.isfinite(angle_max) and
+                    first < angle_max < nominal):
+                return angle_max
             return nominal
 
         last = sample_angle(count - 1)

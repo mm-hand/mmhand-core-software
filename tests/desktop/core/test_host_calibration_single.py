@@ -245,7 +245,8 @@ def test_full_mechanical_trajectory_runs_search_sync_release_lut_and_holds_auto_
     assert result["success"] and result["tendonLutValid"]
     assert result["tendonLutMotor"] == [2, 255]
     assert result["encoderSpan"] == 4000
-    assert result["currentMaxDeg"] == 83.0
+    assert result["angleMax"] == 83.0
+    assert "currentMaxDeg" not in result
     assert result["zeroServoAbs"] == result["startServoAbs"] + 500
     assert outcome["limits"] == io.limits
     events = [event[0] for event in io.traces]

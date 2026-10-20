@@ -148,13 +148,16 @@ def _default_motors() -> List[MotorSlot]:
 
 @dataclass(frozen=True)
 class JointWorkspaceRange:
-    """Validated host-side view of one joint's V4 Manual/URDF workspace."""
+    """Validated host-side view of one joint's static URDF workspace.
+
+    V4 snapshots only prove that the joint has a valid Auto/LUT and that the
+    persisted mapping matches the current URDF. The command interval itself is
+    always the static URDF Min/Max; there is no dynamic "current" workspace.
+    """
 
     joint_index: int
     urdf_min_deg: float
     urdf_max_deg: float
-    current_min_deg: Optional[float]
-    current_max_deg: float
     manual_valid: bool
     auto_valid: bool
     manual_crc_match: bool
@@ -163,12 +166,12 @@ class JointWorkspaceRange:
     reason: str = ""
 
     def clamp(self, value: float) -> float:
-        if not self.ready or self.current_min_deg is None:
+        if not self.ready:
             raise ValueError(self.reason or f"J{self.joint_index:02d} workspace is not ready")
         target = float(value)
         if not math.isfinite(target):
-            target = self.current_min_deg
-        return max(self.current_min_deg, min(self.current_max_deg, target))
+            target = self.urdf_min_deg
+        return max(self.urdf_min_deg, min(self.urdf_max_deg, target))
 
 def resolve_joint_workspace_range(
     model: Optional["HandModel"],
@@ -187,8 +190,6 @@ def resolve_joint_workspace_range(
         joint_index=idx,
         urdf_min_deg=urdf_min,
         urdf_max_deg=urdf_max,
-        current_min_deg=None,
-        current_max_deg=urdf_max,
         manual_valid=False,
         auto_valid=False,
         manual_crc_match=False,
@@ -223,8 +224,9 @@ def resolve_joint_workspace_range(
         mapping_version = int(result.get("mappingVersion", 0) or 0)
         mapping_crc = int(result.get("urdfConfigCrc", 0) or 0)
         result_manual_crc = int(result.get("manualReferenceCrc", 0) or 0)
-        current_min = float(result.get("currentMinDeg"))
-        reported_current_max = float(result.get("currentMaxDeg"))
+        # 旧快照可能仍带已删除的 currentMinDeg/currentMaxDeg；host 只读取并忽略
+        # 这两个多余字段。V4 范围契约只要求 LUT 的 angleMin/angleMax 等于静态
+        # URDF Min/Max，命令区间不再来自动态 current 工作区。
         angle_min = float(result.get("angleMin"))
         angle_max = float(result.get("angleMax"))
     except (TypeError, ValueError):
@@ -257,18 +259,13 @@ def resolve_joint_workspace_range(
     if not manual_crc_match:
         return JointWorkspaceRange(**base, reason="Manual CRC mismatch")
     if (
-        not math.isfinite(current_min)
-        or not math.isfinite(reported_current_max)
-        or not math.isfinite(angle_min)
+        not math.isfinite(angle_min)
         or not math.isfinite(angle_max)
-        or abs(current_min - urdf_min) > 0.01
-        or abs(reported_current_max - urdf_max) > 0.01
-        or abs(angle_min - current_min) > 0.01
+        or abs(angle_min - urdf_min) > 0.01
         or abs(angle_max - urdf_max) > 0.01
     ):
         return JointWorkspaceRange(**base, reason="V4 range must equal static URDF Min/Max")
 
-    base["current_min_deg"] = current_min
     base["ready"] = True
     return JointWorkspaceRange(**base)
 

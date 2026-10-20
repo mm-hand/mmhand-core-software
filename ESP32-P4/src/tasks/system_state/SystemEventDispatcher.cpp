@@ -310,7 +310,7 @@ static bool feedbackTargetsPointIntoWorkspace(SystemRuntimeContext* sharedData)
         return false;
     }
 
-    // 自动恢复只允许“向工作空间内部”运动；V4 中 currentMin 固定等于 URDF Min。
+    // 自动恢复只允许“向工作空间内部”运动；V4 工作区下界固定等于 URDF Min。
     bool safe = true;
     for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; joint++) {
         if ((activeMask & (1UL << joint)) == 0) {
@@ -323,9 +323,9 @@ static bool feedbackTargetsPointIntoWorkspace(SystemRuntimeContext* sharedData)
         }
         const JointCalibrationResult& calib = snapshot.result;
         const float targetDeg = sharedData->targetAngles[joint];
-        if (!calib.success || !isfinite(targetDeg) ||
-            !isfinite(calib.currentMinDeg) ||
-            targetDeg < calib.currentMinDeg) {
+        const float urdfMinDeg = kUrdfJointLimits[joint].minDeg;
+        if (!calib.success || !isfinite(targetDeg) || !isfinite(urdfMinDeg) ||
+            targetDeg < urdfMinDeg) {
             safe = false;
             break;
         }
@@ -651,7 +651,7 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                                                FEEDBACK_ADMISSION_REJECTED,
                                                FEEDBACK_REJECT_WORKSPACE);
                     FW_LOG_INFO_PRINTLN(
-                        "[STATE] recovery resume cancelled: latest target is below currentMin");
+                        "[STATE] recovery resume cancelled: latest target is below URDF Min");
                 } else {
                     sharedAtomicStore(
                         &sharedData->feedback_recovery_request_sequence,

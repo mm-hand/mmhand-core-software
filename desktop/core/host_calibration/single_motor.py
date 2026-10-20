@@ -270,7 +270,7 @@ def _finish_release(ctx, io, params, targets, current_raw, encoder, actual,
              shorten_sign=ctx.direction_sign)
     io.trace("RESULT", ctx.joint, ctx.motor, result=dict(result))
     io.trace("SINGLE_DONE_AT_AUTO_MIN", ctx.joint, ctx.motor, hold_abs=ctx.target_abs,
-             current_min_deg=result["currentMinDeg"])
+             urdf_min_deg=result.get("angleMin"))
     _append(ctx, io, targets, ctx.target_abs, p.CALIB_DIAG_PHASE_RELEASE, "auto-min hold target append failed")
 
 

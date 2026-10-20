@@ -237,6 +237,32 @@ def test_joint_enable_hands_over_existing_normal_control_without_stop(hand, monk
     assert 'control_release' in commands and 'stop' not in commands and 'reset' not in commands
     assert hand.get_control_mode() == ControlMode.JOINT_ANGLE
 
+
+def test_calibrate_selected_auto_releases_active_owner(hand, monkeypatch):
+    comm, _scope = joint_preparation_device(hand, monkeypatch)
+    state = hand._controller.current_state
+    state.system_state = SYSTEM_STATE_RUN_FEEDBACK
+    state.control_enabled = True
+    state.servo_target_owner = 1
+    state.manual_reference_valid_bitmap |= 1 << 3
+    state.manual_reference_min_raw[3] = 10000
+    state.manual_reference_max_raw[3] = 6000
+    hand._selected_joints = (3,)
+    entered = threading.Event()
+    monkeypatch.setattr(
+        hand, 'begin_calibration_workflow',
+        Mock(side_effect=lambda **kwargs: entered.set() or True))
+
+    result = hand.request_calibration(origin='Motor Calibration')
+
+    assert result.accepted
+    assert entered.wait(2)
+    assert 'control_release' in list(comm.tx_queue.queue)
+    operation = next(item for item in hand._application_operations
+                     if item['operation_id'] == result.operation_id)
+    assert operation['origin'] == 'Motor Calibration'
+    hand._finish_application_operation(result.operation_id, False, 'test cleanup')
+
 def test_joint_ready_requires_matching_persisted_pair(hand):
     state = hand._controller.current_state
     state.manual_reference_valid_bitmap = 1

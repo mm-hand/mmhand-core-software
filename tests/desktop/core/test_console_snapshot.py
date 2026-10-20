@@ -1,7 +1,8 @@
 """Quality presentation stays aligned with P4 warning boundaries, without hardware."""
 from pathlib import Path
+from types import SimpleNamespace
 import pytest
-from desktop.core.console_snapshot import joint_quality, motor_quality
+from desktop.core.console_snapshot import calibration_status_badge, joint_quality, motor_quality
 from desktop.core.protocol import DUAL_TENDON_JOINT_INDICES
 
 @pytest.mark.parametrize('difference,status', [(360, 'READY'), (361, 'OFFSET')])
@@ -50,6 +51,43 @@ def test_missing_stale_failed_and_pending_are_not_ready():
     assert joint_quality(True, 4000, 4000, 'INSTALLED_NOT_SAVED') == ['FAILED']
     assert joint_quality(True, 4000, 4000, 'DRAFT') == ['PENDING']
     assert joint_quality(True, 4000, 4000, fresh=False) == ['UNKNOWN']
+
+
+def _badge_state(**overrides):
+    values = dict(
+        calib_status='READY',
+        encoders=[object()] * 21,
+        manual_reference_valid_bitmap=0x0000FF00,
+        active_joint_mask=0x0000FF00,
+        auto_calibration_valid_bitmap=0x00000F00,
+        encoder_online_bitmap=0x00001FFF,
+    )
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def test_calibration_badge_denominator_is_stable_not_encoder_online():
+    state = _badge_state()
+    assert calibration_status_badge(state) == 'NEED CALIBRATION 4/8'
+    # Encoder telemetry fluctuation must not change the installed/manual scope.
+    state.encoder_online_bitmap = 0x00000003
+    assert calibration_status_badge(state) == 'NEED CALIBRATION 4/8'
+    state.auto_calibration_valid_bitmap = 0x0000FF00
+    assert calibration_status_badge(state) == 'READY 8/8'
+
+
+def test_calibration_badge_without_known_scope_has_no_jumping_fraction():
+    state = _badge_state(manual_reference_valid_bitmap=0, active_joint_mask=0)
+    assert calibration_status_badge(state) == 'NEED CALIBRATION'
+    state.active_joint_mask = 0x00000F00
+    state.auto_calibration_valid_bitmap = 0
+    assert calibration_status_badge(state) == 'NEED CALIBRATION 0/4'
+
+
+def test_calibration_badge_keeps_calibrating_and_stale_semantics():
+    assert calibration_status_badge(_badge_state(calib_status='PENDING')) == 'CALIBRATING'
+    assert calibration_status_badge(_badge_state(), fresh=False) == 'UNKNOWN'
+
 
 def test_warning_contract_matches_firmware():
     root = Path(__file__).resolve().parents[3]

@@ -36,3 +36,19 @@ outside the NiceGUI event loop. STOP uses the existing backend cancellation path
 
 Replaced Qt pages, compatibility helpers and Qt-only tests are removed. Core
 control, communications, calibration, ROS2 and replay stay independent of UI.
+
+## Page roles and control handover
+
+- Joint Calibration captures Manual Min/Max, loads a calibration bundle and
+  releases tendons. It shows Manual/URDF/JSON status only; automatic and motor
+  calibration status belongs to Motor Calibration.
+- Motor Calibration runs the host automatic calibration and shows Auto
+  Min/Max/Span plus return-offset/travel-shortfall diagnostics.
+- Feedback Control and Direct Control own one control mode each. Pressing
+  `ENABLE Selected` on the target page performs the P4 ownership handover; tabs
+  only change the view. The top-right button is `■ STOP` while running and
+  becomes `Clear Faults` after a latched STOP.
+- Starting a calibration or maintenance action automatically releases an active
+  control owner. A latched STOP is never cleared automatically.
+- Calibration failure dialogs are scoped to the page that started the operation
+  and are acknowledged once; they do not replay on page reloads or other tabs.

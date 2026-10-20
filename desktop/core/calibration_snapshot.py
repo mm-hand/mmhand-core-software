@@ -329,18 +329,16 @@ def validate_snapshot_for_load(
         try:
             result = results[joint_idx]
             urdf_min, urdf_max = get_spec(joint_idx).urdf_range_deg
+            # V4 契约只要求 LUT 的 angleMin/angleMax 等于静态 URDF Min/Max。
+            # 旧 JSON 里已删除的 currentMinDeg/currentMaxDeg 是多余字段，直接忽略。
             values = (
                 float(result.get("angleMin")),
-                float(result.get("currentMinDeg")),
                 float(result.get("angleMax")),
-                float(result.get("currentMaxDeg")),
             )
             if (
                 not all(math.isfinite(value) for value in values)
                 or abs(values[0] - urdf_min) > 0.01
-                or abs(values[1] - urdf_min) > 0.01
-                or abs(values[2] - urdf_max) > 0.01
-                or abs(values[3] - urdf_max) > 0.01
+                or abs(values[1] - urdf_max) > 0.01
             ):
                 incompatible_ranges.append(joint_idx)
         except (OSError, TypeError, ValueError):

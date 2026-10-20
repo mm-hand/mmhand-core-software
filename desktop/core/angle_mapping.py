@@ -285,22 +285,18 @@ def load_calibrated_ranges(
                 mapping_crc = int(item.get("urdfConfigCrc", 0) or 0)
                 angle_min = float(item.get("angleMin", 0.0))
                 angle_max = float(item.get("angleMax", 0.0))
-                current_min = float(item.get("currentMinDeg", float("nan")))
-                current_max = float(item.get("currentMaxDeg", float("nan")))
             except (TypeError, ValueError):
                 continue
             urdf_min, urdf_max = JOINT_SPECS[idx].urdf_range_deg
+            # 旧快照多余的 currentMinDeg/currentMaxDeg 字段直接忽略：host 只校验
+            # 静态 URDF 契约（mapping 版本/CRC 与 angleMin/angleMax）。
             if (
                 mapping_version == expected_version
                 and mapping_crc == expected_crc
                 and math.isfinite(angle_min)
                 and math.isfinite(angle_max)
-                and math.isfinite(current_min)
-                and math.isfinite(current_max)
                 and abs(angle_min - urdf_min) <= 0.01
                 and abs(angle_max - urdf_max) <= 0.01
-                and abs(current_min - urdf_min) <= 0.01
-                and abs(current_max - urdf_max) <= 0.01
                 and _has_consistent_auto_raw_endpoints(item)
             ):
                 # V4 快照只证明该关节已有有效 Auto/LUT；实际命令范围始终取

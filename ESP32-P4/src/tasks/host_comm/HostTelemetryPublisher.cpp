@@ -542,8 +542,10 @@ bool sendJointCalibSnapshotPacket(uint8_t jointIndex)
     appendU16BigEndian(buffer, &idx, result.autoMinRaw);
     appendU16BigEndian(buffer, &idx, result.autoMaxRaw);
     appendU32BigEndian(buffer, &idx, result.manualReferenceCrc);
-    appendFloatBigEndian(buffer, &idx, result.currentMinDeg);
-    appendFloatBigEndian(buffer, &idx, result.currentMaxDeg);
+    // 189-byte 基础快照保留两个旧 current 槽位；V4 已删除该概念，
+    // 固定输出 0.0 以维持 wire 长度，工作区由 URDF Min/Max 决定。
+    appendFloatBigEndian(buffer, &idx, 0.0f);
+    appendFloatBigEndian(buffer, &idx, 0.0f);
     CalibrationAssemblyWarningInfo warningInfo;
     if (!evaluateCalibrationAssemblyWarning(
             jointIndex, result, &warningInfo)) {

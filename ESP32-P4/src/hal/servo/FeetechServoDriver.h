@@ -50,9 +50,8 @@ struct ServoFeedbackInternal {
     uint8_t temperature; ///< 摄氏温度。
     // 当前舵机上电会话中的硬件多圈坐标；舵机独立掉电后可能退回单圈 raw。
     int32_t absolutePosition;
-    int16_t turnCount; ///< 实际 ABS 对应的诊断圈数。
-    int16_t lastRawPosition; ///< 最近一次参与展开的 raw。
-    bool initialized; ///< hardware ABS 展开器是否已有锚点。
+    int16_t turnCount; ///< 仅由 absolutePosition 派生，不参与坐标重建。
+    int16_t lastRawPosition; ///< 最近一次归一化后的单圈 raw。
     bool absoluteReliable; ///< logical ABS 是否可供运动控制。
     bool online; ///< 已通过连续成功反馈确认在线。
     uint32_t onlineSessionGeneration; ///< 每次确认重新上线递增，用于识别跨掉线的未决置数。
@@ -623,7 +622,7 @@ public:
         return _feedback[id].rawPosition;
     }
 
-    /** 返回控制使用的实际 ABS，与舵机反馈使用同一坐标。 */
+    /** 返回控制使用的 servo_abs；Turn Unknown 时为 0，可信状态由调用方另查。 */
     int32_t getAbsolutePosition(uint8_t id) const
     {
         if (id > MAX_SERVO_ID) return 0;
@@ -831,12 +830,27 @@ public:
             for (uint8_t readAttempt = 0;
                  readAttempt < kResetZeroFeedbackAttempts;
                  ++readAttempt) {
-                fb.initialized = false;
-                if (probeFeedback(id) && _sms.getState() == 0 &&
-                    (int32_t)_sms.ReadPos(-1) == position &&
-                    fb.absolutePosition == position && fb.online &&
-                    fb.lastUpdate != 0) {
-                    const int16_t raw = normalizeServoRawSingleTurn(position);
+                // 负 ABS 经 0x0B 写入后，部分 ST3215 固件把当前位置读回为
+                // 0..4095 的单圈 raw（如 -73 读回 4023），不会回多圈符号值；
+                // 因此按“多圈值相等 或 单圈相位相等”核验目标，再显式写入
+                // 权威 servo_abs，不依赖 0x0B 前的旧展开锚点。
+                const bool feedbackOk = probeFeedback(id) &&
+                    _sms.getState() == 0 && fb.online && fb.lastUpdate != 0;
+                const int32_t reported =
+                    feedbackOk ? (int32_t)_sms.ReadPos(-1) : 0;
+                const int16_t targetRaw =
+                    normalizeServoRawSingleTurn(position);
+                // 多圈读回必须精确等于目标；只有 0..4095 的单圈读回才允许
+                // 按 raw 相位核验（负 ABS 可能被读回为同相位的单圈 raw）。
+                const bool exactMatch = reported == position;
+                const bool singleTurnPhaseMatch =
+                    reported >= 0 && reported < 4096 &&
+                    reported == (int32_t)targetRaw;
+                if (feedbackOk && (exactMatch || singleTurnPhaseMatch)) {
+                    const int16_t raw = targetRaw;
+                    fb.rawPosition = raw;
+                    fb.lastRawPosition = raw;
+                    fb.absolutePosition = position;
                     fb.turnCount = (int16_t)((position - raw) / 4096);
                     fb.absoluteReliable = true;
                     fb.onlineTransitionPending = false;
@@ -895,7 +909,6 @@ public:
         for (uint8_t attempt = 0;
              attempt < kResetZeroFeedbackAttempts;
              attempt++) {
-            fb.initialized = false;
             if (probeFeedback(id) && _sms.getState() == 0 &&
                 fb.online && fb.lastUpdate != 0) {
                 feedbackOk = true;
@@ -907,12 +920,16 @@ public:
             return false;
         }
 
-        const int16_t raw = normalizeServoRawSingleTurn(fb.rawPosition);
+        // RESET 已在舵机侧把 turn 计数归零；用本次真实读回位置重建 servo_abs。
+        // 多圈读回保留其圈数，单圈读回则以 raw 作为 turn0 坐标。
+        const int16_t present = (int16_t)_sms.ReadPos(-1);
+        const int16_t raw = normalizeServoRawSingleTurn(present);
+        const int32_t absPos = (present < 0 || present >= 4096)
+            ? (int32_t)present : (int32_t)raw;
         fb.rawPosition = raw;
         fb.lastRawPosition = raw;
-        // 保留 RESET 后真实读回的 ABS，不能把原生多圈反馈强制改成单圈 raw。
-        fb.turnCount = (int16_t)((fb.absolutePosition - raw) / 4096);
-        fb.initialized = true;
+        fb.absolutePosition = absPos;
+        fb.turnCount = (int16_t)((absPos - raw) / 4096);
         fb.absoluteReliable = true;
         fb.onlineTransitionPending = false;
         fb.recoveryAttemptCount = 0;
@@ -1068,7 +1085,8 @@ private:
             return;
         }
         ServoFeedbackInternal& fb = _feedback[id];
-        fb.initialized = false;
+        // servo_abs 与可信基准一起撤销，避免残留旧坐标被当作当前值使用。
+        fb.absolutePosition = 0;
         fb.absoluteReliable = false;
         fb.turnCount = 0;
     }
@@ -1085,14 +1103,21 @@ private:
         return servoHardwareCommandFromAbs(logicalPosition, outHardwarePosition);
     }
 
-    /** 将单圈 raw 展开到最接近 anchor 的多圈坐标，避免跨零点跳变。 */
-    static int32_t expandSingleTurnRawNearAnchor(int16_t rawSingleTurn, int32_t anchor)
+    /**
+     * 将单圈 raw 展开到最接近可信 servo_abs 的多圈坐标。
+     *
+     * ST3215 在单圈范围内可能把负坐标读回为 0..4095 的 raw（例如 -73 读回
+     * 4023），因此可信状态下必须以上一 ABS 为锚点做最短圈数展开，才能保持
+     * 逻辑坐标连续且还原负 ABS；单圈内相邻两帧的物理位移远小于半圈。
+     */
+    static int32_t expandSingleTurnRawNearTrustedAnchor(int16_t rawSingleTurn,
+                                                        int32_t trustedAnchor)
     {
         int32_t candidate = rawSingleTurn;
-        while ((candidate - anchor) > 2048) {
+        while ((candidate - trustedAnchor) > 2048) {
             candidate -= 4096;
         }
-        while ((anchor - candidate) > 2048) {
+        while ((trustedAnchor - candidate) > 2048) {
             candidate += 4096;
         }
         return candidate;
@@ -1113,30 +1138,35 @@ private:
         return (raw & (1 << 10)) ? (int16_t)-magnitude : magnitude;
     }
 
-    /** 用最新 raw 更新实际 ABS，并维护诊断圈数。 */
+    /**
+     * 用最新反馈更新 servo_abs；turn 圈数只由 ABS 派生。
+     *
+     * 舵机多圈 ABS 是唯一坐标来源：0..4095 的单圈 raw 可能是同相位的负
+     * 多圈坐标（-73 与 4023 同相位），只有在已由 0x0B 建立可信基准
+     * （absoluteReliable）时才以上一 ABS 为锚点展开；没有可信基准时保持
+     * Turn Unknown，禁止用单圈值猜测圈数。
+     */
     void _updateMultiTurnPosition(uint8_t id, int16_t newRawPos)
     {
         ServoFeedbackInternal& fb = _feedback[id];
-        int32_t absPos = 0;
-        int16_t rawSingleTurn = 0;
-
-        const bool servoProvidedMultiTurnAbs = (newRawPos < 0 || newRawPos >= 4096);
-        if (servoProvidedMultiTurnAbs) {
-            absPos = (int32_t)newRawPos;
-            rawSingleTurn = normalizeServoRawSingleTurn(absPos);
-        } else {
-            rawSingleTurn = normalizeServoRawSingleTurn(newRawPos);
-            const int32_t anchor = fb.initialized
-                ? fb.absolutePosition
-                : (int32_t)rawSingleTurn;
-            absPos = expandSingleTurnRawNearAnchor(rawSingleTurn, anchor);
-        }
-
+        const int16_t rawSingleTurn = normalizeServoRawSingleTurn(newRawPos);
         fb.rawPosition = rawSingleTurn;
         fb.lastRawPosition = rawSingleTurn;
-        fb.absolutePosition = absPos;
-        fb.turnCount = (int16_t)((absPos - rawSingleTurn) / 4096);
-        fb.initialized = true;
+        if (newRawPos < 0 || newRawPos >= 4096) {
+            // 原生多圈反馈直接作为 servo_abs。
+            fb.absolutePosition = (int32_t)newRawPos;
+        } else if (fb.absoluteReliable) {
+            // 可信基准下的单圈反馈：按上一 ABS 做最短圈数展开。
+            fb.absolutePosition = expandSingleTurnRawNearTrustedAnchor(
+                rawSingleTurn, fb.absolutePosition);
+        } else {
+            // 单圈反馈且无可信锚点：servo_abs 无效，保持 Unknown。
+            fb.absolutePosition = 0;
+            fb.turnCount = 0;
+            return;
+        }
+        fb.turnCount =
+            (int16_t)((fb.absolutePosition - rawSingleTurn) / 4096);
     }
 
     SMS_STS _sms; ///< 唯一允许接触的飞特 SDK 实例。

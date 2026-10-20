@@ -25,7 +25,11 @@ def calibration_audit(bundle):
         if not lut or not lut.get('success'):
             continue
         reasons, flat, changes = [], [], []
-        lo, hi = float(lut['currentMinDeg']), float(lut['currentMaxDeg'])
+        # 新 bundle 只写静态 URDF 区间 angleMin/angleMax；旧 bundle 同时还有已删除的
+        # currentMinDeg/currentMaxDeg，仅在 angle 字段缺失时才回退读取以兼容历史数据。
+        lo_key = 'angleMin' if 'angleMin' in lut else 'currentMinDeg'
+        hi_key = 'angleMax' if 'angleMax' in lut else 'currentMaxDeg'
+        lo, hi = float(lut[lo_key]), float(lut[hi_key])
         margin = max(5.0, (hi - lo) * .1)
         motors = [int(m) for m in lut['tendonLutMotor'] if int(m) != 255]
         n, step, start = int(lut['tendonLutCount']), float(lut['tendonLutAngleStepDeg']), float(lut['tendonLutAngleStartDeg'])

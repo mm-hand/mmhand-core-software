@@ -440,6 +440,10 @@ class HostCalibrationIO:
             # host-only manualSpanCounts) instead of the incomplete P4 readback.
             result = self._host_snapshot_result(aa)
             if result is not None:
+                # Snapshot JSON stores only the persisted fields; the live model
+                # uses this marker to accept a full V4 result. The snapshot
+                # loader already validated mapping/CRC/LUT, so mark it here.
+                result['hasManualScaledV4Fields'] = True
                 state.joint_calib_results[aa] = result
                 state.auto_calibration_valid_bitmap |= 1 << aa
             else:
@@ -457,8 +461,9 @@ class HostCalibrationIO:
             raise ValueError('AA motor routes or multi-turn coordinates are untrusted')
         first = float(result['tendonLutAngleStartDeg'])
         last = first + float(result['tendonLutAngleStepDeg']) * (int(result['tendonLutCount']) - 1)
-        low = max(workspace.current_min_deg, first)
-        high = min(workspace.current_max_deg, last)
+        # 工作区始终使用静态 URDF Min/Max；currentMin/Max 概念已删除。
+        low = max(workspace.urdf_min_deg, first)
+        high = min(workspace.urdf_max_deg, last)
         center = (low + high) / 2
         if low >= high or dual_lut_targets(result, motors, center) is None:
             raise ValueError('AA midpoint requires a valid dual LUT; extrapolation is forbidden')

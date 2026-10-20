@@ -39,6 +39,7 @@ def _ready_state(joint_idx=0, current_min=None):
             state.manual_reference_min_raw[joint_idx],
             state.manual_reference_max_raw[joint_idx],
         ),
+        # 旧快照/旧结果的 current 字段保留在此处，用来锁定“多余字段被忽略”。
         "currentMinDeg": spec.urdf_range_deg[0],
         "currentMaxDeg": spec.urdf_range_deg[1],
         "angleMin": spec.urdf_range_deg[0],
@@ -63,15 +64,19 @@ def test_workspace_uses_static_urdf_min_and_max():
     )
 
     assert workspace.ready
-    assert workspace.current_min_deg == pytest.approx(spec.urdf_range_deg[0])
-    assert workspace.current_max_deg == pytest.approx(spec.urdf_range_deg[1])
+    assert not hasattr(workspace, "current_min_deg")
+    assert not hasattr(workspace, "current_max_deg")
+    assert workspace.urdf_min_deg == pytest.approx(spec.urdf_range_deg[0])
+    assert workspace.urdf_max_deg == pytest.approx(spec.urdf_range_deg[1])
     assert workspace.clamp(-1000.0) == pytest.approx(spec.urdf_range_deg[0])
     assert workspace.clamp(1000.0) == pytest.approx(spec.urdf_range_deg[1])
 
 
-def test_workspace_rejects_dynamic_min_from_removed_mapping():
+def test_workspace_ignores_removed_dynamic_current_fields():
     state = _ready_state()
+    # 旧结果仍可能带 currentMin/currentMax；host 必须忽略它们而不是改用动态范围。
     state.joint_calib_results[0]["currentMinDeg"] = 52.0
+    state.joint_calib_results[0]["currentMaxDeg"] = 60.0
     version, urdf_crc = urdf_manual_scaled_mapping_metadata()
     spec = get_spec(0)
 
@@ -84,8 +89,9 @@ def test_workspace_rejects_dynamic_min_from_removed_mapping():
         urdf_crc,
     )
 
-    assert not workspace.ready
-    assert workspace.reason == "V4 range must equal static URDF Min/Max"
+    assert workspace.ready
+    assert workspace.clamp(-1000.0) == pytest.approx(spec.urdf_range_deg[0])
+    assert workspace.clamp(1000.0) == pytest.approx(spec.urdf_range_deg[1])
 
 
 def test_workspace_rejects_manual_crc_mismatch():

@@ -53,8 +53,6 @@ struct JointCalibrationResult {
     int32_t manualSpanCounts;  // 沿安装正方向计算的 Manual Span。
     int32_t autoSpanCounts;    // 沿安装正方向计算的 Auto Span。
     uint32_t manualReferenceCrc; // 该关节 Manual Min/Max 的条目 CRC。
-    float currentMinDeg;       // Manual Min 对应的 URDF Min。
-    float currentMaxDeg;       // Manual Max 对应的 URDF Max。
 
     // 标定内部轨迹坐标仅用于诊断和原始采样定位；V4 Tendon LUT 横轴使用 URDF 角。
     int32_t startEncoder;  // 搜索起点磁编方向坐标，对应 startDeg。
@@ -76,7 +74,7 @@ struct JointCalibrationResult {
     uint8_t tendonLutCount; // 每路有效样本数。
     uint8_t tendonLutMotor[TENDON_LUT_ACTUATOR_COUNT]; // LUT 对应 Mxx。
     float tendonLutAngleStartDeg; // 第一个 LUT 样本的 URDF 角。
-    float tendonLutAngleStepDeg;  // 标称步长；最后一段可小于该值并终止于 currentMaxDeg。
+    float tendonLutAngleStepDeg;  // 标称步长；最后一段可小于该值并终止于 URDF Max。
     int32_t tendonLutMotorAbs[TENDON_LUT_ACTUATOR_COUNT][TENDON_LUT_MAX_SAMPLES];
 };
 

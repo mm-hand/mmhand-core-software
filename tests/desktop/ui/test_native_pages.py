@@ -199,7 +199,7 @@ def test_direct_zero_uses_backend_motor_selection_without_per_motor_buttons(page
     hand, client = page
     assert not selected.enabled
     assert not any(isinstance(e, ui.button) and e.text == 'Set ABS Zero' for e in client.elements.values())
-    snapshot.update(communication='Online', busy=False, selected_motors=[9, 10])
+    snapshot.update(communication='Online', busy=False, control_mode='IDLE', stop_latched=False, selected_motors=[9, 10])
     for motor in (9, 10):
         snapshot['motors'][motor]['online'] = True
     refresh(snapshot)
@@ -265,7 +265,8 @@ def test_shell_has_one_stop_default_recording_and_exact_navigation(page):
     assert TABS == ['Calibration', 'Control', 'Replay', 'Plot', 'Settings']
     assert tabs == [*TABS, *SUBTABS['Calibration'], *SUBTABS['Control'], *SUBTABS['Plot'], *SUBTABS['Settings']]
     assert sum('STOP' in e.text for e in buttons) == 1
-    assert next(e for e in buttons if 'STOP' in e.text).enabled
+    # The top button turns into Clear Faults and only enables with fresh P4 status.
+    assert not next(e for e in buttons if 'STOP' in e.text).enabled
     assert 'Save Data: ON' in [e.text for e in buttons]
     assert len([e for e in client.elements.values() if isinstance(e, ui.log)]) == 1
     navigation = next(e for e in client.elements.values() if isinstance(e, ui.tabs))
@@ -313,3 +314,155 @@ def test_tactile_summary_is_one_force_cell_and_full_uses_real_taxels(page):
     state.tactile_module_last_rx_ts[0] -= 1
     refresh(hand.application_snapshot())
     assert hand_svg(hand.application_snapshot()['tactile']['modules']).count('<circle ') == 0
+
+
+def label_texts(client):
+    return [element.text for element in client.elements.values()
+            if isinstance(element, ui.label) and isinstance(element.text, str)]
+
+
+def button(client, text):
+    return next(element for element in client.elements.values()
+                if isinstance(element, ui.button) and element.text == text)
+
+
+def idle_snapshot(hand):
+    """Snapshot with a fresh, idle P4 so maintenance buttons are allowed."""
+    snapshot = hand.application_snapshot()
+    snapshot.update(communication='Online', busy=False, control_mode='IDLE', stop_latched=False, device='Ready')
+    return snapshot
+
+
+def test_joint_page_detail_is_manual_urdf_json_only_in_order(page):
+    hand, client = page
+    refresh = joint_calibration.build(hand, Mock(), Mock(), Mock())
+    snapshot = idle_snapshot(hand)
+    for row in snapshot['joints']:
+        row.update(manual_min=-100, manual_max=200, span=300, urdf_span=310,
+                   min=-5.5, max=10.5, json_status='Saved', direction=1, raw=123)
+    refresh(snapshot)
+    details = [text for text in label_texts(client) if text.startswith('Manual Span:')]
+    assert len(details) == 21
+    lines = details[0].splitlines()
+    assert len(lines) == 1
+    assert lines[0].startswith('Manual Span:')
+    for marker in ('URDF Span:', 'URDF Min (deg):', 'URDF Max (deg):', 'JSON: Saved'):
+        assert marker in lines[0]
+    assert 'Raw:' not in details[0]
+    raw_labels = [element for element in client.elements.values()
+                  if isinstance(element, ui.label) and (element.text or '').startswith('Raw:')]
+    assert len(raw_labels) == 21
+    assert raw_labels[0].text == 'Raw: 123'
+    assert 'font-bold' in raw_labels[0].classes
+    direction_labels = [element for element in client.elements.values()
+                        if isinstance(element, ui.label) and (element.text or '').startswith('Dir:')]
+    assert len(direction_labels) == 21 and direction_labels[0].text == 'Dir: ↑'
+    manual_inputs = [element for element in client.elements.values()
+                     if isinstance(element, ui.input) and element.props.get('label') in ('Manual Min', 'Manual Max')]
+    assert len(manual_inputs) == 42
+    assert manual_inputs[0].value == '-100' and manual_inputs[1].value == '200'
+    assert 'Auto' not in details[0] and 'Current' not in details[0] and 'RAM' not in details[0]
+    maintenance = [element for element in client.elements.values()
+                   if isinstance(element, ui.button) and element.text in (
+                       'Set Min', 'Set Max', 'Load Joint & Motor Calibration',
+                       'Clear Manual Selected', 'Release Selected Tendons')]
+    assert len(maintenance) == 45 and all(element.enabled for element in maintenance)
+
+
+def test_joint_page_maintenance_disabled_while_controlling_or_stop_latched(page):
+    hand, client = page
+    refresh = joint_calibration.build(hand, Mock(), Mock(), Mock())
+    snapshot = idle_snapshot(hand)
+    refresh(snapshot)
+    assert button(client, 'Load Joint & Motor Calibration').enabled
+    snapshot['control_mode'] = 'FEEDBACK'
+    refresh(snapshot)
+    assert not button(client, 'Load Joint & Motor Calibration').enabled
+    assert not button(client, 'Set Min').enabled and not button(client, 'Set Max').enabled
+    snapshot['control_mode'] = 'IDLE'
+    snapshot['stop_latched'] = True
+    refresh(snapshot)
+    assert not button(client, 'Set Min').enabled
+    assert not button(client, 'Release Selected Tendons').enabled
+
+
+def test_pending_quality_badges_read_need_calibration(page):
+    hand, client = page
+    refresh = joint_calibration.build(hand, Mock(), Mock(), Mock())
+    snapshot = idle_snapshot(hand)
+    for row in snapshot['joints']:
+        row['joint_quality'] = ['PENDING']
+    refresh(snapshot)
+    badges = [element.text for element in client.elements.values() if isinstance(element, ui.badge)]
+    assert badges.count('NEED CALIBRATION') == 21
+    assert 'PENDING' not in badges
+
+
+def test_motor_page_has_compact_motor_columns_and_auto_fields(page):
+    hand, client = page
+    refresh = motor_calibration.build(hand, Mock(), Mock())
+    snapshot = idle_snapshot(hand)
+    for row in snapshot['joints']:
+        row.update(auto_min=111, auto_max=222, auto_span=105, angle=1.5)
+        row['result'] = dict(row.get('result') or {}, autoMinOffsetCounts=10, autoMaxShortfallCounts=20)
+        row['motor_quality'] = ['READY']
+    refresh(snapshot)
+    tables = [element for element in client.elements.values() if isinstance(element, ui.table)]
+    assert len(tables) == 21
+    assert [column['label'] for column in tables[0].columns] == ['Motor', 'RawNow', 'AbsNow', 'Load']
+    details = [text for text in label_texts(client) if text.startswith('Auto Min:')]
+    assert len(details) == 21
+    lines = details[0].splitlines()
+    assert len(lines) == 2
+    assert lines[0].startswith('Auto Min: 111') and 'Auto Max: 222' in lines[0]
+    assert 'Auto Span: 105' in lines[0] and 'Joint Angle:' in lines[0]
+    assert 'Return offset: 10' in lines[1] and 'Travel shortfall: 20 counts' in lines[1]
+    assert lines[1].startswith('ABS Limits:')
+    texts = ' '.join(label_texts(client))
+    assert 'Route' not in texts and 'SavedRaw' not in texts and 'BUS' not in texts
+
+
+def test_motor_calibrate_selected_passes_page_origin_and_disables_while_controlling(page):
+    hand, client = page
+    hand.request_calibration = Mock()
+    act = Mock(side_effect=lambda callback: callback())
+    refresh = motor_calibration.build(hand, act, Mock())
+    snapshot = idle_snapshot(hand)
+    refresh(snapshot)
+    calibrate = button(client, 'Calibrate Selected')
+    assert calibrate.enabled
+    click(calibrate)
+    hand.request_calibration.assert_called_once_with(origin='Motor Calibration')
+    snapshot['control_mode'] = 'DIRECT'
+    refresh(snapshot)
+    assert not calibrate.enabled
+
+
+def test_control_pages_drop_duplicate_clear_faults_and_explain_handover(page):
+    hand, client = page
+    feedback_control.build(hand, Mock())
+    direct_control.build(hand, Mock(), Mock())
+    labels = [element.text for element in client.elements.values() if isinstance(element, ui.button)]
+    assert 'Clear Faults' not in labels
+    notes = [text for text in label_texts(client) if 'Tabs only change the view' in text]
+    assert len(notes) == 2
+    assert all('Clear Faults must be pressed before enabling again' in text for text in notes)
+
+
+def test_direct_zero_disabled_while_controlling_or_stop_latched(page):
+    hand, client = page
+    hand.request_direct_zero = Mock()
+    refresh = direct_control.build(hand, Mock(), Mock())
+    snapshot = idle_snapshot(hand)
+    snapshot['selected_motors'] = [9]
+    snapshot['motors'][9].update(online=True)
+    refresh(snapshot)
+    zero = button(client, 'Reset Motor Multi-turn Position')
+    assert zero.enabled
+    snapshot['control_mode'] = 'DIRECT'
+    refresh(snapshot)
+    assert not zero.enabled
+    snapshot['control_mode'] = 'IDLE'
+    snapshot['stop_latched'] = True
+    refresh(snapshot)
+    assert not zero.enabled

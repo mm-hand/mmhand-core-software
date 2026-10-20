@@ -5,26 +5,26 @@ When asked to generate or update the bilingual AI code guide in `docs/ai/`, read
 workflow. Use committed source and the exported graph packets as evidence.
 Do not edit the generated README or HTML files directly.
 
-## Hardware status (updated 2026-10-18, evening)
+## Hardware status (updated 2026-10-20, evening)
 
-TWO fingers are now attached again: index (M15–M19, bus 0) AND middle
-(M10–M14). Servo route scan: valid=0x000FFC00, all ten controllable, no
-conflicts. Index multiturn: M15/M17/M18/M19 restored OK; M16 restore via 0x0B
-still REJECTED every connect — restore M16 or redo J12 Motor Calibration
-before running J12. Middle finger: M10–M14 all multiturn UNKNOWN after restore
-attempts — run recovery or recalibrate J08–J11 before middle-finger motion;
-known M10 LUT plateau 13–28° remains (audit marks J08 ineligible).
-OPEN BLOCKER (2026-10-18 evening): S3→P4 CAN link is down from P4's side
-(can_link_online=False, zero CAN frames, encoder_online_bitmap=0) — magnetic
-encoder feedback absent, feedback control gates refuse motion. Check CAN
-wiring/S3 boot first; servos themselves are fine. Kp re-screening on J13 is
-blocked on this. Collision detection is currently PARAMETER-DISABLED for
-testing (arm_velocity=100°/s in control_parameters.json rev63) — logic intact.
-Servo EEPROM 84/85/86 read 254/254/0 on all online index-finger motors —
-verified 2026-10-18, archive `mmhand_data/experiments/control-tuning/20261016-183731/motor-profile-readback-20261018/`.
+P4 reflashed with the current calibration/ABS refactor firmware
+(ELF SHA256 `9F9EB112AD2086F7B7488B812FF7C3CF9059939FA4B26966C205B69DF0BF15CD`).
+Servo route scan: valid=0x000FFC00, controllable=0x000FFC00, no conflicts;
+CAN link is online and encoders report online=0x0000FF00. After reloading the
+active calibration bundle, Manual and Auto valid masks are 0x00FF00 and the
+active joint scope is 0x0000FF00 (all eight joints).
+
+J14 was recalibrated alone after the release/state fix: Auto Min=9134,
+Auto Max=4129, auto span=5005 vs Manual Min=8573 / Manual Max=3758 / manual
+span=4815; autoMinOffsetCounts=-561 and autoMaxShortfallCounts=371 raise the
+return/travel warning. The fresh value matches the earlier ~9137 observation,
+so that value was not merely a stale host cache. The small negative ABS restore
+path (M10 -73, M14 -15, M19 -384) was verified against 0x0B after the fix.
+
 Control firmware: limit simplification + simplified take-up (rev63, ELF
 SHA256 `F86AAE5E07F3512973AEEFA81B051A36A8B9AB75DB7B74C18438FD3CD6DA86F8`),
-see `docs/debug/control-tuning.md` for the full record.
+see `docs/debug/control-tuning.md` for the full record. Collision detection is
+still parameter-disabled for testing (arm_velocity=100°/s); logic intact.
 
 ## ESP32 JTAG debugging (P4/S3)
 

@@ -25,6 +25,7 @@ from .calibration_snapshot import (
     CalibrationSnapshotError,
     invalidate_calibration_snapshot_scope,
     joint_mask_for_motor_mask,
+    motor_mask_for_joint_mask,
     multiturn_anchor_fields,
     read_snapshot,
     update_snapshot_multiturn_anchors,
@@ -1711,6 +1712,14 @@ class HandController:
             except (OSError, CalibrationSnapshotError) as exc:
                 log_session("MANUAL", f"desktop JSON save failed: {exc}")
                 return False
+            # Manual CRC changed: any Auto/LUT result computed against the old
+            # Manual endpoints is no longer loadable for the updated joints.
+            if updated_joint_mask:
+                self.invalidate_runtime_calibration_scope(
+                    motor_mask_for_joint_mask(updated_joint_mask),
+                    updated_joint_mask,
+                    reason="manual_reference",
+                )
         return verified
 
     def query_manual_encoder_references(self, timeout_s: float = 2.0) -> bool:
@@ -1986,6 +1995,55 @@ class HandController:
         ack = self.comm.wait_for_ack(CMD_ACTIVE_SCOPE, ACTIVE_SCOPE_ACK_TIMEOUT_S, received_after_monotonic=sent_at)
         return bool(ack is not None and int(ack[2]) == 0)
 
+    def invalidate_runtime_calibration_scope(
+        self, motor_mask: int, joint_mask: int, *, reason: str = "",
+    ) -> None:
+        """Clear the live calibration view for a scope without touching Manual.
+
+        Release/Reset Zero/rebase invalidate the JSON snapshot; the same scope
+        must disappear from the live HandModel too, otherwise Motor Calibration
+        keeps showing stale Auto/LUT values until the next app restart.
+        """
+        motor_mask = int(motor_mask) & ((1 << MOTOR_COUNT) - 1)
+        joint_mask = int(joint_mask) & ((1 << ENCODER_COUNT) - 1)
+        if not motor_mask and not joint_mask:
+            return
+        with self.state_lock:
+            state = self.current_state
+            results = list(getattr(state, "joint_calib_results", []) or [])
+            for joint in range(ENCODER_COUNT):
+                if joint_mask & (1 << joint):
+                    if joint < len(results):
+                        results[joint] = None
+            state.joint_calib_results = results
+            state.auto_calibration_valid_bitmap = (
+                int(getattr(state, "auto_calibration_valid_bitmap", 0) or 0) & ~joint_mask
+            )
+            state.calibration_warning_bitmap = (
+                int(getattr(state, "calibration_warning_bitmap", 0) or 0) & ~joint_mask
+            )
+            state.motor_abs_limit_valid_bitmap = (
+                int(getattr(state, "motor_abs_limit_valid_bitmap", 0) or 0) & ~motor_mask
+            )
+            mins = list(getattr(state, "motor_abs_limit_min", []) or [])
+            maxs = list(getattr(state, "motor_abs_limit_max", []) or [])
+            for motor in range(MOTOR_COUNT):
+                if motor_mask & (1 << motor):
+                    if motor < len(mins):
+                        mins[motor] = 0
+                    if motor < len(maxs):
+                        maxs[motor] = 0
+            state.motor_abs_limit_min = mins
+            state.motor_abs_limit_max = maxs
+            self._calibration_snapshot_anchor_valid_mask &= ~motor_mask
+            self._calibration_digest_checked_at = 0.0
+            self._calibration_digest_mtime_ns = -1
+        log_session(
+            "CALIB",
+            f"runtime calibration invalidated motor=0x{motor_mask:08X} "
+            f"joint=0x{joint_mask:06X} reason={reason or 'coordinate_change'}",
+        )
+
     def _invalidate_servo_rebase_zero_anchors(self, motor_mask: int) -> None:
         """替换坐标前后的旧 runtime / Auto 快照都不能用于恢复。"""
         with self._multiturn_io_lock:
@@ -2006,6 +2064,9 @@ class HandController:
             invalidate_calibration_snapshot_scope(
                 snapshot_path, motor_mask=motor_mask,
                 joint_mask=joint_mask_for_motor_mask(motor_mask), reason=reason,
+            )
+            self.invalidate_runtime_calibration_scope(
+                motor_mask, joint_mask_for_motor_mask(motor_mask), reason=reason,
             )
             self._calibration_snapshot_anchor_valid_mask &= ~motor_mask
             self._calibration_digest_checked_at = 0.0
@@ -2592,6 +2653,12 @@ class HandController:
             )
         )
         invalidated_joint_mask = joint_mask_for_motor_mask(reset_mask)
+        if reset_mask:
+            # The hardware turn zero changed before JSON invalidation; never let
+            # the UI keep the previous Auto/LUT view even if a later step fails.
+            self.invalidate_runtime_calibration_scope(
+                reset_mask, invalidated_joint_mask, reason="manual_prepare",
+            )
 
         # 硬件 turn0 已改变，必须先原子作废旧 Auto/LUT/ABS Limit；即使程序
         # 在放绳途中退出，下次启动也不能重新加载旧舵机坐标。Manual 端点保留。

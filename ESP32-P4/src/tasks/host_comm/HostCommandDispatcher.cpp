@@ -698,10 +698,9 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                 const uint16_t autoMinRaw = readU16BigEndian(p); p += 2;
                 const uint16_t autoMaxRaw = readU16BigEndian(p); p += 2;
                 const uint32_t incomingManualCrc = readU32BigEndian(p); p += 4;
-                const float incomingCurrentMin = readFloatBigEndian(p); p += 4;
-                const float incomingCurrentMax = readFloatBigEndian(p); p += 4;
-                (void)incomingCurrentMin;
-                (void)incomingCurrentMax;
+                // V4 工作区固定为生成的 URDF Min/Max；保留旧 current 双槽位
+                // 以维持 189-byte payload，仅跳过不保存。
+                p += 8;
 
                 const uint32_t localManualEntryCrc =
                     manualEncoderReferenceEntryCrc(
@@ -774,13 +773,13 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                             sharedData, jointIndex, result);
                     }
                     FW_LOG_INFO_PRINTF(
-                        "[UPPER] CALIB_LOAD J%02u auto=%u->%u manualCrc=0x%08lX current=%.3f..%.3f\r\n",
+                        "[UPPER] CALIB_LOAD J%02u auto=%u->%u manualCrc=0x%08lX urdf=%.3f..%.3f\r\n",
                         (unsigned)jointIndex,
                         (unsigned)result.autoMinRaw,
                         (unsigned)result.autoMaxRaw,
                         (unsigned long)result.manualReferenceCrc,
-                        result.currentMinDeg,
-                        result.currentMaxDeg);
+                        result.angleMin,
+                        result.angleMax);
                 }
             }
         }

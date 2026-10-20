@@ -1,4 +1,5 @@
-"""Motor calibration alerts remain visible until closed on every console tab."""
+"""Calibration alerts are scoped to their origin page and acknowledged once."""
+import time
 from unittest.mock import Mock
 
 import pytest
@@ -6,14 +7,12 @@ from nicegui import ui
 
 from test_native_pages import page
 from desktop.core.calibration_workflow import CalibrationWorkflowEvent
-from desktop.ui.browser_view import TABS, build_page
+from desktop.ui.browser_view import build_page
 
 
 def console(page):
     hand, client = page
     build_page(hand)
-    # Diagnostics' ui.code components create their own copy-button timers.
-    # Drive the console's actual snapshot refresh rather than the first timer.
     timers = [element for element in client.elements.values() if isinstance(element, ui.timer)
               and getattr(element.callback, '__qualname__', '') == 'build_page.<locals>.refresh']
     assert len(timers) == 1
@@ -28,11 +27,13 @@ def console(page):
     return hand, timer.callback, dialog, tabs, title, message, close
 
 
-def completed_calibration(hand, operation_id, *, warning=False, success=False, include_summary=True):
+def completed_calibration(hand, operation_id, *, warning=False, success=False,
+                          include_summary=True, origin='Joint Calibration'):
     hand._calibration_operation_id = hand._application_busy = operation_id
     hand._application_operations.append(dict(
         operation_id=operation_id, name='Selected-joint Calibration', time='12:00:00',
-        scope='J03', status='RUNNING', message='Calibrating', phase='prepare'))
+        scope='J03', status='RUNNING', message='Calibrating', phase='prepare',
+        origin=origin, finished_at=None, alert_acknowledged=False))
     status = 'SUCCESS' if success else 'WARN' if warning else 'HOST_FAILED'
     reason = 'all calibration joints completed' if warning or success else 'J03: actual servo feedback was lost'
     records = [dict(status='WARN', warning_summary=(
@@ -47,32 +48,35 @@ def click(button):
     next(listener for listener in button._event_listeners.values() if listener.type == 'click').handler(None)
 
 
-@pytest.mark.parametrize('tab', TABS)
 @pytest.mark.parametrize('warning', [False, True], ids=['failed', 'warning'])
-def test_calibration_completion_opens_persistent_popup_on_every_tab(page, tab, warning):
+def test_calibration_alert_opens_once_on_origin_page(page, warning):
     hand, refresh, dialog, tabs, title, message, close = console(page)
-    tabs.set_value(tab)
     completed_calibration(hand, 'calibration-1', warning=warning)
     refresh()
 
-    assert tabs.value == tab
     assert dialog.value
     assert dialog._props['persistent']
     if warning:
-        assert title.text == 'Motor Calibration Completed with Warnings'
+        assert title.text == 'Selected-joint Calibration completed with warnings'
         assert 'J03: excessive tendon friction' in message.text
     else:
-        assert title.text == 'Motor Calibration Failed'
+        assert title.text == 'Selected-joint Calibration failed'
         assert 'J03: actual servo feedback was lost' in message.text
         assert 'Failed joints: J03' in message.text
-    for _ in range(3):
-        refresh()
-        assert dialog.value
     click(close)
     assert not dialog.value
     for _ in range(3):
         refresh()
         assert not dialog.value
+    assert hand._application_operations[-1]['alert_acknowledged'] is True
+
+
+def test_calibration_alert_is_not_shown_on_another_page(page):
+    hand, refresh, dialog, tabs, title, message, close = console(page)
+    completed_calibration(hand, 'calibration-other', origin='Motor Calibration')
+    refresh()
+    assert not dialog.value
+    assert hand._application_operations[-1]['alert_acknowledged'] is False
 
 
 def test_pure_success_does_not_open_completion_popup(page, monkeypatch):
@@ -98,16 +102,25 @@ def test_completed_alerts_are_queued_and_each_operation_opens_once(page):
     completed_calibration(hand, 'calibration-fail')
     completed_calibration(hand, 'calibration-warn', warning=True)
     refresh()
-    assert dialog.value and title.text == 'Motor Calibration Failed'
+    assert dialog.value and title.text == 'Selected-joint Calibration failed'
     refresh()
-    assert title.text == 'Motor Calibration Failed'
+    assert title.text == 'Selected-joint Calibration failed'
     click(close)
     refresh()
-    assert dialog.value and title.text == 'Motor Calibration Completed with Warnings'
+    assert dialog.value and title.text == 'Selected-joint Calibration completed with warnings'
     click(close)
     refresh()
     assert not dialog.value
     assert len(hand._application_operations) == 2
+    assert all(item['alert_acknowledged'] for item in hand._application_operations)
+
+
+def test_stale_alert_is_not_replayed(page):
+    hand, refresh, dialog, tabs, title, message, close = console(page)
+    completed_calibration(hand, 'calibration-stale')
+    hand._application_operations[-1]['finished_at'] = time.time() - 901
+    refresh()
+    assert not dialog.value
 
 
 def test_completion_popup_does_not_use_timed_notification(page, monkeypatch):

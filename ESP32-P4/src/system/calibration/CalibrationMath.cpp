@@ -96,7 +96,7 @@ int32_t calibrationDegToEncoderCount(float deg)
 }
 
 // V4 将完整 Manual 机械行程固定映射到完整 URDF 行程。
-// Auto 端点只描述本次自动标定覆盖范围，不再改变 Current Min/Max 或实时角度比例。
+// Auto 端点只描述本次自动标定覆盖范围，不再改变工作区或实时角度比例。
 bool applyManualScaledUrdfMappingToCalibration(
     uint8_t jointIndex,
     const ManualEncoderReference& manual,
@@ -126,11 +126,10 @@ bool applyManualScaledUrdfMappingToCalibration(
     const UrdfJointLimitDeg& limit = kUrdfJointLimits[jointIndex];
     const float urdfSpanDeg = limit.maxDeg - limit.minDeg;
     const float degPerCount = urdfSpanDeg / (float)manualSpan;
-    const float currentMinDeg = limit.minDeg;
-    const float currentMaxDeg = limit.maxDeg;
-    if (!isfinite(urdfSpanDeg) || urdfSpanDeg <= 0.0f ||
-        !isfinite(degPerCount) || degPerCount <= 0.0f ||
-        !isfinite(currentMinDeg) || !isfinite(currentMaxDeg)) {
+    // V4 工作区唯一来源是生成的 URDF 静态 Min/Max，不再保存 current 范围副本。
+    if (!isfinite(limit.minDeg) || !isfinite(limit.maxDeg) ||
+        !isfinite(urdfSpanDeg) || urdfSpanDeg <= 0.0f ||
+        !isfinite(degPerCount) || degPerCount <= 0.0f) {
         return false;
     }
 
@@ -140,16 +139,14 @@ bool applyManualScaledUrdfMappingToCalibration(
     result->manualSpanCounts = manualSpan;
     result->autoSpanCounts = autoSpan;
     result->manualReferenceCrc = manualEntryCrc;
-    result->currentMinDeg = currentMinDeg;
-    result->currentMaxDeg = currentMaxDeg;
-    result->angleMin = currentMinDeg;
-    result->angleMax = currentMaxDeg;
+    result->angleMin = limit.minDeg;
+    result->angleMax = limit.maxDeg;
     result->urdfConfigCrc = kManualScaledUrdfConfigCrc;
     const float autoManualRatio = (float)autoSpan / (float)manualSpan;
     FW_LOG_INFO_PRINTF(
         "[CALIB MAP V4] J%02u dir=%d manual=%ld(%u->%u) "
         "auto=%ld(%u->%u) ratio=%.6f "
-        "urdf=[%.3f,%.3f] current=[%.3f,%.3f] crc=0x%08lX\r\n",
+        "urdf=[%.3f,%.3f] crc=0x%08lX\r\n",
         (unsigned)jointIndex,
         (int)direction,
         (long)manualSpan,
@@ -161,8 +158,6 @@ bool applyManualScaledUrdfMappingToCalibration(
         autoManualRatio,
         limit.minDeg,
         limit.maxDeg,
-        currentMinDeg,
-        currentMaxDeg,
         (unsigned long)manualEntryCrc);
     if (autoManualRatio > 1.0f) {
         FW_LOG_WARN_PRINTF(
@@ -217,11 +212,9 @@ bool mapManualScaledEncoderToUrdf(uint8_t jointIndex,
         currentRaw >= kCalibrationEncoderModulo ||
         calibration.manualSpanCounts <= 0 ||
         calibration.manualSpanCounts >= kCalibrationEncoderModulo ||
-        !isfinite(calibration.currentMinDeg) ||
-        !isfinite(calibration.currentMaxDeg) ||
-        calibration.currentMaxDeg <= calibration.currentMinDeg ||
-        fabsf(calibration.currentMinDeg - limit->minDeg) > 0.01f ||
-        fabsf(calibration.currentMaxDeg - limit->maxDeg) > 0.01f ||
+        !isfinite(calibration.angleMin) ||
+        !isfinite(calibration.angleMax) ||
+        calibration.angleMax <= calibration.angleMin ||
         fabsf(calibration.angleMin - limit->minDeg) > 0.01f ||
         fabsf(calibration.angleMax - limit->maxDeg) > 0.01f) {
         return false;

@@ -277,6 +277,19 @@ class ApplicationActions(IdResetActions):
         self.shutdown(stop_lower=True)
         self._calibration_workflow._executor.shutdown(wait=True, cancel_futures=True)
 
+    def acknowledge_calibration_alert(self, operation_id):
+        """Mark one calibration result dialog as shown; survives page reloads."""
+        if not operation_id:
+            return OperationResult(False, None, 'Missing operation id')
+        with self._application_lock:
+            for item in self._application_operations:
+                if item.get('operation_id') == operation_id:
+                    if item.get('calibration_alert'):
+                        item['alert_acknowledged'] = True
+                        return OperationResult(True, None, 'Calibration alert acknowledged')
+                    return OperationResult(False, None, 'Operation has no calibration alert')
+        return OperationResult(False, None, 'Unknown operation')
+
     def log_operation(self, message):
         log_session('APP', message)
 
@@ -360,7 +373,8 @@ class ApplicationActions(IdResetActions):
             for item in self._application_operations:
                 if item['operation_id'] == operation_id:
                     item.update(status='SUCCESS' if ok else 'FAILED', message=str(message),
-                                phase=phase or ('complete' if ok else 'failed'))
+                                phase=phase or ('complete' if ok else 'failed'),
+                                finished_at=time.time())
                     break
             self._last_operation_message = str(message)
             log_session('APP', f'{operation_id} {"SUCCESS" if ok else "FAILED"}: {message}')
@@ -528,6 +542,64 @@ class ApplicationActions(IdResetActions):
             self._selected_joints = chosen
         return OperationResult(True, None, 'Scope updated; the active operation was cancelled' if changed and busy else 'Scope updated')
 
+    def _release_control_owner(self, epoch, *, purpose='control switch'):
+        """Release an active motion owner through the normal P4 handover path.
+
+        This is deliberately not STOP: it does not latch E-STOP and does not
+        clear faults. It is the same ownership handover used by ENABLE.
+        """
+        state = self.get_state_snapshot()
+        if self._estop_requested_at:
+            return False, 'Device is stopped (E-STOP latched); use the top-right Clear Faults button first'
+        allowed = (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE, SYSTEM_STATE_READY,
+                   SYSTEM_STATE_RECOVERY_REQUIRED)
+        if not state.control_enabled and not state.servo_target_owner:
+            return True, ''
+        with self._application_lock:
+            if epoch != self._application_epoch:
+                return False, f'{purpose} cancelled'
+            self.request_ros_input(False)
+            self.cancel_replay_motion(purpose)
+            self.invalidate_joint_commands()
+            self.invalidate_direct_commands()
+            sent_at = time.monotonic()
+            if not self.comm.send_command('control_release'):
+                return False, 'Control handover was not queued'
+        ack = self.comm.wait_for_ack(
+            CMD_CONTROL_RELEASE, timeout_s=1, received_after_monotonic=sent_at)
+        if not ack or ack[2] not in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED):
+            return False, 'P4 did not acknowledge control handover'
+        confirmed = self._wait_application(
+            lambda s: self._fresh_application_state()
+            and s.received_at('system_status_last_rx_ts') >= sent_at
+            and not s.control_enabled and not s.servo_target_owner
+            and s.system_state in allowed,
+            epoch,
+        )
+        if not confirmed:
+            return False, 'P4 did not release the old control owner'
+        return True, 'Control released'
+
+    def _prepare_maintenance_switch(self, epoch):
+        """Automatically leave Feedback/Direct control before a maintenance action."""
+        state = self.get_state_snapshot()
+        if self._estop_requested_at:
+            return False, 'Device is stopped (E-STOP latched); use the top-right Clear Faults button first'
+        if state.control_enabled or state.servo_target_owner:
+            released, message = self._release_control_owner(epoch, purpose='maintenance switch')
+            if not released:
+                return False, message
+        allowed = (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE, SYSTEM_STATE_READY,
+                   SYSTEM_STATE_RECOVERY_REQUIRED)
+        confirmed = self._wait_application(
+            lambda s: self._fresh_application_state()
+            and not s.control_enabled and not s.servo_target_owner
+            and s.system_state in allowed,
+            epoch, 3,
+        )
+        return (True, 'Ready for maintenance') if confirmed else (
+            False, 'P4 did not reach a stopped maintenance state')
+
     def _prepare_control_switch(self, epoch):
         state = self.get_state_snapshot()
         if self._estop_requested_at:
@@ -538,23 +610,10 @@ class ApplicationActions(IdResetActions):
             return False, 'A maintenance or recovery operation owns the device'
         if not state.control_enabled and not state.servo_target_owner:
             return self._synchronize_control_parameters(epoch)
-        with self._application_lock:
-            if epoch != self._application_epoch:
-                return False, 'Control switch cancelled'
-            self.request_ros_input(False)
-            self.cancel_replay_motion('control mode switch')
-            self.invalidate_joint_commands()
-            self.invalidate_direct_commands()
-            sent_at = time.monotonic()
-            if not self.comm.send_command('control_release'):
-                return False, 'Control handover was not queued'
-        ack = self.comm.wait_for_ack(CMD_CONTROL_RELEASE, timeout_s=1, received_after_monotonic=sent_at)
-        if not ack or ack[2] not in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED):
-            return False, 'P4 did not acknowledge control handover'
-        confirmed = self._wait_application(lambda s: self._fresh_application_state()
-            and s.received_at('system_status_last_rx_ts') >= sent_at and not s.control_enabled and not s.servo_target_owner
-            and s.system_state in allowed[:4], epoch)
-        return self._synchronize_control_parameters(epoch) if confirmed else (False, 'P4 did not release the old control owner')
+        released, message = self._release_control_owner(epoch, purpose='control mode switch')
+        if not released:
+            return False, message
+        return self._synchronize_control_parameters(epoch)
 
     def request_enable(self):
         joints = self._selected_joints
@@ -773,6 +832,10 @@ class ApplicationActions(IdResetActions):
         def capture(epoch):
             state = clicked_state
             status('Capturing…')
+            switched, message = self._prepare_maintenance_switch(epoch)
+            if not switched:
+                status(message)
+                return False, message
             if capture_connection != self._controller.get_servo_abs_zero_generation_state()[-1]:
                 return False, 'P4 connection changed; capture the endpoint again.'
             if not valid_at_click:
@@ -852,9 +915,9 @@ class ApplicationActions(IdResetActions):
         def clear(epoch):
             if not joints:
                 return False, 'Select joints'
-            state = self.get_state_snapshot()
-            if state.control_enabled or state.servo_target_owner:
-                return False, 'Press STOP and wait until the device is stationary'
+            switched, message = self._prepare_maintenance_switch(epoch)
+            if not switched:
+                return False, message
             if not self.query_manual_encoder_references():
                 return False, 'Manual readback failed'
             state = self.get_state_snapshot()
@@ -875,11 +938,14 @@ class ApplicationActions(IdResetActions):
             return ok, 'Selected Manual references cleared; other joints preserved' if ok else 'Clear or save failed. Check the device readback.'
         return self.submit_operation('Clear Manual selected', clear)
 
-    def request_calibration(self):
+    def request_calibration(self, origin='Motor Calibration'):
         with self._application_lock:
             if self._application_busy or self._calibration_workflow.is_host_calibration_active():
                 return OperationResult(False, None, 'The current operation is still finishing')
             state = self.get_state_snapshot()
+            if self._estop_requested_at:
+                return OperationResult(False, None,
+                    'Device is stopped (E-STOP latched); use the top-right Clear Faults button first')
             joints = self._selected_joints
             mask = sum(1 << j for j in joints)
             if not mask or not self._fresh_application_state():
@@ -899,14 +965,40 @@ class ApplicationActions(IdResetActions):
             self._application_busy = operation_id
             for j in joints:
                 self._motor_transactions[j] = 'PENDING'
-            self._application_operations.append({'operation_id': operation_id, 'name': 'Selected-joint Calibration',
-                                                 'time': time.strftime('%H:%M:%S'), 'scope': f'Joints 0x{mask:06X}',
-                                                 'status': 'PENDING', 'message': 'Preparing', 'phase': 'prepare'})
-            ok = self.begin_calibration_workflow(joint_mask=mask, motor_mask=motors, reset_motor_mask=motors)
-            if not ok:
-                self._finish_application_operation(operation_id, False, 'Calibration transaction rejected')
-                self._calibration_operation_id = None
-                return OperationResult(False, None, 'Calibration transaction rejected')
+            self._application_operations.append({
+                'operation_id': operation_id, 'name': 'Selected-joint Calibration',
+                'time': time.strftime('%H:%M:%S'), 'scope': f'Joints 0x{mask:06X}',
+                'status': 'PENDING', 'message': 'Preparing', 'phase': 'prepare',
+                'origin': origin, 'finished_at': None, 'alert_acknowledged': False,
+            })
+
+            def start_calibration():
+                epoch = self._application_epoch
+                switched, message = self._prepare_maintenance_switch(epoch)
+                if not switched:
+                    self._finish_application_operation(operation_id, False, message)
+                    with self._application_lock:
+                        self._calibration_operation_id = None
+                    return
+                if epoch != self._application_epoch:
+                    self._finish_application_operation(operation_id, False, 'Calibration cancelled')
+                    with self._application_lock:
+                        self._calibration_operation_id = None
+                    return
+                ok = self.begin_calibration_workflow(
+                    joint_mask=mask, motor_mask=motors, reset_motor_mask=motors)
+                if not ok:
+                    self._finish_application_operation(
+                        operation_id, False, 'Calibration transaction rejected')
+                    with self._application_lock:
+                        self._calibration_operation_id = None
+
+            if state.control_enabled or state.servo_target_owner:
+                threading.Thread(
+                    target=start_calibration, name='mmhand-calibration-prepare',
+                    daemon=True).start()
+            else:
+                start_calibration()
             return OperationResult(True, operation_id, 'Selected-joint calibration accepted')
 
     def _application_calibration_event(self, event):
@@ -979,12 +1071,15 @@ class ApplicationActions(IdResetActions):
                         messages.append(summary['message'])
                     elif warned:
                         messages.append('Calibration ended with warnings. Check Motor Calibration and Diagnostics for details.')
-                    alert = dict(title='Motor Calibration Failed' if failed else 'Motor Calibration Completed with Warnings',
-                                 message='\n\n'.join(message for message in messages if message),
-                                 severity='negative' if failed else 'warning')
+                    alert = dict(
+                        title=('Selected-joint Calibration failed' if failed else
+                               'Selected-joint Calibration completed with warnings'),
+                        message='\n\n'.join(message for message in messages if message),
+                        severity='negative' if failed else 'warning')
                     for item in self._application_operations:
                         if item['operation_id'] == operation_id:
                             item['calibration_alert'] = alert
+                            item['alert_acknowledged'] = False
                 self._finish_application_operation(operation_id, event.ok, event.message,
                                                    phase=terminal)
                 self._calibration_operation_id = None
@@ -1163,9 +1258,9 @@ class ApplicationActions(IdResetActions):
         if not motor_mask:
             return OperationResult(False, None, 'Select joints before releasing their tendons')
         def release(epoch):
-            state = self.get_state_snapshot()
-            if state.control_enabled or state.servo_target_owner or epoch != self._application_epoch:
-                return False, 'Stop motion before releasing selected tendons'
+            switched, message = self._prepare_maintenance_switch(epoch)
+            if not switched:
+                return False, message
             result = self.manual_prepare_all_motors(
                 motor_mask=motor_mask,
                 cancelled=lambda: epoch != self._application_epoch,
@@ -1212,8 +1307,9 @@ class ApplicationActions(IdResetActions):
             state = self.get_state_snapshot()
             if not preview or self._application_busy or not self._fresh_application_state():
                 return OperationResult(False, None, 'Import requires a validated file and fresh, idle P4 connection')
-            if state.control_enabled or state.servo_target_owner or state.system_state not in (0, 1, 5, 9):
-                return OperationResult(False, None, 'Stop motion before loading calibration')
+            if self._estop_requested_at:
+                return OperationResult(False, None,
+                    'Device is stopped (E-STOP latched); use the top-right Clear Faults button first')
             operation_id = uuid4().hex[:12]
             from .calibration_snapshot import parse_mask
             payload = preview['payload']
@@ -1224,11 +1320,31 @@ class ApplicationActions(IdResetActions):
             self._import_operation_id = self._application_busy = operation_id
             self._application_operations.append({'operation_id': operation_id, 'name': 'Load Calibration',
                 'time': time.strftime('%H:%M:%S'), 'scope': f"File joints 0x{self._import_scope:06X}",
-                'status': 'RUNNING', 'phase': 'import', 'message': 'Restoring device calibration'})
-            if not self.begin_calibration_import(deepcopy(preview['payload']), preview['name']):
-                self._finish_application_operation(operation_id, False, 'Import transaction is busy')
-                self._import_operation_id = None
-                return OperationResult(False, None, 'Import transaction is busy')
+                'status': 'RUNNING', 'phase': 'import', 'message': 'Restoring device calibration',
+                'origin': 'Joint Calibration', 'finished_at': None, 'alert_acknowledged': False})
+
+            def start_import():
+                epoch = self._application_epoch
+                switched, message = self._prepare_maintenance_switch(epoch)
+                if not switched:
+                    self._finish_application_operation(operation_id, False, message)
+                    with self._application_lock:
+                        self._import_operation_id = None
+                    return
+                if epoch != self._application_epoch:
+                    self._finish_application_operation(operation_id, False, 'Import cancelled')
+                    with self._application_lock:
+                        self._import_operation_id = None
+                    return
+                if not self.begin_calibration_import(deepcopy(preview['payload']), preview['name']):
+                    self._finish_application_operation(operation_id, False, 'Import transaction is busy')
+                    with self._application_lock:
+                        self._import_operation_id = None
+
+            if state.control_enabled or state.servo_target_owner:
+                threading.Thread(target=start_import, name='mmhand-import-prepare', daemon=True).start()
+            else:
+                start_import()
             return OperationResult(True, operation_id, 'Calibration import started')
 
     def _application_direct(self, targets, epoch):

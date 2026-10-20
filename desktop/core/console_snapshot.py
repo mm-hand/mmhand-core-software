@@ -55,6 +55,34 @@ def motor_quality(valid, result, fresh=True, *, joint=None):
     return list(dict.fromkeys(warnings)) or ['READY']
 
 
+def calibration_status_badge(state, fresh=True):
+    """Stable calibration completeness over the installed/manual joint scope.
+
+    The denominator must not follow encoder_online_bitmap: CAN telemetry can
+    briefly report a different set of encoders, which made the badge jump
+    between 0/8 and 0/13. Manual endpoints and the loaded active scope define
+    the joints that actually belong to this hand/calibration.
+    """
+    if not fresh:
+        return 'UNKNOWN'
+    if getattr(state, 'calib_status', '') in ('PENDING', 'RUNNING'):
+        return 'CALIBRATING'
+    count = len(getattr(state, 'encoders', []) or [])
+    mask = (1 << count) - 1 if count else 0
+    known = (
+        int(getattr(state, 'manual_reference_valid_bitmap', 0) or 0)
+        | int(getattr(state, 'active_joint_mask', 0) or 0)
+    ) & mask
+    if not known:
+        return 'NEED CALIBRATION'
+    auto = int(getattr(state, 'auto_calibration_valid_bitmap', 0) or 0) & known
+    auto_count = auto.bit_count()
+    known_count = known.bit_count()
+    if auto_count == known_count:
+        return f'READY {auto_count}/{known_count}'
+    return f'NEED CALIBRATION {auto_count}/{known_count}'
+
+
 def enrich_snapshot(hand, state, snapshot, now, fresh):
     control_known = fresh and state.has_active_scope_status
     control_active = state.control_enabled and state.servo_target_owner == SERVO_TARGET_OWNER_CONTROL
@@ -62,6 +90,9 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
                        and state.system_state == SYSTEM_STATE_RUN_FEEDBACK)
     direct_active = (control_active and state.control_mode == ControlMode.DIRECT_MOTOR.value
                      and state.system_state == SYSTEM_STATE_RUN_DIRECT)
+    snapshot['control_mode'] = ('UNKNOWN' if not control_known else
+                                'FEEDBACK' if feedback_active else
+                                'DIRECT' if direct_active else 'IDLE')
     for row in snapshot['joints']:
         j, draft = row['joint'], row['draft']
         row['feedback_control_status'] = ('UNKNOWN' if not control_known else
@@ -92,7 +123,10 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
                    span=span, urdf_span=urdf_span, difference=abs(span - urdf_span) if span is not None else None,
                    joint_quality=quality, motor_quality=motor_status, motors=list(joint_motors(j)),
                    auto_min=result.get('autoMinRaw'), auto_max=result.get('autoMaxRaw'),
-                   current_min=result.get('currentMinDeg'), result=result,
+                   auto_span=(result.get('autoSpanCounts')
+                              or result.get('assemblyAutoSpanCounts')),
+                   result=result,
+                   json_status='Saved' if persisted and row['manual_valid'] else 'Unknown',
                    persistence=persistence,
                    encoder='FAULT' if fresh and state.encoder_fault_bitmap & (1 << j) else
                            'ONLINE' if fresh and state.has_encoder_health_status and state.encoder_online_bitmap & (1 << j) else 'UNKNOWN',
@@ -142,8 +176,9 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
         duration_s=max(0, now - hand._recording_started_at) if hand._recorder.is_running() else 0,
         error=hand._recording_error, finalizing=bool(hand._recording_thread and hand._recording_thread.is_alive()))
     fault_fresh = fresh and state.has_fault_status_data and 0 <= now - state.fault_status_last_rx_ts <= 0.6
+    calibration_badge = calibration_status_badge(state, fresh)
     snapshot['badges'] = {
-        'System': snapshot['device'], 'Calibration': state.calib_status if fresh else 'UNKNOWN',
+        'System': snapshot['device'], 'Calibration': calibration_badge,
         'Overload': 'ACTIVE' if fault_fresh and any(state.servo_overload_fault) or fresh and state.has_servo_route_status and state.servo_bus_overload_mask else 'CLEAR' if fault_fresh and state.has_servo_route_status else 'UNKNOWN',
         'Collision': 'HOLD' if fresh and state.feedback_collision_hold_bitmap else 'ARMED' if fresh and state.feedback_collision_armed_bitmap else 'OFF' if fresh and state.has_feedback_collision_status else 'UNKNOWN',
         'Multi-turn': 'UNKNOWN' if not fresh or not state.has_connectivity_status or not state.servo_online_bitmap else 'MISSING' if state.multi_turn_unknown_bitmap & state.servo_online_bitmap else 'KNOWN'}
@@ -187,4 +222,5 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
                     difference=row['difference'], raw_result=row['result'], thresholds={'OFFSET': '>360', 'WEAK RETURN': '≥350', 'HIGH FRICTION': '≥300'},
                     guidance='Check installation, spring return, tendon routing and preload. Labels describe symptoms, not measured force.')))
     snapshot['issues'] = issues
+    snapshot['stop_latched'] = bool(getattr(hand, '_estop_requested_at', 0.0))
     return snapshot

@@ -25,7 +25,7 @@ bool calibrationHasUsableTendonLut(const JointCalibrationResult& calibration,
 }
 
 // 新 LUT 使用固定 5° 标称步长，最后一个样本可能是不足 5° 的 URDF Max。
-// 旧快照的 nominalLast 与 currentMaxDeg 相同，因此仍按原均匀步长解释。
+// V4 中 angleMax 恒等于生成的 URDF Max，因此末段按同一 URDF 上限解释。
 float tendonLutSampleAngleDeg(const JointCalibrationResult& calibration,
                               uint8_t sampleIndex)
 {
@@ -33,10 +33,10 @@ float tendonLutSampleAngleDeg(const JointCalibrationResult& calibration,
         calibration.tendonLutAngleStepDeg * (float)sampleIndex;
     const uint8_t lastIndex = calibration.tendonLutCount - 1U;
     if (sampleIndex == lastIndex &&
-        isfinite(calibration.currentMaxDeg) &&
-        calibration.currentMaxDeg > calibration.tendonLutAngleStartDeg &&
-        calibration.currentMaxDeg < nominalDeg) {
-        return calibration.currentMaxDeg;
+        isfinite(calibration.angleMax) &&
+        calibration.angleMax > calibration.tendonLutAngleStartDeg &&
+        calibration.angleMax < nominalDeg) {
+        return calibration.angleMax;
     }
     return nominalDeg;
 }

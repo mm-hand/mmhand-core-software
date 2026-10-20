@@ -15,7 +15,7 @@ def _result(joint, *, rows=None, start=-2.5, step=5.0, maximum=7.5):
         'tendonLutValid': True, 'tendonLutCount': 3,
         'tendonLutMotor': list(joint_motors(joint)),
         'tendonLutAngleStartDeg': start, 'tendonLutAngleStepDeg': step,
-        'currentMaxDeg': maximum,
+        'angleMax': maximum,
         'tendonLutMotorAbs': rows or [[0, 1, 2], [0, -1, -2]],
     }
 
@@ -92,7 +92,7 @@ def test_receipt_latency_counts_toward_original_fifty_ms_period(duration, expect
     assert io.releases == 1
 
 
-def test_last_short_sample_uses_current_max_for_interpolation():
+def test_last_short_sample_uses_static_angle_max_for_interpolation():
     io = _IO((0,))
     io.state.joint_calib_results[0] = _result(
         0, rows=[[0, 10, 20], [0, -10, -20]], start=-8.0, step=5.0, maximum=1.0)

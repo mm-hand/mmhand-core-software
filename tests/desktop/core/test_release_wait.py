@@ -186,6 +186,31 @@ def test_motion_timeout_reports_reached_mask_and_diagnostics(monkeypatch):
     assert _sent_reset(controller)
 
 
+def test_release_clears_runtime_calibration_but_keeps_manual(monkeypatch):
+    controller, state, mask = make_controller(monkeypatch)
+    state.joint_calib_results[2] = {'joint': 2, 'success': True, 'manualSpanCounts': 4000}
+    state.auto_calibration_valid_bitmap = 1 << 2
+    state.motor_abs_limit_valid_bitmap = mask
+    state.motor_abs_limit_min[3] = -1234
+    state.motor_abs_limit_max[3] = 4321
+    state.manual_reference_valid_bitmap = 1 << 2
+    state.manual_reference_min_raw[2] = 8573
+    state.manual_reference_max_raw[2] = 12000
+    with feedback_ticker(state):
+        controller.comm.send_command.side_effect = accepted_send(state, mask)
+        result = controller.manual_prepare_all_motors()
+    assert result.ok, result.message
+    assert state.joint_calib_results[2] is None
+    assert not state.auto_calibration_valid_bitmap & (1 << 2)
+    assert not state.calibration_warning_bitmap & (1 << 2)
+    assert not state.motor_abs_limit_valid_bitmap & mask
+    assert state.motor_abs_limit_min[3] == 0
+    assert state.motor_abs_limit_max[3] == 0
+    assert state.manual_reference_valid_bitmap & (1 << 2)
+    assert state.manual_reference_min_raw[2] == 8573
+    assert state.manual_reference_max_raw[2] == 12000
+
+
 def test_repeat_release_is_idempotent_and_does_not_reset_again(monkeypatch):
     controller, state, mask = make_controller(monkeypatch)
     with feedback_ticker(state):

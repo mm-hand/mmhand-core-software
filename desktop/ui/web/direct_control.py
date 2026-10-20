@@ -8,7 +8,8 @@
 禁止依赖：禁止直接操作协议、串口和控制器。
 """
 from nicegui import ui
-from .common import FINGERS, finger_cards, selection, target_editor, label, show, quality
+from .common import (FINGERS, finger_cards, selection, target_editor, label, show, quality,
+                     maintenance_allowed, control_note)
 
 def build(hand, act, confirm):
     drafts, refreshers, initialized = {}, [], set()
@@ -19,13 +20,13 @@ def build(hand, act, confirm):
         act(lambda: hand.request_motors({m: drafts[m]['value'] for m in selected}))
     with ui.row().classes('page-toolbar'):
         ui.button('ENABLE Selected', on_click=lambda: act(hand.request_direct_enable))
-        ui.button('Clear Faults', on_click=lambda: act(hand.request_clear_faults))
         ui.button('Send Selected', on_click=send_selected)
         zero_selected = ui.button('Reset Motor Multi-turn Position', on_click=lambda: act(hand.request_direct_zero))
         zero_selected.set_enabled(False)
         with zero_selected:
-            ui.tooltip('Set the current positions as ABS 0. Related motor calibration will be cleared.')
+            ui.tooltip('Set the current positions as ABS 0. Related motor calibration will be cleared. Press STOP first; Clear Faults before re-enable.')
         ui.label('Logical ABS (counts)').classes('text-sm text-slate-600')
+    control_note()
     with finger_cards():
         for name, joints in FINGERS:
             indices = [m['motor'] for m in initial['motors'] if m['joint'] in joints]
@@ -69,7 +70,7 @@ def build(hand, act, confirm):
                     refreshers.append(refresh)
     def refresh(snapshot):
         selected = snapshot['selected_motors']
-        zero_selected.set_enabled(snapshot['communication'] == 'Online' and not snapshot['busy'] and bool(selected)
+        zero_selected.set_enabled(maintenance_allowed(snapshot) and bool(selected)
                                   and all(snapshot['motors'][m]['online'] for m in selected))
         for update in refreshers:
             update(snapshot)

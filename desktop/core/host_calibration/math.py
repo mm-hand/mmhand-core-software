@@ -116,7 +116,6 @@ def apply_manual_scaled_mapping(io, joint: int, result: dict,
     result.update(mappingVersion=4, autoMinRaw=auto_min_raw, autoMaxRaw=auto_max_raw,
                   manualSpanCounts=manual_span, autoSpanCounts=auto_span,
                   manualReferenceCrc=manual_entry_crc(joint, manual),
-                  currentMinDeg=urdf_min, currentMaxDeg=urdf_max,
                   angleMin=urdf_min, angleMax=urdf_max,
                   urdfConfigCrc=int(io.urdf_config_crc()), encoderDirection=direction)
     return True
@@ -137,12 +136,14 @@ def map_manual_scaled_encoder_to_urdf(io, joint: int, result: dict,
             or not all(0 <= value < 16384 for value in (lo, hi, raw))
             or not 0 < stored_span < 16384):
         return None
+    # host 结果只保留静态 URDF/angle 字段；旧结果里多余的 currentMinDeg/
+    # currentMaxDeg 不再参与反馈映射校验。
     values = [float(result.get(key, math.nan))
-              for key in ("currentMinDeg", "currentMaxDeg", "angleMin", "angleMax")]
+              for key in ("angleMin", "angleMax")]
     if (not all(math.isfinite(v) for v in values)
             or values[1] <= values[0]
             or any(abs(f32(v - expected)) > f32(0.01)
-                   for v, expected in zip(values, (urdf_min, urdf_max, urdf_min, urdf_max)))):
+                   for v, expected in zip(values, (urdf_min, urdf_max)))):
         return None
     span = directed_encoder_delta(lo, hi, direction)
     if not 0 < span < 16384 or span != stored_span:

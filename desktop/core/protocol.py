@@ -481,10 +481,12 @@ def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
     idx += 2
     result['manualReferenceCrc'] = struct.unpack('>I', payload[idx:idx + 4])[0]
     idx += 4
-    result['currentMinDeg'] = _unpack_float_be(payload[idx:idx + 4])
-    idx += 4
-    result['currentMaxDeg'] = _unpack_float_be(payload[idx:idx + 4])
-    idx += 4
+    # V4 wire 仍携带 currentMinDeg/currentMaxDeg 两个 float 保留槽；host 不再维护
+    # current 概念，读取后立即跳过，工作区统一使用静态 URDF Min/Max。保持 idx
+    # 前进 8 字节，后面的装配告警字段偏移和 202-byte payload 长度不变。
+    _unpack_float_be(payload[idx:idx + 4])
+    _unpack_float_be(payload[idx + 4:idx + 8])
+    idx += 8
     result['hasManualScaledV4Fields'] = True
     result['assemblyWarningReason'] = CALIB_WARN_NONE
     result['autoMinOffsetCounts'] = 0
@@ -1126,8 +1128,10 @@ def build_calib_load_joint_cmd(result: dict) -> bytes:
     payload.extend(struct.pack(">H", auto_min_raw))
     payload.extend(struct.pack(">H", auto_max_raw))
     payload.extend(struct.pack(">I", int(result.get("manualReferenceCrc", 0)) & 0xFFFFFFFF))
-    payload.extend(_pack_float_be(float(result.get("currentMinDeg", 0.0))))
-    payload.extend(_pack_float_be(float(result.get("currentMaxDeg", 0.0))))
+    # 下行仍写 8 字节 currentMinDeg/currentMaxDeg 保留槽（固定 0.0）；host 已删除
+    # current 概念，保留槽只为维持 CMD_CALIB_LOAD_JOINT 的 189-byte wire 兼容。
+    payload.extend(_pack_float_be(0.0))
+    payload.extend(_pack_float_be(0.0))
     return _build_command_frame(CMD_CALIB_LOAD_JOINT, bytes(payload))
 
 

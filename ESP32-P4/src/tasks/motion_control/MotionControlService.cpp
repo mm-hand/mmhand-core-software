@@ -565,13 +565,13 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                                 kUpperWorkspaceWarningCounts,
                                 outsideCounts);
                             FW_LOG_WARN_PRINTF(
-                                "[CONTROL] UPPER_WORKSPACE_WARN J%02u outside=%ld threshold=%ld raw=%u mapped=%.3f max=%.3f\r\n",
+                                "[CONTROL] UPPER_WORKSPACE_WARN J%02u outside=%ld threshold=%ld raw=%u mapped=%.3f urdfMax=%.3f\r\n",
                                 (unsigned)i,
                                 (long)outsideCounts,
                                 (long)kUpperWorkspaceWarningCounts,
                                 (unsigned)sensorData.encoderValues[i],
                                 mappedDeg,
-                                calib.currentMaxDeg);
+                                kUrdfJointLimits[i].maxDeg);
                         }
                     } else {
                         if (warning.recovered) {

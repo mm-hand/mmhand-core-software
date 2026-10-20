@@ -76,7 +76,10 @@ def test_full_manual_mapping_preserved_and_auto_endpoints_do_not_rescale():
     io = MathIO()
     result = build_calibration_result(io, 1, 16200, 0, 3500, -100, 400, 2000)
     assert result["mappingVersion"] == 4
-    assert (result["currentMinDeg"], result["currentMaxDeg"]) == (0.0, 83.0)
+    # host 结果只保留静态 URDF/angle 字段，currentMin/Max 概念已删除。
+    assert (result["angleMin"], result["angleMax"]) == (0.0, 83.0)
+    assert "currentMinDeg" not in result
+    assert "currentMaxDeg" not in result
     assert result["autoMinRaw"] == 16200
     assert result["autoMaxRaw"] == 3500
     assert result["manualSpanCounts"] == 4384

@@ -87,6 +87,8 @@ def test_joint_calibration_current_protocol_round_trip():
     assert frame[0] == PROTOCOL_HEADER
     assert frame[2] == CMD_CALIB_LOAD_JOINT
     assert frame[-1] == PROTOCOL_TAIL
+    # currentMin/Max 已从 host 概念删除，但下行仍保留 8 字节槽位：wire 长度不变。
+    assert len(frame[3:-1]) == 189
 
     parsed = parse_joint_calib_snapshot_packet(frame[3:-1] + bytes(13))
     assert parsed is not None
@@ -98,8 +100,9 @@ def test_joint_calibration_current_protocol_round_trip():
     assert parsed["autoMinRaw"] == 1200
     assert parsed["autoMaxRaw"] == 4600
     assert parsed["manualReferenceCrc"] == 0x12345678
-    assert parsed["currentMinDeg"] == 0.0
-    assert parsed["currentMaxDeg"] == 63.0
+    # 上行解析读取后跳过 current 两个 float，结果 dict 不再暴露 current 字段。
+    assert "currentMinDeg" not in parsed
+    assert "currentMaxDeg" not in parsed
     assert parsed["hasManualScaledV4Fields"] is True
     assert parsed["hasAssemblyWarningFields"] is True
     assert parsed["tendonLutValid"] is True

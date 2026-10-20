@@ -8,7 +8,8 @@ from desktop.core.calibration_workflow import CalibrationWorkflowEvent
 def begin_operation(hand, operation_id='calibration-1'):
     hand._calibration_operation_id = hand._application_busy = operation_id
     item = dict(operation_id=operation_id, name='Selected-joint Calibration', time='12:00:00',
-                scope='Joints 0x00000F', status='RUNNING', message='Calibrating', phase='prepare')
+                scope='Joints 0x00000F', status='RUNNING', message='Calibrating', phase='prepare',
+                origin='Motor Calibration', finished_at=None, alert_acknowledged=False)
     hand._application_operations.append(item)
     return item
 
@@ -28,7 +29,7 @@ def test_failed_calibration_keeps_actual_root_cause_and_failed_joints(hand, term
     assert item['status'] == 'FAILED'
     assert item['message'] == reason
     alert = hand.application_snapshot()['operations'][-1]['calibration_alert']
-    assert alert['title'] == 'Motor Calibration Failed'
+    assert alert['title'] == 'Selected-joint Calibration failed'
     assert alert['severity'] == 'negative'
     assert reason in alert['message']
     assert 'Failed joints: J03' in alert['message']
@@ -68,7 +69,7 @@ def test_warning_completion_aggregates_each_record_summary(hand):
     completion(hand, terminal_status='WARN', records=records)
     alert = item['calibration_alert']
     assert item['status'] == 'SUCCESS'
-    assert alert['title'] == 'Motor Calibration Completed with Warnings'
+    assert alert['title'] == 'Selected-joint Calibration completed with warnings'
     assert alert['severity'] == 'warning'
     assert 'all calibration joints completed' in alert['message']
     for text in ('Phase 1/2', 'Phase 2/2', 'J00: excessive tendon friction', 'J20: excessive tendon friction'):
@@ -94,6 +95,21 @@ def test_warning_summary_is_not_suppressed_by_success_terminal(hand):
         status='SUCCESS', warning_summary=dict(ready=True, message='J04: high friction'))])
     assert item['calibration_alert']['severity'] == 'warning'
     assert 'J04: high friction' in item['calibration_alert']['message']
+
+
+def test_alert_acknowledgement_is_idempotent_and_stored(hand):
+    item = begin_operation(hand)
+    completion(hand, ok=False, terminal_status='HOST_FAILED',
+               failed_joint_mask=8, message='J03 failed')
+    assert item['alert_acknowledged'] is False
+    assert item['finished_at'] is not None
+    first = hand.acknowledge_calibration_alert(item['operation_id'])
+    second = hand.acknowledge_calibration_alert(item['operation_id'])
+    assert first.accepted and second.accepted
+    assert item['alert_acknowledged'] is True
+    snapshot = hand.application_snapshot()['operations'][-1]
+    assert snapshot['alert_acknowledged'] is True
+    assert snapshot['origin'] == 'Motor Calibration'
 
 
 def test_pure_successful_calibration_has_no_alert(hand):
