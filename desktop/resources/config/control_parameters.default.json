@@ -1,14 +1,31 @@
 {
-  "schema_version": 1,
+  "schema_version": 3,
   "revision": 1,
+  "joint_kp": {
+    "aa": 1.0,
+    "mcp": 1.0,
+    "pip": 1.0,
+    "dip": 1.2,
+    "cmc": 1.0
+  },
+  "joint_ki": {
+    "aa": 0.0,
+    "mcp": 0.0,
+    "pip": 0.0,
+    "dip": 0.0,
+    "cmc": 0.0
+  },
+  "joint_kd": {
+    "aa": 0.0,
+    "mcp": 0.0,
+    "pip": 0.0,
+    "dip": 0.0,
+    "cmc": 0.0
+  },
   "single_tendon": {
-    "kp": 0.8,
-    "ki_per_s": 0.0,
     "integral_limit_counts": 100
   },
   "dual_tendon": {
-    "kp": 0.8,
-    "ki_per_s": 0.0,
     "integral_limit_counts": 100,
     "pair_recovery_gain": 0.05
   },

@@ -13,18 +13,25 @@ def test_persist_validate_restore_and_invalid_current_is_not_overwritten(tmp_pat
     store=ControlParameterStore(path)
     original=store.snapshot()
     proposal=deepcopy({key:value for key,value in original.items() if key!='crc32'})
-    proposal['single_tendon']['kp']=0.5
+    proposal['joint_kp']['aa']=2.0
     saved=store.save(proposal)
     assert saved['revision']==original['revision']+1 and saved['crc32']!=original['crc32']
     assert ControlParameterStore(path).snapshot()==saved
     defaults=store.restore_defaults()
-    assert defaults['single_tendon']['kp']==original['single_tendon']['kp']
+    assert defaults['joint_kp']['aa']==original['joint_kp']['aa']
     assert defaults['revision']==saved['revision']+1
     path.write_text('{corrupt',encoding='utf-8')
     invalid=ControlParameterStore(path)
     assert invalid.error and path.read_text()=='{corrupt'
     invalid.restore_defaults()
-    assert not invalid.error and json.loads(path.read_text())['schema_version']==1
+    assert not invalid.error and json.loads(path.read_text())['schema_version']==3
+
+
+def test_bounds_match_generated_schema_order():
+    from desktop.core.control_parameters import BOUNDS
+    schema = json.loads((Path(__file__).resolve().parents[3] / 'desktop/resources/config/control_parameters.schema.json').read_text(encoding='utf-8'))
+    assert [(field['group'], field['name']) for field in schema['fields']] == [
+        (group, name) for group, fields in BOUNDS.items() for name in fields]
 
 
 def test_parameter_apply_requires_separate_matching_ram_readback(monkeypatch):

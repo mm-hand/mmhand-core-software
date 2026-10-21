@@ -944,7 +944,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                         if (result.boundaryClamped) noteTendonLutClamp(sharedData, joint, motor,
                             lroundf(result.rawTargets[axis]), result.targets[axis]);
                         runtime.cycleTrace.pidCounts[motor] = lroundf(fmaxf(-32768, fminf(32767,
-                            result.proportional[axis] + result.integral[axis] + result.reversal[axis])));
+                            result.proportional[axis] + result.integral[axis] + result.derivative[axis] + result.reversal[axis])));
                         runtime.cycleTrace.proportionalCounts[motor] = lroundf(fmaxf(-32768, fminf(32767, result.proportional[axis])));
                         runtime.cycleTrace.integralCounts[motor] = lroundf(fmaxf(-32768, fminf(32767, result.integral[axis])));
                         runtime.cycleTrace.reversalCounts[motor] = lroundf(fmaxf(-32768, fminf(32767, result.reversal[axis])));

@@ -1,35 +1,101 @@
 {
-  "schema_version": 1,
+  "schema_version": 3,
   "fields": [
     {
-      "group": "single_tendon",
-      "name": "kp",
+      "group": "joint_kp",
+      "name": "aa",
       "minimum": 0.0,
       "maximum": 2.0
     },
     {
-      "group": "single_tendon",
-      "name": "ki_per_s",
+      "group": "joint_kp",
+      "name": "mcp",
+      "minimum": 0.0,
+      "maximum": 2.0
+    },
+    {
+      "group": "joint_kp",
+      "name": "pip",
+      "minimum": 0.0,
+      "maximum": 2.0
+    },
+    {
+      "group": "joint_kp",
+      "name": "dip",
+      "minimum": 0.0,
+      "maximum": 2.0
+    },
+    {
+      "group": "joint_kp",
+      "name": "cmc",
+      "minimum": 0.0,
+      "maximum": 2.0
+    },
+    {
+      "group": "joint_ki",
+      "name": "aa",
       "minimum": 0.0,
       "maximum": 1.0
+    },
+    {
+      "group": "joint_ki",
+      "name": "mcp",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    {
+      "group": "joint_ki",
+      "name": "pip",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    {
+      "group": "joint_ki",
+      "name": "dip",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    {
+      "group": "joint_ki",
+      "name": "cmc",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    {
+      "group": "joint_kd",
+      "name": "aa",
+      "minimum": 0.0,
+      "maximum": 0.5
+    },
+    {
+      "group": "joint_kd",
+      "name": "mcp",
+      "minimum": 0.0,
+      "maximum": 0.5
+    },
+    {
+      "group": "joint_kd",
+      "name": "pip",
+      "minimum": 0.0,
+      "maximum": 0.5
+    },
+    {
+      "group": "joint_kd",
+      "name": "dip",
+      "minimum": 0.0,
+      "maximum": 0.5
+    },
+    {
+      "group": "joint_kd",
+      "name": "cmc",
+      "minimum": 0.0,
+      "maximum": 0.5
     },
     {
       "group": "single_tendon",
       "name": "integral_limit_counts",
       "minimum": 0,
       "maximum": 500
-    },
-    {
-      "group": "dual_tendon",
-      "name": "kp",
-      "minimum": 0.0,
-      "maximum": 2.0
-    },
-    {
-      "group": "dual_tendon",
-      "name": "ki_per_s",
-      "minimum": 0.0,
-      "maximum": 1.0
     },
     {
       "group": "dual_tendon",

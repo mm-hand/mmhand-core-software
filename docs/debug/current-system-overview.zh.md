@@ -327,7 +327,7 @@ S3维护等待者→独立USB发送      S3 RX→触觉解析/维护token匹配
 - 用户操作、校准导入和主机自动标定通过工作线程/串行执行器推进；标定执行器max_workers=1。
 - ROS2 executor、Replay调度和录制/写盘是独立后台工作，均经同一个后端授权边界；STOP撤销旧输入授权和待执行目标，不自动恢复。
 - q_fast/q_slow在P4按有效样本时间戳做20ms/500ms滑动窗口均值。ROS2的One Euro+静止锚点只在上位机输入链执行，GUI/Replay不重复套该滤波。
-- 当前默认两组Kp=0.8、Ki=0；目标基底为实测电机位置，不是LUT名义目标位置。双绳额外使用k_pair×正交偏差；没有D项、目标速度前馈、旧误差分段Kp或积分泄露。
+- 当前默认五组 Kp（按关节类型）：AA=1.0、MCP=1.0、PIP=1.0、DIP=1.2、CMC=1.0；Ki、Kd 也按 AA/MCP/PIP/DIP/CMC 五组，默认全 0。目标基底为实测电机位置，不是LUT名义目标位置。双绳额外使用k_pair×正交偏差；D 项使用测量速度（20 ms 快窗差分，25 ms 一阶低通、±400°/s 限幅，仅在 Tracking 相位生效），没有目标速度前馈、旧误差分段Kp或积分泄露。
 
 ## 7. 当前GUI：5主页面，11个叶子视图
 
@@ -346,7 +346,7 @@ S3维护等待者→独立USB发送      S3 RX→触觉解析/维护token匹配
 | Plot / Tactile | 平面手形、15个安装位置、X/Y/Z/Magnitude切换、手指/模块详情、Fx/Fy/Fz与新鲜度。S3直连FULL按厂商XY显示52或25测点；P4-only SUMMARY显示Σ合力；无新鲜传感器数据不伪造测点，位置灰/无有效数据。数值仍是设备raw单位，不是已标定的N或Pa。 |
 | Settings / Renumber Motor | Scan All Buses、Renumber All、BUS/Current ID/New ID输入表、完整等比电机ID示意图。P4有效连接门禁；文字说明同BUS同ID无法区分，以及全部扫描电机84/85/86=254/254/0。无逐行改号按钮，无新增Reset ID上层。 |
 | Settings / Renumber Tactile | Scan All Fingers、Renumber All，Thumb/Index/Middle/Ring/Little分组，每个传感器Current ID/New ID和已登记型号/点数；空输入不改，0/1/2，扫描与上次改号结果分别显示。必须直连S3，P4数据不能代替连接门禁。 |
-| Settings / Control Parameters | Save Parameters、Restore Defaults、revision/CRC/P4应用状态；单绳PI、双绳PI/恢复增益、反馈窗口/积分、快速换向、碰撞阈值、最终输出约束、ROS2滤波分组折叠面板。两类腱组共用参数，无每关节覆盖；恢复默认读本机默认JSON。 |
+| Settings / Control Parameters | Save Parameters、Restore Defaults、revision/CRC/P4应用状态；关节Kp/Ki/Kd（各AA/MCP/PIP/DIP/CMC五组）、单绳/双绳积分限幅、双绳恢复增益、反馈窗口/积分、快速换向、碰撞阈值、最终输出约束、ROS2滤波分组折叠面板。Kp/Ki/Kd按关节类型共用，无每关节覆盖；恢复默认读本机默认JSON。 |
 | Settings / Diagnostics | Clear Faults、在线电机/编码器数量、owner和状态age；问题列表和详情、Operation History；可展开Task Runtime、Routes、Fingerprint、Raw Snapshot，任务统计按需订阅。 |
 
 所有控制、标定、Replay范围初始为空；连接/重连清选择，不以UI旧勾选自动授权。Plot曲线选择也初始None。Tactile详情选择某一模块只是查看，不是运动选择。
@@ -398,7 +398,7 @@ S3维护等待者→独立USB发送      S3 RX→触觉解析/维护token匹配
 | 0xF2 | CMD_MOTOR_DIRECT_RELEASE | 4 | 结束当前普通直控并保留扭矩和故障；非零token匹配已执行事务，零匹配当前直控代际 |
 | 0xF3 | CMD_PROTOCOL_HELLO | 9 | 双向版本及控制模型与反馈拓扑契约握手，不授权运动 |
 | 0xF6 | CMD_CONTROL_RELEASE | 0 | 释放普通控制权，不锁存急停，不恢复旧目标 |
-| 0xF8 | CMD_CONTROL_PARAMETERS_SET | 165 | 原子设置39个控制与输入滤波参数，版本1、修订、浮点数组、CRC32 |
+| 0xF8 | CMD_CONTROL_PARAMETERS_SET | 181 | 原子设置43个控制与输入滤波参数，版本3、修订、浮点数组、CRC32 |
 | 0xF9 | CMD_CONTROL_PARAMETERS_QUERY | 0 | 读回P4当前控制参数修订、CRC和已配置状态 |
 
 

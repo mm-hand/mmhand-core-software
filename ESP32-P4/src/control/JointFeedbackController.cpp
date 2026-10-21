@@ -3,11 +3,13 @@
  */
 #include "JointFeedbackController.h"
 #include "../config/topology/HardwareMap.h"
+#include "../config/ControlConfig.h"
 #include "../system/calibration/TendonCalibrationLut.h"
 #include "../system/rtos/SharedSafetyState.h"
 #include <math.h>
 
 namespace mmhand::control {
+using namespace mmhand::config::control;
 namespace {
 float clip(float value, float low, float high) { return fmaxf(low, fminf(high, value)); }
 int8_t sign(float value) { return value > 0.0001f ? 1 : value < -0.0001f ? -1 : 0; }
@@ -19,6 +21,34 @@ bool slopeAt(const JointCalibrationResult& lut, uint8_t axis, float q, float* sl
     *slope = (upper - lower) / 0.02f;
     return isfinite(*slope) && fabsf(*slope) > 0.001f;
 }
+Parameter jointKpParameter(uint8_t joint) {
+    // J00..J19: four joints per finger in AA/MCP/PIP/DIP order; J20: thumb CMC.
+    if (joint + 1 == ENCODER_TOTAL_NUM) return JointKpCmc;
+    switch (joint % 4) {
+        case 0: return JointKpAa;
+        case 1: return JointKpMcp;
+        case 2: return JointKpPip;
+        default: return JointKpDip;
+    }
+}
+Parameter jointKiParameter(uint8_t joint) {
+    if (joint + 1 == ENCODER_TOTAL_NUM) return JointKiCmc;
+    switch (joint % 4) {
+        case 0: return JointKiAa;
+        case 1: return JointKiMcp;
+        case 2: return JointKiPip;
+        default: return JointKiDip;
+    }
+}
+Parameter jointKdParameter(uint8_t joint) {
+    if (joint + 1 == ENCODER_TOTAL_NUM) return JointKdCmc;
+    switch (joint % 4) {
+        case 0: return JointKdAa;
+        case 1: return JointKdMcp;
+        case 2: return JointKdPip;
+        default: return JointKdDip;
+    }
+}
 }
 void JointFeedbackController::reset(uint8_t joint) { if (joint < ENCODER_TOTAL_NUM) states[joint] = {}; }
 void JointFeedbackController::suspend(uint8_t joint, uint32_t now) {
@@ -26,6 +56,11 @@ void JointFeedbackController::suspend(uint8_t joint, uint32_t now) {
     auto& state = states[joint];
     state.phase = Tracking; state.candidate = state.direction = 0;
     state.errorSince = now;
+    // A collision hold must not keep a stale velocity for the next tracking segment.
+    state.lastFastValid = false;
+    state.lastFast = 0;
+    state.lastFastMs = 0;
+    state.derivativeFiltered = 0;
 }
 void JointFeedbackController::resetAll() { for (auto& state : states) state = {}; }
 
@@ -64,6 +99,30 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
         state.initialized = true; state.revision = p.revision;
         state.lastTarget = target;
     }
+    // D term uses the measured joint velocity only; a target step must not create
+    // a derivative kick. The 20 ms fast mean already rejects most encoder jitter;
+    // this first-order low-pass plus hard rate limit rejects the rest.
+    float derivativeRate = 0.0f;
+    const bool derivativeFresh = fb.fresh && fb.sampleDt > 0.0f;
+    if (derivativeFresh) {
+        if (state.lastFastValid) {
+            const uint32_t elapsed = now - state.lastFastMs;
+            if (elapsed >= 1 && elapsed <= 100) {
+                float rate = (fb.fast - state.lastFast) * 1000.0f / (float)elapsed;
+                rate = clip(rate, -kFeedbackDerivativeLimitDegPerS, kFeedbackDerivativeLimitDegPerS);
+                const float alpha = (float)elapsed / (kFeedbackDerivativeFilterMs + (float)elapsed);
+                state.derivativeFiltered += alpha * (rate - state.derivativeFiltered);
+                derivativeRate = state.derivativeFiltered;
+            } else {
+                state.derivativeFiltered = 0.0f;
+            }
+        }
+        state.lastFast = fb.fast;
+        state.lastFastMs = now;
+        state.lastFastValid = true;
+    } else {
+        state.derivativeFiltered = 0.0f;
+    }
     const float delta = target - state.lastTarget;
     const int8_t targetDirection = sign(delta);
     if (targetDirection) {
@@ -96,8 +155,9 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
         state.phase = Tracking;
     }
     out.count = count;
-    const float kp = p[count == 1 ? SingleTendonKp : DualTendonKp];
-    const float ki = p[count == 1 ? SingleTendonKiPerS : DualTendonKiPerS];
+    const float kp = p[jointKpParameter(joint)];
+    const float ki = p[jointKiParameter(joint)];
+    const float kd = p[jointKdParameter(joint)];
     const float iLimit = p[count == 1 ? SingleTendonIntegralLimitCounts : DualTendonIntegralLimitCounts];
     const float error = target - fb.fast, slowError = target - fb.slow;
     const float integralError = sign(error) == sign(slowError) ?
@@ -112,7 +172,11 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
         if (integrate) state.integral[i] = clip(state.integral[i] + ki * slope[i] * integralError * fb.sampleDt, -iLimit, iLimit);
         out.proportional[i] = kp * slope[i] * error;
         out.integral[i] = state.integral[i];
-        raw[i] = measured[i] + out.proportional[i] + state.integral[i];
+        // D acts only during plain tracking; take-up and pending reversal must not
+        // be biased by a stale or target-induced velocity.
+        out.derivative[i] = (state.phase == Tracking && derivativeRate != 0.0f)
+            ? -kd * slope[i] * derivativeRate : 0.0f;
+        raw[i] = measured[i] + out.proportional[i] + state.integral[i] + out.derivative[i];
         if (state.phase == Takeup) {
             // The take-up floor: the command must sit at least A counts past the
             // reversal anchor in the winding direction, whichever of PI and the

@@ -75,7 +75,8 @@ def main(argv=None):
         env = compiler_environment()
         if args.staged:
             check_staging()
-        for script in ('generate_upper_protocol.py', 'generate_robot_model.py', 'generate_p4_safety_catalog.py'):
+        for script in ('generate_upper_protocol.py', 'generate_robot_model.py', 'generate_p4_safety_catalog.py',
+                       'generate_control_parameters.py'):
             command([sys.executable, str(ROOT / 'tools' / script), '--check'], env=env)
         command([sys.executable, str(ROOT / 'tools/check_desktop_architecture.py')], env=env)
         shell = shutil.which('pwsh') or shutil.which('powershell')

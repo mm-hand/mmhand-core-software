@@ -34,6 +34,11 @@ inline constexpr uint8_t kFeedbackOverloadLatchCycles = 20;
 /** 速度 0 表示使用舵机固件默认速度，适合连续反馈控制。 */
 inline constexpr uint16_t kFeedbackServoSpeed = 0;
 
+/** 关节反馈 D 项的测量速度一阶低通时间常数，单位毫秒。 */
+inline constexpr float kFeedbackDerivativeFilterMs = 25.0f;
+/** 测量速度限幅，单位 deg/s；用于拒绝编码器单帧异常。 */
+inline constexpr float kFeedbackDerivativeLimitDegPerS = 400.0f;
+
 inline constexpr int32_t kUpperWorkspaceWarningCounts = 48;
 inline constexpr uint8_t kUpperWorkspaceWarningStableFrames = 3;
 

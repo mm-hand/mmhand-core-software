@@ -46,9 +46,9 @@ def main():
                         help='explicit one-time Clear Faults before this test; never retry after failure')
     parser.add_argument('--case', choices=list('ABCDEFGHIJKP'), default='A')
     parser.add_argument('--duration', type=float, default=300, help='disabled health duration in seconds')
-    parser.add_argument('--parameter', choices=['kp','pair','takeup','confirm','ki','ilimit','fast'], default='kp')
+    parser.add_argument('--parameter', choices=['kp','kd','pair','takeup','confirm','ki','ilimit','fast'], default='kp')
     parser.add_argument('--values', help='comma separated sweep values')
-    parser.add_argument('--base-kp',type=float,help='fixed group Kp for non-Kp sweeps')
+    parser.add_argument('--base-kp',type=float,help='fixed Kp for the tested joint type in non-Kp sweeps')
     parser.add_argument('--base-parameters',type=Path,help='explicit fixed configuration for this experiment')
     parser.add_argument('--trial', help='comma-separated exact matrix trial names, optional')
     parser.add_argument('--amplitude-deg',type=float,help='Case P override: signed amplitude (half swing) for all three waveforms')
@@ -330,11 +330,16 @@ def main():
         if args.trial: candidates=[t for t in candidates if t.name in args.trial.split(',')]
         if not candidates: raise RuntimeError('no matching trials')
         initial=hand._control_parameters.snapshot(); initial.pop('crc32',None)
-        group='dual_tendon' if len(row['motors'])==2 else 'single_tendon'
+        tendon_group='dual_tendon' if len(row['motors'])==2 else 'single_tendon'
+        # J00..J19: four joints per finger in AA/MCP/PIP/DIP order; J20: thumb CMC.
+        kp_fields=('aa','mcp','pip','dip','cmc')
+        kp_field=kp_fields[-1] if args.joint==20 else kp_fields[args.joint%4]
         points=[None]
         if args.mode=='sweep':
             points=[float(v) for v in args.values.split(',')] if args.values else {
-                'kp':[.2,.4,.6,.8,1.], 'pair':[0,.01,.03,.05,.08],
+                'kp':[.2,.4,.6,.8,1.],
+                'kd':[0,.02,.05,.1,.2],
+                'pair':[0,.01,.03,.05,.08],
                 'takeup':[40,80,140],
                 'confirm':[.1,.25,.5,1.],
                 'ki':[0,.02,.05,.1], 'ilimit':[20,50,100], 'fast':[10,20,30]}[args.parameter]
@@ -343,16 +348,18 @@ def main():
         (args.output/'parameters.fixed.json').write_text(json.dumps(fixed,indent=2),encoding='utf-8')
         for point in points:
             proposal=copy.deepcopy(fixed)
-            if args.base_kp is not None: proposal[group]['kp']=args.base_kp
+            if args.base_kp is not None: proposal['joint_kp'][kp_field]=args.base_kp
             if point is not None:
-                groups={'kp':(group,'kp'),
+                groups={'kp':('joint_kp',kp_field),
+                        'kd':('joint_kd',kp_field),
                         'pair':('dual_tendon','pair_recovery_gain'),'takeup':('reversal','takeup_counts'),
                         'confirm':('reversal','confirm_deg'),
-                        'ki':(group,'ki_per_s'),'ilimit':(group,'integral_limit_counts'),
+                        'ki':('joint_ki',kp_field),'ilimit':(tendon_group,'integral_limit_counts'),
                         'fast':('feedback','fast_window_ms')}
                 g,k=groups[args.parameter]; proposal[g][k]=point
             if args.mode=='sweep' and args.parameter=='kp':
-                proposal['single_tendon']['ki_per_s']=proposal['dual_tendon']['ki_per_s']=0
+                proposal['joint_ki'][kp_field]=0
+                proposal['joint_kd'][kp_field]=0
                 proposal['dual_tendon']['pair_recovery_gain']=0
                 proposal['reversal']['takeup_counts']=0
             set_parameters(proposal)

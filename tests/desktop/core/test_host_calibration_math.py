@@ -11,9 +11,9 @@ from desktop.core.host_calibration.config import (
 )
 from desktop.core.host_calibration.math import (
     TendonRawFitBuffer, build_calibration_result, build_tendon_lut,
-    directed_encoder_delta, encoder_count_to_deg, f32, manual_entry_crc,
-    map_manual_scaled_encoder_to_urdf, orient_encoder_raw, round_to_int32,
-    wrap_encoder_delta,
+    directed_encoder_delta, encoder_count_to_deg, f32, linearize_lut,
+    manual_entry_crc, map_manual_scaled_encoder_to_urdf, orient_encoder_raw,
+    round_to_int32, wrap_encoder_delta,
 )
 
 
@@ -111,7 +111,7 @@ def test_negative_install_direction_physical_endpoints_and_fixed_lut_remainder()
     assert result["tendonLutCount"] == 18
     assert result["tendonLutAngleStepDeg"] == 5.0
     assert result["tendonLutMotor"] == [2, 255]
-    assert result["tendonLutMotorAbs"][0][:3] == [0, 120, 241]
+    assert result["tendonLutMotorAbs"][0][:3] == [0, 118, 235]
     assert result["tendonLutMotorAbs"][0][17] == 2000
     assert result["tendonLutMotorAbs"][1] == [0] * 24
 
@@ -133,6 +133,34 @@ def test_buffer_capacity_sampling_threshold_and_duplicate_order():
     assert raw.count == 72
     last = raw.samples[-1]
     assert not raw.append(last.encoder, last.primary_abs, last.secondary_abs)
+
+
+def test_lut_linearization_is_endpoint_to_endpoint():
+    values = [0, 400, 300, 305, 310, 315, 320, 325, 330, 600, 900]
+    result = {
+        "tendonLutCount": 11,
+        "tendonLutAngleStartDeg": -20.0,
+        "tendonLutAngleStepDeg": 5.0,
+        "tendonLutMotorAbs": [
+            list(values) + [0] * 13,
+            [-v for v in values] + [0] * 13,
+        ],
+    }
+    linearize_lut(result, 2)
+    expected = [0, 90, 180, 270, 360, 450, 540, 630, 720, 810, 900]
+    assert result["tendonLutMotorAbs"][0][:11] == expected
+    assert result["tendonLutMotorAbs"][1][:11] == [-v for v in expected]
+
+
+def test_lut_linearization_is_noop_when_it_cannot_define_a_line():
+    result = {
+        "tendonLutCount": 1,
+        "tendonLutAngleStartDeg": 0.0,
+        "tendonLutAngleStepDeg": 5.0,
+        "tendonLutMotorAbs": [[777] + [0] * 23, [0] * 24],
+    }
+    linearize_lut(result, 1)
+    assert result["tendonLutMotorAbs"][0][0] == 777
 
 
 def test_auto_result_rejects_short_and_near_full_circle_span():

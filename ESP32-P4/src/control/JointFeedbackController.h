@@ -14,6 +14,7 @@ struct JointControlResult {
     int32_t targets[MAX_JOINT_ACTUATORS] = {};
     float proportional[MAX_JOINT_ACTUATORS] = {};
     float integral[MAX_JOINT_ACTUATORS] = {};
+    float derivative[MAX_JOINT_ACTUATORS] = {};
     float reversal[MAX_JOINT_ACTUATORS] = {};
     float recovery[MAX_JOINT_ACTUATORS] = {};
     float rawTargets[MAX_JOINT_ACTUATORS] = {};
@@ -41,6 +42,11 @@ private:
         float lastTarget = 0, candidateAnchor = 0, responseAnchor = 0;
         float integral[MAX_JOINT_ACTUATORS] = {};
         float motorAnchor[MAX_JOINT_ACTUATORS] = {};
+        // D-term measurement history: filtered joint velocity, never target kick.
+        bool lastFastValid = false;
+        uint32_t lastFastMs = 0;
+        float lastFast = 0;
+        float derivativeFiltered = 0;
     } states[ENCODER_TOTAL_NUM];
 };
 }

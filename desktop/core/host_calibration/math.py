@@ -265,6 +265,20 @@ def _interpolate_abs(target: float, samples: list[tuple[float, int, int]], actua
     return round_to_int32(value)
 
 
+def linearize_lut(result: dict, actuator_count: int) -> None:
+    """Replace the whole LUT with a straight line through its two endpoints."""
+    count = int(result.get("tendonLutCount", 0) or 0)
+    rows = result.get("tendonLutMotorAbs", [])
+    if count < 2 or actuator_count < 1 or not isinstance(rows, list):
+        return
+    for actuator in range(min(actuator_count, len(rows))):
+        row = rows[actuator]
+        first = int(row[0])
+        last = int(row[count - 1])
+        for i in range(count):
+            row[i] = round_to_int32(first + (last - first) * i / (count - 1))
+
+
 def build_tendon_lut(io, joint: int, result: dict, primary: int,
                      secondary: int, actuator_count: int, raw: TendonRawFitBuffer) -> bool:
     if not result or not 0 <= joint < ENCODER_COUNT or not 1 <= actuator_count <= 2:
@@ -315,6 +329,7 @@ def build_tendon_lut(io, joint: int, result: dict, primary: int,
             result["tendonLutMotorAbs"][actuator][index] = value
     result["tendonLutCount"] = count
     result["tendonLutValid"] = True
+    linearize_lut(result, actuator_count)
     return True
 
 
