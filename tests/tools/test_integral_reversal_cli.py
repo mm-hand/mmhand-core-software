@@ -13,7 +13,7 @@ def test_dry_run_produces_parameters_and_report(tmp_path):
         dry_run=True,
         hardware=False,
         replay=None,
-        calibration=repo / 'desktop/resources/config/calibration_bundle.mmcal.json',
+        calibration=repo / 'tests/fixtures/calibration_bundle.mmcal.json',
         output=output,
         port='COM12',
         max_minutes=60.0,

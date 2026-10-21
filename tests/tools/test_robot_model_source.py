@@ -16,7 +16,7 @@ from tools.robot_model_source import inspect_source, validate_tree
 
 
 def test_packaged_urdf_is_original_bytes_with_committed_source_identity():
-    source = json.loads(DEFAULT_SOURCE.read_text(encoding="utf-8"))
+    source = json.loads(DEFAULT_SOURCE.read_text(encoding="utf-8"))["source"]
     assert len(source["source_commit"]) == 40
     assert source["source_urdf_path"].endswith("mmhand.urdf")
     assert hashlib.sha256(DEFAULT_URDF.read_bytes()).hexdigest() == source["resource_sha256"][source["source_urdf_path"]]

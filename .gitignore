@@ -17,6 +17,7 @@ run_data/
 desktop/resources/config/device_state/
 *.mmcal.json
 !desktop/resources/config/calibration_bundle.mmcal.json
+!tests/fixtures/calibration_bundle.mmcal.json
 
 # Local firmware experiments and waveform captures
 ESP32-P4/debug.log
@@ -42,3 +43,6 @@ simplify-*.log
 
 # Tuning reports are local run artifacts
 docs/debug/pid-autotuning-*.md
+# Runtime diagnostics and recordings share the repository logs tree
+/logs/
+desktop/resources/config/backups/

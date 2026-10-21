@@ -580,7 +580,7 @@ def test_rebase_invalidates_only_old_scope_and_captures_runtime_before_new_auto(
         "multiturn_anchor_logical_abs": old_abs,
         "multiturn_anchor_raw": old_raw,
     })
-    monkeypatch.setattr(core_logic, "CALIB_LOAD_SNAPSHOT_PATH", snapshot_path)
+    monkeypatch.setattr(core_logic, "CALIB_ACTIVE_SNAPSHOT_PATH", snapshot_path)
     controller._block_multiturn_anchor_capture(3)
     controller._invalidate_servo_rebase_zero_anchors(3)
     runtime = controller._multiturn_store.load(identity=identity)

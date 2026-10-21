@@ -43,7 +43,8 @@ def _args(tmp_path: Path, *, urdf: Path | None = None) -> argparse.Namespace:
 def test_generator_outputs_desktop_and_p4_contracts(tmp_path: Path) -> None:
     outputs = generate_robot_model.build_outputs(_args(tmp_path))
     assert len(outputs) == 5
-    mapping = json.loads(outputs[tmp_path / "mapping.json"])
+    model = json.loads(outputs[tmp_path / "mapping.json"])
+    mapping = model["mapping"]
     fingerprint = json.loads(outputs[tmp_path / "fingerprint.json"])
 
     assert mapping["schema_version"] == 4
@@ -62,8 +63,8 @@ def test_urdf_limit_change_updates_every_control_contract(tmp_path: Path) -> Non
 
     baseline = generate_robot_model.build_outputs(_args(tmp_path / "base"))
     changed = generate_robot_model.build_outputs(_args(tmp_path / "changed", urdf=changed_urdf))
-    baseline_mapping = json.loads(baseline[tmp_path / "base/mapping.json"])
-    changed_mapping = json.loads(changed[tmp_path / "changed/mapping.json"])
+    baseline_mapping = json.loads(baseline[tmp_path / "base/mapping.json"])["mapping"]
+    changed_mapping = json.loads(changed[tmp_path / "changed/mapping.json"])["mapping"]
     baseline_fingerprint = json.loads(baseline[tmp_path / "base/fingerprint.json"])
     changed_fingerprint = json.loads(changed[tmp_path / "changed/fingerprint.json"])
 
@@ -73,7 +74,7 @@ def test_urdf_limit_change_updates_every_control_contract(tmp_path: Path) -> Non
 
 
 def test_manifest_rejects_duplicate_motor_binding(tmp_path: Path) -> None:
-    manifest = json.loads(generate_robot_model.DEFAULT_MANIFEST.read_text(encoding="utf-8"))
+    manifest = json.loads(generate_robot_model.DEFAULT_MANIFEST.read_text(encoding="utf-8"))["manifest"]
     invalid = copy.deepcopy(manifest)
     invalid["joints"][1]["motor_indices"] = [0]
     path = tmp_path / "invalid.json"

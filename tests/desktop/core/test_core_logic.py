@@ -812,20 +812,14 @@ class TestShutdownSemantics:
         controller.comm.disconnect.assert_called_once_with()
 
 
-def test_calibration_namespace_requires_device_identity_and_separates_devices():
-    from desktop.core.calibration_snapshot import CalibrationSnapshotError
+def test_calibration_snapshot_uses_one_active_config_path():
     controller = HandController()
-    with pytest.raises(CalibrationSnapshotError, match="identity unavailable"):
-        _ = controller.calibration_snapshot_path
+    first = controller.calibration_snapshot_path
     controller.current_state.has_product_fingerprint = True
     controller.current_state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": HOST_PROTOCOL_VERSION}
-    first = controller.calibration_snapshot_path
-    controller.current_state.product_fingerprint["device_id"] = "0000123456789ABD"
     second = controller.calibration_snapshot_path
-    assert first != second
-    assert first.parent.name == second.parent.name
-    assert first.parent.parent.name == "0000123456789ABC"
-    assert second.parent.parent.name == "0000123456789ABD"
+    assert first == second
+    assert first.name == "calibration_bundle.mmcal.json"
 
 
 def test_production_calibration_service_rejects_foreign_or_unproven_contract():

@@ -507,6 +507,34 @@ def update_snapshot_multiturn_anchors(
         return atomic_write_snapshot(path, payload, backup=False)
 
 
+def invalidate_snapshot_multiturn_anchors(
+    path: Path | str,
+    *,
+    motor_mask: int,
+    reason: str,
+) -> dict | None:
+    """Clear selected runtime anchors inside the active calibration bundle."""
+    mask = int(motor_mask) & VALID_MOTOR_MASK
+    if mask == 0:
+        return None
+    with snapshot_write_transaction():
+        payload = read_snapshot(path)
+        valid_mask, logical_abs, raw = multiturn_anchor_fields(payload)
+        for motor_idx in range(MOTOR_COUNT):
+            if mask & (1 << motor_idx):
+                logical_abs[motor_idx] = 0
+                raw[motor_idx] = 0
+        payload["multiturn_anchor_valid_bitmap"] = format_mask(valid_mask & ~mask)
+        payload["multiturn_anchor_logical_abs"] = logical_abs
+        payload["multiturn_anchor_raw"] = raw
+        payload["multiturn_anchor_last_invalidation"] = {
+            "motor_mask": format_mask(mask),
+            "reason": str(reason),
+            "host_time": time.time(),
+        }
+        return atomic_write_snapshot(path, payload, backup=False)
+
+
 def update_manual_snapshot(
     path: Path | str,
     *,
@@ -633,6 +661,8 @@ def invalidate_calibration_snapshot_scope(
     Reset Zero 会改变舵机 logical ABS 坐标系，旧 Auto/LUT 不能继续加载；
     Manual Min/Max 属于磁编码器原始端点，不依赖舵机圈数，必须继续保留。
     """
+    if not Path(path).exists():
+        return f"no calibration snapshot at {Path(path).name}"
     with snapshot_write_transaction():
         return _invalidate_calibration_snapshot_scope_locked(
             path,

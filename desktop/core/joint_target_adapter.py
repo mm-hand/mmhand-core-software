@@ -52,7 +52,8 @@ class NamedJointTargetAdaptation:
 
 @lru_cache(maxsize=1)
 def active_mapping_identity() -> UrdfMappingIdentity:
-    data = json.loads(angle_mapping.URDF_JOINT_MAPPING_PATH.read_text(encoding="utf-8"))
+    from .robot_model import mapping as _robot_mapping
+    data = _robot_mapping()
     version, crc = angle_mapping.urdf_manual_scaled_mapping_metadata()
     entries = list(data.get("joints") or [])
     entries_by_index = {

@@ -11,7 +11,7 @@ import pytest
 from desktop.core import angle_mapping
 from desktop.core.calibration_snapshot import seal_snapshot
 from desktop.core.protocol import ENCODER_COUNT, MOTOR_COUNT
-from desktop.paths import DEFAULT_URDF_PATH, URDF_JOINT_MAPPING_PATH
+from desktop.paths import DEFAULT_URDF_PATH, ROBOT_MODEL_PATH
 
 
 def _active_urdf_limits_deg() -> dict[str, tuple[float, float]]:
@@ -41,7 +41,7 @@ def test_all_21_mapping_limits_match_active_urdf():
 
 
 def test_feedback_mapping_declares_current_v4_manual_contract():
-    data = json.loads(URDF_JOINT_MAPPING_PATH.read_text(encoding="utf-8"))
+    data = json.loads(ROBOT_MODEL_PATH.read_text(encoding="utf-8"))["mapping"]
     assert data["schema_version"] == 4
     assert data["feedback_mapping_version"] == 3
     assert data["manual_scaled_mapping_version"] == 4
@@ -79,8 +79,6 @@ def test_generated_p4_urdf_limits_are_current_and_crc_matches():
 
 
 def test_endpoint_mapping_round_trip_without_calib_snapshot(monkeypatch, tmp_path):
-    monkeypatch.setattr(angle_mapping, "CALIB_LOAD_SNAPSHOT_PATH", tmp_path / "missing_snapshot.json")
-
     for idx, spec in angle_mapping.JOINT_SPECS.items():
         calib_min, calib_max = spec.default_calib_range_deg
         urdf_min, urdf_max = spec.calibrated_urdf_endpoints_deg

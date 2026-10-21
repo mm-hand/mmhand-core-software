@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import threading
 from typing import Callable, Optional
-from desktop.paths import CALIB_LOAD_SNAPSHOT_PATH
+from desktop.paths import CALIB_ACTIVE_SNAPSHOT_PATH
 from .angle_mapping import urdf_manual_scaled_mapping_metadata
 from .calibration_snapshot import CalibrationSnapshotError, CalibrationSnapshotStore, parse_mask, validate_snapshot_for_load as validate_calibration_snapshot_for_load
 from .calibration_diagnostics import format_calibration_warning
@@ -40,9 +40,9 @@ class CalibrationWorkflowEvent:
 class CalibrationWorkflowService:
     """One executor owns calibration and restore transactions."""
 
-    def __init__(self, controller, snapshot_path=CALIB_LOAD_SNAPSHOT_PATH):
+    def __init__(self, controller, snapshot_path=CALIB_ACTIVE_SNAPSHOT_PATH):
         self._controller = controller
-        self._store_override = snapshot_path != CALIB_LOAD_SNAPSHOT_PATH
+        self._store_override = snapshot_path != CALIB_ACTIVE_SNAPSHOT_PATH
         self._snapshot_store = CalibrationSnapshotStore(snapshot_path)
         self._executor = ThreadPoolExecutor(
             max_workers=1,

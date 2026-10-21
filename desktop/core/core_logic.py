@@ -37,12 +37,12 @@ from .comm_layer import LowerComputerComm
 from .data_models import HandModel
 from .device_state_store import (
     DeviceStateStoreError,
-    MultiTurnRuntimeStore,
+    BundleMultiTurnStore,
     canonical_product_fingerprint,
     nearest_logical_abs,
 )
 from .motor_mapping import MOTOR_TO_JOINT_INDEX, motor_abs_after_tendon_action
-from desktop.paths import CALIB_LOAD_SNAPSHOT_PATH, MULTITURN_RUNTIME_PATH, CONFIG_DIR
+from desktop.paths import CALIB_ACTIVE_SNAPSHOT_PATH, CONFIG_DIR
 from .protocol import (
     HOST_PROTOCOL_VERSION,
     CMD_ACTIVE_SCOPE,
@@ -119,8 +119,8 @@ MANUAL_PREPARE_TARGET_TOLERANCE_COUNTS = 80
 def _active_urdf_repo_path() -> str:
     """读取生成来源中的仓库内路径；缺失时不得恢复运动锚点。"""
     try:
-        source = json.loads((CONFIG_DIR / "robot_model_source.json").read_text(encoding="utf-8"))
-        return str(source.get("source_urdf_path", ""))
+        source = json.loads((CONFIG_DIR / "robot_model.json").read_text(encoding="utf-8"))
+        return str((source.get("source") or {}).get("source_urdf_path", ""))
     except (OSError, ValueError):
         return ""
 
@@ -181,7 +181,7 @@ class HandController:
         self._persistence_thread = None
         self._persistence_diagnostics = None
         self.last_sync_status = "Not connected"
-        self._multiturn_store = MultiTurnRuntimeStore(MULTITURN_RUNTIME_PATH)
+        self._multiturn_store = BundleMultiTurnStore(CALIB_ACTIVE_SNAPSHOT_PATH)
         self._multiturn_store_payload: Optional[dict] = None
         self._multiturn_store_identity: Optional[dict] = None
         self._multiturn_last_save_at = 0.0
@@ -678,10 +678,7 @@ class HandController:
 
     @property
     def calibration_snapshot_path(self):
-        identity = self.calibration_data_identity
-        namespace = hashlib.sha256(identity["urdf_repo_path"].encode("utf-8")).hexdigest()[:16]
-        return (MULTITURN_RUNTIME_PATH.parent / identity["device_id"] / namespace
-                / CALIB_LOAD_SNAPSHOT_PATH.name)
+        return CALIB_ACTIVE_SNAPSHOT_PATH
 
     def _multiturn_identity(self, state: HandModel) -> Optional[dict]:
         """组合产品指纹与标定摘要，防止把另一只手的多圈锚点发给当前 P4。"""
@@ -697,10 +694,9 @@ class HandController:
         urdf_repo_path = _active_urdf_repo_path()
         if not urdf_repo_path:
             return None
-        namespace = hashlib.sha256(urdf_repo_path.encode("utf-8")).hexdigest()[:16]
-        anchor_path = MULTITURN_RUNTIME_PATH.parent / device_id / namespace / "multiturn_runtime.json"
+        anchor_path = self.calibration_snapshot_path
         if self._multiturn_store.path != anchor_path:
-            self._multiturn_store = MultiTurnRuntimeStore(anchor_path)
+            self._multiturn_store = BundleMultiTurnStore(anchor_path)
             self._multiturn_store_payload = None
             self._multiturn_store_identity = None
             self._calibration_digest_checked_at = 0.0
@@ -715,7 +711,7 @@ class HandController:
         if now - self._calibration_digest_checked_at >= 1.0:
             self._calibration_digest_checked_at = now
             try:
-                mtime_ns = (anchor_path.parent / CALIB_LOAD_SNAPSHOT_PATH.name).stat().st_mtime_ns
+                mtime_ns = anchor_path.stat().st_mtime_ns
             except OSError:
                 mtime_ns = -1
             if mtime_ns != self._calibration_digest_mtime_ns:
@@ -726,7 +722,7 @@ class HandController:
                 self._calibration_snapshot_anchor_raw = [0] * MOTOR_COUNT
                 if mtime_ns >= 0:
                     try:
-                        snapshot = read_snapshot(anchor_path.parent / CALIB_LOAD_SNAPSHOT_PATH.name)
+                        snapshot = read_snapshot(anchor_path)
                         self._calibration_digest_cache = str(
                             snapshot.get("integrity", {}).get("digest", "")
                         ).lower()
@@ -754,7 +750,7 @@ class HandController:
         try:
             payload = self._multiturn_store.load(identity=identity)
             self._multiturn_store_payload = payload
-        except DeviceStateStoreError as exc:
+        except (DeviceStateStoreError, CalibrationSnapshotError) as exc:
             self._multiturn_store_payload = None
             log_session("MULTITURN", f"host anchor unavailable: {exc}")
         return self._multiturn_store_payload
@@ -947,7 +943,7 @@ class HandController:
                 raw=raw_values,
                 p4_time_ms=int(getattr(state, "p4_time_ms", 0) or 0),
             )
-        except (OSError, DeviceStateStoreError) as exc:
+        except (OSError, DeviceStateStoreError, CalibrationSnapshotError) as exc:
             state.host_multiturn_status = f"save failed: {exc}"
             log_session("MULTITURN", state.host_multiturn_status)
             return False
@@ -2059,7 +2055,7 @@ class HandController:
         with self._multiturn_io_lock:
             if self._multiturn_identity(state) is None:
                 raise CalibrationSnapshotError("device identity unavailable during coordinate anchor invalidation")
-            snapshot_path = self._multiturn_store.path.parent / CALIB_LOAD_SNAPSHOT_PATH.name
+            snapshot_path = self.calibration_snapshot_path
             self._invalidate_multiturn_anchor_mask(motor_mask, reason)
             invalidate_calibration_snapshot_scope(
                 snapshot_path, motor_mask=motor_mask,
@@ -2593,7 +2589,7 @@ class HandController:
             return empty._replace(message="serial not connected")
 
         try:
-            _ = self.calibration_snapshot_path
+            _ = self.calibration_data_identity
         except CalibrationSnapshotError as exc:
             return empty._replace(message=str(exc))
 

@@ -41,10 +41,9 @@ def test_bounds_match_generated_schema_order():
     from desktop.core.control_parameters import BOUNDS, RAMP_BOUNDS
     config = Path(__file__).resolve().parents[3] / 'desktop/resources/config'
     schema = json.loads((config / 'control_parameters.schema.json').read_text(encoding='utf-8'))
-    assert [(field['group'], field['name']) for field in schema['fields']] == [
+    assert [(field['group'], field['name']) for field in schema['payloads']['main']['fields']] == [
         (group, name) for group, fields in BOUNDS.items() for name in fields]
-    ramp = json.loads((config / 'reversal_ramp.schema.json').read_text(encoding='utf-8'))
-    assert [(field['group'], field['name']) for field in ramp['fields']] == [
+    assert [(field['group'], field['name']) for field in schema['payloads']['ramp']['fields']] == [
         ('reversal_ramp', name) for name in RAMP_BOUNDS]
 
 

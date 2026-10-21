@@ -245,3 +245,64 @@ class MultiTurnRuntimeStore:
                 if temp.exists():
                     temp.unlink()
         return payload
+
+class BundleMultiTurnStore:
+    """Runtime anchors stored inside the active calibration bundle.
+
+    The bundle already owns the calibration identity and the anchor arrays.
+    This adapter keeps the old MultiTurnRuntimeStore call surface while
+    eliminating the separate multiturn_runtime.json file.
+    """
+
+    def __init__(self, path: Path | str):
+        self.path = Path(path)
+
+    def _bundle(self) -> dict:
+        from .calibration_snapshot import read_snapshot
+        return read_snapshot(self.path)
+
+    def load(self, *, identity: dict | None = None) -> dict:
+        from .calibration_snapshot import format_mask, multiturn_anchor_fields
+        payload = self._bundle()
+        valid, logical_abs, raw = multiturn_anchor_fields(payload)
+        saved_identity = {
+            "device_id": payload.get("device_id", ""),
+            "urdf_repo_path": payload.get("urdf_repo_path", ""),
+            "product_fingerprint": payload.get("product_fingerprint", {}),
+        }
+        if identity is not None and not multiturn_identity_compatible(saved_identity, identity):
+            raise DeviceStateStoreError("runtime anchors belong to another product/calibration")
+        if valid == 0:
+            raise DeviceStateStoreError("runtime anchors are empty")
+        return {
+            "format": MULTITURN_RUNTIME_FORMAT,
+            "schema_version": MULTITURN_RUNTIME_SCHEMA_VERSION,
+            "identity": saved_identity,
+            "saved_at_host_time": payload.get("multiturn_anchor_saved_at_host_time", 0.0),
+            "valid_motor_mask": format_mask(valid),
+            "logical_abs": logical_abs,
+            "raw": raw,
+        }
+
+    def save(self, *, identity: dict, valid_motor_mask: int,
+             logical_abs: Iterable[int], raw: Iterable[int], p4_time_ms: int) -> dict:
+        from .calibration_snapshot import update_snapshot_multiturn_anchors
+        payload = self._bundle()
+        saved_identity = {
+            "device_id": payload.get("device_id", ""),
+            "urdf_repo_path": payload.get("urdf_repo_path", ""),
+            "product_fingerprint": payload.get("product_fingerprint", {}),
+        }
+        if not multiturn_identity_compatible(saved_identity, identity):
+            raise DeviceStateStoreError("runtime anchors belong to another product/calibration")
+        update_snapshot_multiturn_anchors(
+            self.path,
+            motor_mask=int(valid_motor_mask) & VALID_MOTOR_MASK,
+            logical_abs=_fixed_int_list(logical_abs, MOTOR_COUNT),
+            raw=[value % 4096 for value in _fixed_int_list(raw, MOTOR_COUNT)],
+        )
+        return self.load()
+
+    def invalidate_motor_mask(self, motor_mask: int, *, reason: str) -> dict | None:
+        from .calibration_snapshot import invalidate_snapshot_multiturn_anchors
+        return invalidate_snapshot_multiturn_anchors(self.path, motor_mask=motor_mask, reason=reason)

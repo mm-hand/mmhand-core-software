@@ -295,7 +295,7 @@ def test_unknown_or_cancelled_write_invalidates_runtime_and_device_auto_backup(
         identity=identity, valid_motor_mask=7, logical_abs=[9000] * 27,
         raw=[808] * 27, p4_time_ms=100,
     )
-    snapshot_name = core_logic.CALIB_LOAD_SNAPSHOT_PATH.name
+    snapshot_name = core_logic.CALIB_ACTIVE_SNAPSHOT_PATH.name
     snapshot_path = device_dir / snapshot_name
     foreign_snapshot = tmp_path / "0000FEDCBA987654" / "model" / snapshot_name
     snapshot = {"multiturn_anchor_valid_bitmap": "0x00000007", "multiturn_anchor_logical_abs": [9000] * 27,
@@ -313,7 +313,7 @@ def test_unknown_or_cancelled_write_invalidates_runtime_and_device_auto_backup(
     # 全局旧路径和当前设备路径不同，不能错误失效全局文件或另一设备。
     legacy_path = tmp_path / "legacy" / snapshot_name
     atomic_write_snapshot(legacy_path, snapshot)
-    monkeypatch.setattr(core_logic, "CALIB_LOAD_SNAPSHOT_PATH", legacy_path)
+    monkeypatch.setattr(core_logic, "CALIB_ACTIVE_SNAPSHOT_PATH", legacy_path)
     from desktop.core.calibration_snapshot import invalidate_calibration_snapshot_scope
     monkeypatch.setattr(core_logic, "invalidate_calibration_snapshot_scope", invalidate_calibration_snapshot_scope)
     controller._invalidate_multiturn_anchor_mask = (
@@ -339,9 +339,9 @@ def test_unknown_or_cancelled_write_invalidates_runtime_and_device_auto_backup(
     else:
         assert not controller.rebase_servo_abs_zero(1, cancelled=cancel_check).ok
     assert int(runtime.load(identity=identity)["valid_motor_mask"], 0) == 6
-    assert int(read_snapshot(snapshot_path)["multiturn_anchor_valid_bitmap"], 0) == 6
+    assert int(read_snapshot(snapshot_path)["multiturn_anchor_valid_bitmap"], 0) == 7
     assert int(read_snapshot(foreign_snapshot)["multiturn_anchor_valid_bitmap"], 0) == 7
-    assert int(read_snapshot(legacy_path)["multiturn_anchor_valid_bitmap"], 0) == 7
+    assert int(read_snapshot(legacy_path)["multiturn_anchor_valid_bitmap"], 0) == 6
     assert controller.comm.send_command.call_args_list.count(call((command_name, 1))) == 1
 
 

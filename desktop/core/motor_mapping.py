@@ -11,10 +11,9 @@
 from .protocol import ENCODER_COUNT, MOTOR_ABS_CMD_MAX, MOTOR_ABS_CMD_MIN, MOTOR_COUNT
 
 
-import json
-from desktop.paths import URDF_JOINT_MAPPING_PATH
+from .robot_model import mapping as _mapping
 
-_MODEL = json.loads(URDF_JOINT_MAPPING_PATH.read_text(encoding="utf-8"))
+_MODEL = _mapping()
 MOTOR_TO_JOINT_INDEX = [-1] * MOTOR_COUNT
 for _joint in _MODEL["joints"]:
     for _motor in _joint["motor_indices"]:

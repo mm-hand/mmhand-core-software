@@ -1,353 +1,459 @@
 {
-  "schema_version": 6,
-  "fields": [
-    {
-      "group": "joint_kp",
-      "name": "aa",
-      "minimum": 0.0,
-      "maximum": 2.0
+  "schema_version": 7,
+  "payloads": {
+    "main": {
+      "version": 6,
+      "fields": [
+        {
+          "group": "joint_kp",
+          "name": "aa",
+          "minimum": 0.0,
+          "maximum": 2.0
+        },
+        {
+          "group": "joint_kp",
+          "name": "mcp",
+          "minimum": 0.0,
+          "maximum": 2.0
+        },
+        {
+          "group": "joint_kp",
+          "name": "pip",
+          "minimum": 0.0,
+          "maximum": 2.0
+        },
+        {
+          "group": "joint_kp",
+          "name": "dip",
+          "minimum": 0.0,
+          "maximum": 2.0
+        },
+        {
+          "group": "joint_kp",
+          "name": "cmc",
+          "minimum": 0.0,
+          "maximum": 2.0
+        },
+        {
+          "group": "joint_ki",
+          "name": "aa",
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        {
+          "group": "joint_ki",
+          "name": "mcp",
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        {
+          "group": "joint_ki",
+          "name": "pip",
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        {
+          "group": "joint_ki",
+          "name": "dip",
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        {
+          "group": "joint_ki",
+          "name": "cmc",
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        {
+          "group": "joint_ki",
+          "name": "integral_limit_counts_aa",
+          "minimum": 0,
+          "maximum": 500
+        },
+        {
+          "group": "joint_ki",
+          "name": "integral_limit_counts_mcp",
+          "minimum": 0,
+          "maximum": 500
+        },
+        {
+          "group": "joint_ki",
+          "name": "integral_limit_counts_pip",
+          "minimum": 0,
+          "maximum": 500
+        },
+        {
+          "group": "joint_ki",
+          "name": "integral_limit_counts_dip",
+          "minimum": 0,
+          "maximum": 500
+        },
+        {
+          "group": "joint_ki",
+          "name": "integral_limit_counts_cmc",
+          "minimum": 0,
+          "maximum": 500
+        },
+        {
+          "group": "joint_ki",
+          "name": "integral_noise_deg",
+          "minimum": 0.0,
+          "maximum": 2.0
+        },
+        {
+          "group": "joint_ki",
+          "name": "integral_confirm_ms",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        {
+          "group": "joint_kd",
+          "name": "aa",
+          "minimum": 0.0,
+          "maximum": 0.5
+        },
+        {
+          "group": "joint_kd",
+          "name": "mcp",
+          "minimum": 0.0,
+          "maximum": 0.5
+        },
+        {
+          "group": "joint_kd",
+          "name": "pip",
+          "minimum": 0.0,
+          "maximum": 0.5
+        },
+        {
+          "group": "joint_kd",
+          "name": "dip",
+          "minimum": 0.0,
+          "maximum": 0.5
+        },
+        {
+          "group": "joint_kd",
+          "name": "cmc",
+          "minimum": 0.0,
+          "maximum": 0.5
+        },
+        {
+          "group": "dual_tendon",
+          "name": "pair_recovery_gain",
+          "minimum": 0.0,
+          "maximum": 0.5
+        },
+        {
+          "group": "feedback",
+          "name": "fast_window_ms",
+          "minimum": 10,
+          "maximum": 100
+        },
+        {
+          "group": "feedback",
+          "name": "slow_window_ms",
+          "minimum": 100,
+          "maximum": 1000
+        },
+        {
+          "group": "reversal",
+          "name": "confirm_deg_aa",
+          "minimum": 0.1,
+          "maximum": 10.0
+        },
+        {
+          "group": "reversal",
+          "name": "confirm_deg_mcp",
+          "minimum": 0.1,
+          "maximum": 10.0
+        },
+        {
+          "group": "reversal",
+          "name": "confirm_deg_pip",
+          "minimum": 0.1,
+          "maximum": 10.0
+        },
+        {
+          "group": "reversal",
+          "name": "confirm_deg_dip",
+          "minimum": 0.1,
+          "maximum": 10.0
+        },
+        {
+          "group": "reversal",
+          "name": "confirm_deg_cmc",
+          "minimum": 0.1,
+          "maximum": 10.0
+        },
+        {
+          "group": "reversal",
+          "name": "confirm_ms",
+          "minimum": 0,
+          "maximum": 500
+        },
+        {
+          "group": "reversal",
+          "name": "takeup_max_aa",
+          "minimum": 0,
+          "maximum": 2000
+        },
+        {
+          "group": "reversal",
+          "name": "takeup_max_mcp",
+          "minimum": 0,
+          "maximum": 2000
+        },
+        {
+          "group": "reversal",
+          "name": "takeup_max_pip",
+          "minimum": 0,
+          "maximum": 2000
+        },
+        {
+          "group": "reversal",
+          "name": "takeup_max_dip",
+          "minimum": 0,
+          "maximum": 2000
+        },
+        {
+          "group": "reversal",
+          "name": "takeup_max_cmc",
+          "minimum": 0,
+          "maximum": 2000
+        },
+        {
+          "group": "reversal",
+          "name": "exit_travel_deg_aa",
+          "minimum": 0.05,
+          "maximum": 5.0
+        },
+        {
+          "group": "reversal",
+          "name": "exit_travel_deg_mcp",
+          "minimum": 0.05,
+          "maximum": 5.0
+        },
+        {
+          "group": "reversal",
+          "name": "exit_travel_deg_pip",
+          "minimum": 0.05,
+          "maximum": 5.0
+        },
+        {
+          "group": "reversal",
+          "name": "exit_travel_deg_dip",
+          "minimum": 0.05,
+          "maximum": 5.0
+        },
+        {
+          "group": "reversal",
+          "name": "exit_travel_deg_cmc",
+          "minimum": 0.05,
+          "maximum": 5.0
+        },
+        {
+          "group": "collision",
+          "name": "arm_velocity_flex_deg_s",
+          "minimum": 0.1,
+          "maximum": 100.0
+        },
+        {
+          "group": "collision",
+          "name": "arm_velocity_extend_deg_s",
+          "minimum": 0.1,
+          "maximum": 100.0
+        },
+        {
+          "group": "collision",
+          "name": "stall_velocity_flex_deg_s",
+          "minimum": 0,
+          "maximum": 20.0
+        },
+        {
+          "group": "collision",
+          "name": "stall_velocity_extend_deg_s",
+          "minimum": 0,
+          "maximum": 20.0
+        },
+        {
+          "group": "collision",
+          "name": "min_error_deg",
+          "minimum": 0.5,
+          "maximum": 30.0
+        },
+        {
+          "group": "collision",
+          "name": "target_reset_deg",
+          "minimum": 0.1,
+          "maximum": 10.0
+        },
+        {
+          "group": "collision",
+          "name": "retreat_deg",
+          "minimum": 0.1,
+          "maximum": 10.0
+        },
+        {
+          "group": "output",
+          "name": "lut_release_margin_counts",
+          "minimum": 0,
+          "maximum": 500
+        },
+        {
+          "group": "output",
+          "name": "lut_tight_margin_counts",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        {
+          "group": "ros2_input",
+          "name": "min_cutoff_hz",
+          "minimum": 0.01,
+          "maximum": 10.0
+        },
+        {
+          "group": "ros2_input",
+          "name": "beta",
+          "minimum": 0,
+          "maximum": 1.0
+        },
+        {
+          "group": "ros2_input",
+          "name": "derivative_cutoff_hz",
+          "minimum": 0.01,
+          "maximum": 10.0
+        },
+        {
+          "group": "ros2_input",
+          "name": "enter_deg",
+          "minimum": 0.01,
+          "maximum": 1.0
+        },
+        {
+          "group": "ros2_input",
+          "name": "enter_dwell_ms",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        {
+          "group": "ros2_input",
+          "name": "exit_deg",
+          "minimum": 0.02,
+          "maximum": 2.0
+        },
+        {
+          "group": "ros2_input",
+          "name": "exit_confirm_ms",
+          "minimum": 0,
+          "maximum": 500
+        },
+        {
+          "group": "ros2_input",
+          "name": "max_gap_ms",
+          "minimum": 100,
+          "maximum": 5000
+        }
+      ]
     },
-    {
-      "group": "joint_kp",
-      "name": "mcp",
-      "minimum": 0.0,
-      "maximum": 2.0
-    },
-    {
-      "group": "joint_kp",
-      "name": "pip",
-      "minimum": 0.0,
-      "maximum": 2.0
-    },
-    {
-      "group": "joint_kp",
-      "name": "dip",
-      "minimum": 0.0,
-      "maximum": 2.0
-    },
-    {
-      "group": "joint_kp",
-      "name": "cmc",
-      "minimum": 0.0,
-      "maximum": 2.0
-    },
-    {
-      "group": "joint_ki",
-      "name": "aa",
-      "minimum": 0.0,
-      "maximum": 1.0
-    },
-    {
-      "group": "joint_ki",
-      "name": "mcp",
-      "minimum": 0.0,
-      "maximum": 1.0
-    },
-    {
-      "group": "joint_ki",
-      "name": "pip",
-      "minimum": 0.0,
-      "maximum": 1.0
-    },
-    {
-      "group": "joint_ki",
-      "name": "dip",
-      "minimum": 0.0,
-      "maximum": 1.0
-    },
-    {
-      "group": "joint_ki",
-      "name": "cmc",
-      "minimum": 0.0,
-      "maximum": 1.0
-    },
-    {
-      "group": "joint_ki",
-      "name": "integral_limit_counts_aa",
-      "minimum": 0,
-      "maximum": 500
-    },
-    {
-      "group": "joint_ki",
-      "name": "integral_limit_counts_mcp",
-      "minimum": 0,
-      "maximum": 500
-    },
-    {
-      "group": "joint_ki",
-      "name": "integral_limit_counts_pip",
-      "minimum": 0,
-      "maximum": 500
-    },
-    {
-      "group": "joint_ki",
-      "name": "integral_limit_counts_dip",
-      "minimum": 0,
-      "maximum": 500
-    },
-    {
-      "group": "joint_ki",
-      "name": "integral_limit_counts_cmc",
-      "minimum": 0,
-      "maximum": 500
-    },
-    {
-      "group": "joint_ki",
-      "name": "integral_noise_deg",
-      "minimum": 0.0,
-      "maximum": 2.0
-    },
-    {
-      "group": "joint_ki",
-      "name": "integral_confirm_ms",
-      "minimum": 0,
-      "maximum": 1000
-    },
-    {
-      "group": "joint_kd",
-      "name": "aa",
-      "minimum": 0.0,
-      "maximum": 0.5
-    },
-    {
-      "group": "joint_kd",
-      "name": "mcp",
-      "minimum": 0.0,
-      "maximum": 0.5
-    },
-    {
-      "group": "joint_kd",
-      "name": "pip",
-      "minimum": 0.0,
-      "maximum": 0.5
-    },
-    {
-      "group": "joint_kd",
-      "name": "dip",
-      "minimum": 0.0,
-      "maximum": 0.5
-    },
-    {
-      "group": "joint_kd",
-      "name": "cmc",
-      "minimum": 0.0,
-      "maximum": 0.5
-    },
-    {
-      "group": "dual_tendon",
-      "name": "pair_recovery_gain",
-      "minimum": 0.0,
-      "maximum": 0.5
-    },
-    {
-      "group": "feedback",
-      "name": "fast_window_ms",
-      "minimum": 10,
-      "maximum": 100
-    },
-    {
-      "group": "feedback",
-      "name": "slow_window_ms",
-      "minimum": 100,
-      "maximum": 1000
-    },
-    {
-      "group": "reversal",
-      "name": "confirm_deg_aa",
-      "minimum": 0.1,
-      "maximum": 10.0
-    },
-    {
-      "group": "reversal",
-      "name": "confirm_deg_mcp",
-      "minimum": 0.1,
-      "maximum": 10.0
-    },
-    {
-      "group": "reversal",
-      "name": "confirm_deg_pip",
-      "minimum": 0.1,
-      "maximum": 10.0
-    },
-    {
-      "group": "reversal",
-      "name": "confirm_deg_dip",
-      "minimum": 0.1,
-      "maximum": 10.0
-    },
-    {
-      "group": "reversal",
-      "name": "confirm_deg_cmc",
-      "minimum": 0.1,
-      "maximum": 10.0
-    },
-    {
-      "group": "reversal",
-      "name": "confirm_ms",
-      "minimum": 0,
-      "maximum": 500
-    },
-    {
-      "group": "reversal",
-      "name": "takeup_max_aa",
-      "minimum": 0,
-      "maximum": 2000
-    },
-    {
-      "group": "reversal",
-      "name": "takeup_max_mcp",
-      "minimum": 0,
-      "maximum": 2000
-    },
-    {
-      "group": "reversal",
-      "name": "takeup_max_pip",
-      "minimum": 0,
-      "maximum": 2000
-    },
-    {
-      "group": "reversal",
-      "name": "takeup_max_dip",
-      "minimum": 0,
-      "maximum": 2000
-    },
-    {
-      "group": "reversal",
-      "name": "takeup_max_cmc",
-      "minimum": 0,
-      "maximum": 2000
-    },
-    {
-      "group": "reversal",
-      "name": "exit_travel_deg_aa",
-      "minimum": 0.05,
-      "maximum": 5.0
-    },
-    {
-      "group": "reversal",
-      "name": "exit_travel_deg_mcp",
-      "minimum": 0.05,
-      "maximum": 5.0
-    },
-    {
-      "group": "reversal",
-      "name": "exit_travel_deg_pip",
-      "minimum": 0.05,
-      "maximum": 5.0
-    },
-    {
-      "group": "reversal",
-      "name": "exit_travel_deg_dip",
-      "minimum": 0.05,
-      "maximum": 5.0
-    },
-    {
-      "group": "reversal",
-      "name": "exit_travel_deg_cmc",
-      "minimum": 0.05,
-      "maximum": 5.0
-    },
-    {
-      "group": "collision",
-      "name": "arm_velocity_flex_deg_s",
-      "minimum": 0.1,
-      "maximum": 100.0
-    },
-    {
-      "group": "collision",
-      "name": "arm_velocity_extend_deg_s",
-      "minimum": 0.1,
-      "maximum": 100.0
-    },
-    {
-      "group": "collision",
-      "name": "stall_velocity_flex_deg_s",
-      "minimum": 0,
-      "maximum": 20.0
-    },
-    {
-      "group": "collision",
-      "name": "stall_velocity_extend_deg_s",
-      "minimum": 0,
-      "maximum": 20.0
-    },
-    {
-      "group": "collision",
-      "name": "min_error_deg",
-      "minimum": 0.5,
-      "maximum": 30.0
-    },
-    {
-      "group": "collision",
-      "name": "target_reset_deg",
-      "minimum": 0.1,
-      "maximum": 10.0
-    },
-    {
-      "group": "collision",
-      "name": "retreat_deg",
-      "minimum": 0.1,
-      "maximum": 10.0
-    },
-    {
-      "group": "output",
-      "name": "lut_release_margin_counts",
-      "minimum": 0,
-      "maximum": 500
-    },
-    {
-      "group": "output",
-      "name": "lut_tight_margin_counts",
-      "minimum": 0,
-      "maximum": 1000
-    },
-    {
-      "group": "ros2_input",
-      "name": "min_cutoff_hz",
-      "minimum": 0.01,
-      "maximum": 10.0
-    },
-    {
-      "group": "ros2_input",
-      "name": "beta",
-      "minimum": 0,
-      "maximum": 1.0
-    },
-    {
-      "group": "ros2_input",
-      "name": "derivative_cutoff_hz",
-      "minimum": 0.01,
-      "maximum": 10.0
-    },
-    {
-      "group": "ros2_input",
-      "name": "enter_deg",
-      "minimum": 0.01,
-      "maximum": 1.0
-    },
-    {
-      "group": "ros2_input",
-      "name": "enter_dwell_ms",
-      "minimum": 0,
-      "maximum": 1000
-    },
-    {
-      "group": "ros2_input",
-      "name": "exit_deg",
-      "minimum": 0.02,
-      "maximum": 2.0
-    },
-    {
-      "group": "ros2_input",
-      "name": "exit_confirm_ms",
-      "minimum": 0,
-      "maximum": 500
-    },
-    {
-      "group": "ros2_input",
-      "name": "max_gap_ms",
-      "minimum": 100,
-      "maximum": 5000
+    "ramp": {
+      "version": 1,
+      "fields": [
+        {
+          "group": "reversal_ramp",
+          "name": "b0_aa",
+          "minimum": 0,
+          "maximum": 500
+        },
+        {
+          "group": "reversal_ramp",
+          "name": "b0_mcp",
+          "minimum": 0,
+          "maximum": 500
+        },
+        {
+          "group": "reversal_ramp",
+          "name": "b0_pip",
+          "minimum": 0,
+          "maximum": 500
+        },
+        {
+          "group": "reversal_ramp",
+          "name": "b0_dip",
+          "minimum": 0,
+          "maximum": 500
+        },
+        {
+          "group": "reversal_ramp",
+          "name": "b0_cmc",
+          "minimum": 0,
+          "maximum": 500
+        },
+        {
+          "group": "reversal_ramp",
+          "name": "vb_aa",
+          "minimum": 0,
+          "maximum": 5000
+        },
+        {
+          "group": "reversal_ramp",
+          "name": "vb_mcp",
+          "minimum": 0,
+          "maximum": 5000
+        },
+        {
+          "group": "reversal_ramp",
+          "name": "vb_pip",
+          "minimum": 0,
+          "maximum": 5000
+        },
+        {
+          "group": "reversal_ramp",
+          "name": "vb_dip",
+          "minimum": 0,
+          "maximum": 5000
+        },
+        {
+          "group": "reversal_ramp",
+          "name": "vb_cmc",
+          "minimum": 0,
+          "maximum": 5000
+        },
+        {
+          "group": "reversal_ramp",
+          "name": "load_limit_aa",
+          "minimum": 100,
+          "maximum": 1000
+        },
+        {
+          "group": "reversal_ramp",
+          "name": "load_limit_mcp",
+          "minimum": 100,
+          "maximum": 1000
+        },
+        {
+          "group": "reversal_ramp",
+          "name": "load_limit_pip",
+          "minimum": 100,
+          "maximum": 1000
+        },
+        {
+          "group": "reversal_ramp",
+          "name": "load_limit_dip",
+          "minimum": 100,
+          "maximum": 1000
+        },
+        {
+          "group": "reversal_ramp",
+          "name": "load_limit_cmc",
+          "minimum": 100,
+          "maximum": 1000
+        },
+        {
+          "group": "reversal_ramp",
+          "name": "takeup_timeout_ms",
+          "minimum": 0,
+          "maximum": 2000
+        }
+      ]
     }
-  ]
+  }
 }

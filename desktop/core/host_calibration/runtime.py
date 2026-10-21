@@ -15,7 +15,7 @@ from dataclasses import dataclass
 import threading
 import time
 
-from desktop.paths import CALIB_LOAD_SNAPSHOT_PATH
+from desktop.paths import CALIB_ACTIVE_SNAPSHOT_PATH
 
 from ..angle_mapping import get_spec, urdf_manual_scaled_mapping_metadata
 from ..calibration_snapshot import (
@@ -81,7 +81,7 @@ class HostCalibrationIO:
         self.active_joint_mask = self.selected_joint_mask
         self.selected_motor_mask = int(selected_motor_mask) & VALID_MOTOR_MASK
         self.preparation_reset_mask = int(reset_motor_mask or selected_motor_mask) & VALID_MOTOR_MASK
-        self.snapshot_store = snapshot_store or CalibrationSnapshotStore(CALIB_LOAD_SNAPSHOT_PATH)
+        self.snapshot_store = snapshot_store or CalibrationSnapshotStore(CALIB_ACTIVE_SNAPSHOT_PATH)
         self.snapshot_identity = {}
         self._cancel = threading.Event()
         self._initial_prepared = False

@@ -15,11 +15,15 @@ PACKAGE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = PACKAGE_DIR.parent
 RESOURCE_DIR = PACKAGE_DIR / "resources"
 CONFIG_DIR = RESOURCE_DIR / "config"
-DATA_DIR = Path(os.environ.get("MMHAND_DATA_DIR") or Path.home() / "mmhand_data").expanduser().resolve()
+# Default runtime root is the config directory itself. Tests and tools may
+# override it with MMHAND_DATA_DIR without touching tracked configuration.
+DATA_DIR = Path(os.environ.get("MMHAND_DATA_DIR") or CONFIG_DIR).expanduser().resolve()
 DEVICE_STATE_DIR = DATA_DIR / "device_state"
 URDF_DIR = RESOURCE_DIR / "hku_hand_v2_urdf"
-RUN_DATA_DIR = DATA_DIR / "recordings"
-LOG_DIR = DATA_DIR / "logs"
+# Logs and recordings share the repository-level logs tree. The app writes
+# recordings under logs/; the whole tree is gitignored.
+LOG_DIR = Path(os.environ.get("MMHAND_LOG_DIR") or (PROJECT_ROOT / "logs")).resolve()
+RUN_DATA_DIR = LOG_DIR
 
 
 def relative_display(path) -> str:
@@ -31,11 +35,10 @@ def relative_display(path) -> str:
         return Path(os.path.relpath(resolved, PROJECT_ROOT)).as_posix()
 
 
-# 默认标定快照是仓库内的可移植配置，不是用户目录下的运行数据。
-CALIB_LOAD_SNAPSHOT_PATH = CONFIG_DIR / "calibration_bundle.mmcal.json"
-# 运行期多圈锚点独立于体积较大的标定快照，以便运动时低开销原子更新。
-MULTITURN_RUNTIME_PATH = DEVICE_STATE_DIR / "multiturn_runtime.json"
-URDF_JOINT_MAPPING_PATH = CONFIG_DIR / "urdf_joint_mapping.json"
-ROBOT_MODEL_MANIFEST_PATH = CONFIG_DIR / "robot_model_manifest.json"
+# Active calibration snapshot. There is no separate checked-in template: the
+# first calibration creates this file, later calibrations replace it atomically.
+CALIB_ACTIVE_SNAPSHOT_PATH = DATA_DIR / "calibration_bundle.mmcal.json"
+# One merged robot-model contract: hand-authored source/manifest plus generated mapping.
+ROBOT_MODEL_PATH = CONFIG_DIR / "robot_model.json"
 PRODUCT_FINGERPRINT_PATH = CONFIG_DIR / "product_fingerprint.json"
 DEFAULT_URDF_PATH = URDF_DIR / "urdf" / "hand.urdf"

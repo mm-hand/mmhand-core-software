@@ -24,7 +24,7 @@ from .comm_layer import TactileSerialComm, list_ports as _list_ports
 from .core_logic import HandController, ManualPrepareResult
 from .data_models import HandModel, clone_hand_model, resolve_joint_workspace_range
 from .protocol import ControlMode, ENCODER_COUNT, directed_encoder_delta
-from desktop.paths import CALIB_LOAD_SNAPSHOT_PATH
+from desktop.paths import CALIB_ACTIVE_SNAPSHOT_PATH
 from .calibration_snapshot import CalibrationSnapshotError, joint_calib_result_tendon_lut_abs_ranges
 from .session_log import log_session
 from .teleop_input import TeleopInputFilter
@@ -172,7 +172,7 @@ class HandBackend(ApplicationActions):
             return self._calibration_workflow.snapshot_path
         except CalibrationSnapshotError:
             # Only the file-dialog starting directory; active persistence never falls back.
-            return CALIB_LOAD_SNAPSHOT_PATH
+            return CALIB_ACTIVE_SNAPSHOT_PATH
 
     def _ensure_controller_callback_registered(self) -> None:
         callbacks = getattr(self._controller, "update_callbacks", None)

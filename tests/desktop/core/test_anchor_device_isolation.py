@@ -5,13 +5,10 @@ from desktop.core.data_models import HandModel
 from desktop.core.protocol import HOST_PROTOCOL_VERSION
 
 
-def test_anchor_paths_follow_device_and_model_without_activating_legacy(tmp_path, monkeypatch):
-    anchor = tmp_path / "multiturn_runtime.json"
+def test_anchor_paths_use_one_active_bundle_without_legacy_files(tmp_path, monkeypatch):
     bundle = tmp_path / "calibration_bundle.mmcal.json"
-    anchor.write_text('{"legacy":true}', encoding="utf-8")
     bundle.write_text('{"legacy":true}', encoding="utf-8")
-    monkeypatch.setattr(core_logic, "MULTITURN_RUNTIME_PATH", anchor)
-    monkeypatch.setattr(core_logic, "CALIB_LOAD_SNAPSHOT_PATH", bundle)
+    monkeypatch.setattr(core_logic, "CALIB_ACTIVE_SNAPSHOT_PATH", bundle)
     monkeypatch.setattr(core_logic, "_active_urdf_repo_path", lambda: "model/hand.urdf")
     controller = core_logic.HandController()
     state = HandModel()
@@ -20,16 +17,13 @@ def test_anchor_paths_follow_device_and_model_without_activating_legacy(tmp_path
     assert controller._multiturn_identity(state) is None
     state.product_fingerprint["device_id"] = "0000123456789ABC"
     identity = controller._multiturn_identity(state)
-    path_a = controller._multiturn_store.path
-    assert identity["device_id"] in path_a.parts
+    assert identity["device_id"] == "0000123456789ABC"
+    assert controller._multiturn_store.path == bundle
     state.product_fingerprint["device_id"] = "0000123456789ABD"
-    controller._calibration_snapshot_anchor_valid_mask = 1
     controller._multiturn_identity(state)
-    assert controller._multiturn_store.path != path_a
-    assert controller._calibration_snapshot_anchor_valid_mask == 0
-    for path in (anchor, bundle):
-        assert path.read_text(encoding="utf-8") == '{"legacy":true}'
-        assert not path.with_name(path.name + ".before-device-isolation.bak").exists()
+    assert controller._multiturn_store.path == bundle
+    assert bundle.read_text(encoding="utf-8") == '{"legacy":true}'
+    assert not bundle.with_name(bundle.name + ".before-device-isolation.bak").exists()
 
 
 def test_bad_device_id_or_protocol_cannot_choose_storage(monkeypatch):

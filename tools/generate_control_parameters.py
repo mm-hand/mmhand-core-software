@@ -29,13 +29,15 @@ def render(fields, enum_name, count_name, guard, title):
 
 
 def render_main():
-    fields = json.loads((ROOT / 'desktop/resources/config/control_parameters.schema.json').read_text(encoding='utf-8'))['fields']
+    schema = json.loads((ROOT / 'desktop/resources/config/control_parameters.schema.json').read_text(encoding='utf-8'))
+    fields = schema['payloads']['main']['fields']
     return render(fields, 'Parameter', 'ParameterCount', 'ControlParameters',
                   '枚举顺序及硬校验边界。')
 
 
 def render_ramp():
-    fields = json.loads((ROOT / 'desktop/resources/config/reversal_ramp.schema.json').read_text(encoding='utf-8'))['fields']
+    schema = json.loads((ROOT / 'desktop/resources/config/control_parameters.schema.json').read_text(encoding='utf-8'))
+    fields = schema['payloads']['ramp']['fields']
     return render(fields, 'RampParameter', 'RampParameterCount', 'RampParameters',
                   '渐进快速换向参数的枚举顺序及硬校验边界。')
 

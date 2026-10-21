@@ -22,10 +22,11 @@ from tools.robot_model_source import inspect_source, validate_tree
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MANIFEST = ROOT / "desktop/resources/config/robot_model_manifest.json"
+DEFAULT_MODEL = ROOT / "desktop/resources/config/robot_model.json"
+DEFAULT_MANIFEST = DEFAULT_MODEL
 DEFAULT_URDF = ROOT / "desktop/resources/hku_hand_v2_urdf/urdf/hand.urdf"
-DEFAULT_SOURCE = ROOT / "desktop/resources/config/robot_model_source.json"
-DEFAULT_MAPPING = ROOT / "desktop/resources/config/urdf_joint_mapping.json"
+DEFAULT_SOURCE = DEFAULT_MODEL
+DEFAULT_MAPPING = DEFAULT_MODEL
 DEFAULT_FINGERPRINT = ROOT / "desktop/resources/config/product_fingerprint.json"
 DEFAULT_P4_LIMITS = (
     ROOT / "ESP32-P4/src/generated/UrdfJointLimits.generated.h"
@@ -71,6 +72,8 @@ def _read_json(path: Path) -> dict:
 def load_manifest(path: Path) -> dict:
     """严格验证 J00-J20 语义顺序，避免生成时静默错绑舵机。"""
     data = _read_json(path)
+    if isinstance(data.get("manifest"), dict):
+        data = data["manifest"]
     joints = data.get("joints")
     if int(data.get("schema_version", 0)) != 1 or not isinstance(joints, list):
         raise ModelGenerationError("robot model manifest schema must be version 1")
@@ -376,14 +379,29 @@ def _atomic_write(path: Path, content: str) -> None:
         raise
 
 
+def render_robot_model(model: dict) -> str:
+    return json.dumps(model, ensure_ascii=False, indent=2) + "\n"
+
+
 def build_outputs(args: argparse.Namespace) -> dict[Path, str]:
+    model = _read_json(args.manifest)
     manifest = load_manifest(args.manifest)
     limits = load_urdf_limits(args.urdf, manifest)
-    source = _read_json(DEFAULT_SOURCE)
+    source = dict(model.get("source") or {})
     source_commit = source["source_commit"]
     fingerprint = build_fingerprint(manifest, limits, args.urdf, source_commit)
+    mapping = json.loads(render_mapping(manifest, limits, source_commit, source["source_urdf_path"]))
+    merged = dict(model)
+    merged["schema_version"] = 5
+    merged["model_id"] = manifest.get("model_id", merged.get("model_id"))
+    merged["mapping_id"] = manifest.get("mapping_id", merged.get("mapping_id"))
+    merged["feedback_mapping_version"] = manifest.get("feedback_mapping_version")
+    merged["manual_scaled_mapping_version"] = manifest.get("manual_scaled_mapping_version")
+    merged["source"] = source
+    merged["manifest"] = manifest
+    merged["mapping"] = mapping
     outputs = {
-        args.mapping_output: render_mapping(manifest, limits, source_commit, source["source_urdf_path"]),
+        args.mapping_output: render_robot_model(merged),
         args.p4_limits_output: render_p4_limits(manifest, limits),
         args.fingerprint_output: render_fingerprint_json(fingerprint),
         args.p4_fingerprint_output: render_p4_fingerprint(fingerprint),
@@ -399,14 +417,14 @@ def build_outputs(args: argparse.Namespace) -> dict[Path, str]:
 
 
 def default_args() -> argparse.Namespace:
-    return argparse.Namespace(manifest=DEFAULT_MANIFEST, urdf=DEFAULT_URDF,
+    return argparse.Namespace(manifest=DEFAULT_MODEL, urdf=DEFAULT_URDF,
         mapping_output=DEFAULT_MAPPING, fingerprint_output=DEFAULT_FINGERPRINT,
         p4_limits_output=DEFAULT_P4_LIMITS, p4_fingerprint_output=DEFAULT_P4_FINGERPRINT,
         p4_bindings_output=DEFAULT_P4_BINDINGS)
 
 
 def check_outputs() -> list[Path]:
-    source = _read_json(DEFAULT_SOURCE)
+    source = _read_json(DEFAULT_SOURCE).get("source", {})
     stale = []
     resource_root = DEFAULT_URDF.parent.parent
     for relative, digest in source["resource_sha256"].items():
@@ -446,7 +464,8 @@ def main() -> int:
                 return int(bool(stale))
             publish_outputs({path: text.encode("utf-8") for path, text in outputs.items()})
             return 0
-        manifest = load_manifest(DEFAULT_MANIFEST)
+        model = _read_json(DEFAULT_MODEL)
+        manifest = load_manifest(DEFAULT_MODEL)
         limits = load_urdf_limits(source_path, manifest)
         source, repository, resources = inspect_source(source_path)
         package = source_path.resolve().parent.parent
@@ -455,13 +474,18 @@ def main() -> int:
         args = default_args()
         args.urdf = source_path
         fingerprint = build_fingerprint(manifest, limits, source_path, source["source_commit"])
+        mapping = json.loads(render_mapping(manifest, limits, source["source_commit"], source["source_urdf_path"]))
+        merged = dict(model)
+        merged["schema_version"] = 5
+        merged["source"] = source
+        merged["manifest"] = manifest
+        merged["mapping"] = mapping
         outputs = {
-            DEFAULT_MAPPING: render_mapping(manifest, limits, source["source_commit"], source["source_urdf_path"]),
+            DEFAULT_MODEL: render_robot_model(merged),
             DEFAULT_P4_LIMITS: render_p4_limits(manifest, limits),
             DEFAULT_FINGERPRINT: render_fingerprint_json(fingerprint),
             DEFAULT_P4_FINGERPRINT: render_p4_fingerprint(fingerprint),
             DEFAULT_P4_BINDINGS: render_p4_bindings(manifest),
-            DEFAULT_SOURCE: json.dumps(source, ensure_ascii=False, indent=2) + "\n",
         }
         resource_bytes = {}
         for relative in source["resource_sha256"]:

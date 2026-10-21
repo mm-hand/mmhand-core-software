@@ -18,25 +18,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Tuple
 
-from desktop.paths import (
-    CALIB_LOAD_SNAPSHOT_PATH as DEFAULT_CALIB_LOAD_SNAPSHOT_PATH,
-    URDF_JOINT_MAPPING_PATH as DEFAULT_URDF_JOINT_MAPPING_PATH,
-)
+from desktop.paths import ROBOT_MODEL_PATH as DEFAULT_ROBOT_MODEL_PATH
+from .robot_model import RobotModelError, mapping as robot_model_mapping
 from .calibration_snapshot import validate_snapshot
 
 from .protocol import ENCODER_COUNT
 
 
-CALIB_LOAD_SNAPSHOT_PATH = Path(DEFAULT_CALIB_LOAD_SNAPSHOT_PATH)
-URDF_JOINT_MAPPING_PATH = Path(DEFAULT_URDF_JOINT_MAPPING_PATH)
+URDF_JOINT_MAPPING_PATH = Path(DEFAULT_ROBOT_MODEL_PATH)
 
 
 def _urdf_mapping_metadata(
     version_key: str,
     label: str,
-    mapping_path: Path | str,
+    mapping_path: Path | str = URDF_JOINT_MAPPING_PATH,
 ) -> tuple[int, int]:
-    data = json.loads(Path(mapping_path).read_text(encoding="utf-8"))
+    raw = json.loads(Path(mapping_path).read_text(encoding="utf-8"))
+    data = raw.get("mapping", raw)
     version = int(data.get(version_key, 0))
     joints = data.get("joints")
     if version <= 0 or not isinstance(joints, list) or len(joints) != ENCODER_COUNT:
@@ -131,11 +129,9 @@ class JointAngleSpec:
 def _load_structure_urdf_joint_specs() -> Dict[int, JointAngleSpec]:
     """从统一生成的映射文件加载 21 关节全部运行时元数据。"""
     try:
-        data = json.loads(URDF_JOINT_MAPPING_PATH.read_text(encoding="utf-8"))
-    except OSError as exc:
-        raise RuntimeError(f"missing URDF joint mapping: {URDF_JOINT_MAPPING_PATH}") from exc
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"invalid URDF joint mapping JSON: {URDF_JOINT_MAPPING_PATH}") from exc
+        data = robot_model_mapping()
+    except RobotModelError as exc:
+        raise RuntimeError(f"missing or invalid robot model: {URDF_JOINT_MAPPING_PATH}") from exc
 
     if not isinstance(data, dict) or int(data.get("schema_version", 0)) != 4:
         raise RuntimeError("unsupported URDF joint mapping schema")
@@ -455,7 +451,6 @@ __all__ = [
     "AngleMappingError",
     "JOINT_SPECS",
     "JointAngleSpec",
-    "URDF_JOINT_MAPPING_PATH",
     "calibrated_range_deg",
     "calibrated_to_urdf",
     "clamp_calibrated",
