@@ -36,13 +36,13 @@
     "slow_window_ms": 500
   },
   "reversal": {
-    "confirm_deg_aa": 1.0,
+    "confirm_deg_aa": 0.6,
     "confirm_deg_mcp": 1.0,
     "confirm_deg_pip": 1.0,
     "confirm_deg_dip": 1.0,
     "confirm_deg_cmc": 1.0,
     "confirm_ms": 20,
-    "takeup_counts_aa": 0,
+    "takeup_counts_aa": 40,
     "takeup_counts_mcp": 0,
     "takeup_counts_pip": 0,
     "takeup_counts_dip": 0,
