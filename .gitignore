@@ -39,3 +39,6 @@ reference/
 desktop/resources/config/*.before_*.json
 desktop/resources/config/*.bak
 simplify-*.log
+
+# Tuning reports are local run artifacts
+docs/debug/pid-autotuning-*.md
