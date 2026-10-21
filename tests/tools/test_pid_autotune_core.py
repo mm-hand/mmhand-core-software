@@ -1,4 +1,4 @@
-from desktop.core.pid_autotune import (
+from tools.debug.pid_autotune_core import (
     DYNAMIC_BINS, POSITION_BINS, DiscreteEI, GridPoint, ScoreThresholds,
     build_composite_trajectory, evaluate_trial,
 )

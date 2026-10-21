@@ -24,7 +24,7 @@ sys.path.insert(0, str(ROOT))
 
 from desktop.core.control_parameters import CURRENT_PATH  # noqa: E402
 from desktop.core.control_tuning import calibration_audit  # noqa: E402
-from desktop.core.pid_autotune import (  # noqa: E402
+from tools.debug.pid_autotune_core import (  # noqa: E402
     DYNAMIC_BINS, POSITION_BINS, DiscreteEI, GridPoint, ScoreThresholds,
     build_composite_trajectory, evaluate_trial,
 )
@@ -47,6 +47,45 @@ def initial_points(joint_type: str, base_kp: float) -> list[GridPoint]:
         return max(lo, min(hi, round(value, 3)))
     return [GridPoint(clamp(base_kp), 0.0), GridPoint(clamp(base_kp - 0.1), 0.02),
             GridPoint(clamp(base_kp + 0.1), 0.02), GridPoint(clamp(base_kp), 0.06)]
+
+
+def _plot_trial_jsonl(source: Path, target: Path) -> bool:
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+    except Exception:
+        return False
+    rows = [json.loads(line) for line in source.read_text(encoding='utf-8').splitlines() if line]
+    if not rows:
+        return False
+    t = [row['time'] for row in rows]
+    target_deg = [row['target'] for row in rows]
+    actual_deg = [row['actual'] for row in rows]
+    error = [a - b for a, b in zip(actual_deg, target_deg)]
+    motor = [row.get('motor_cmd', 0) for row in rows]
+    figure, axes = plt.subplots(3, 1, figsize=(11, 8), sharex=True)
+    axes[0].plot(t, target_deg, label='target', linewidth=1.0)
+    axes[0].plot(t, actual_deg, label='actual', linewidth=1.0)
+    axes[0].set_ylabel('angle (deg)')
+    axes[0].legend(loc='best')
+    axes[1].plot(t, error, color='tab:red', linewidth=0.9)
+    axes[1].set_ylabel('error (deg)')
+    axes[2].plot(t, motor, color='tab:green', linewidth=0.9)
+    axes[2].set_ylabel('motor (counts)')
+    axes[2].set_xlabel('P4 trace time (s)')
+    figure.tight_layout()
+    figure.savefig(target, dpi=120)
+    plt.close(figure)
+    return True
+
+
+def _write_curves(raw_dir: Path) -> int:
+    count = 0
+    for source in sorted(raw_dir.glob('*.jsonl')):
+        if _plot_trial_jsonl(source, source.with_suffix('.png')):
+            count += 1
+    return count
 
 
 def _write_report(output: Path, records: list[dict], thresholds: ScoreThresholds, elapsed_s: float):
@@ -104,7 +143,7 @@ def run_dry(args) -> int:
     output.mkdir(parents=True, exist_ok=False)
     records = []
     started = time.monotonic()
-    for joint_type in TYPES:
+    for joint_type in getattr(args, 'types', TYPES):
         joint = REPRESENTATIVES[joint_type]
         row = by_joint.get(joint)
         if not row or not row.get('eligible'):
@@ -216,8 +255,12 @@ def run_hardware(args) -> int:
     started = time.monotonic()
     deadline = started + args.max_minutes * 60.0
     records = []
+    raw_dir = output / 'raw'
+    raw_dir.mkdir(parents=True, exist_ok=True)
     try:
         for joint_type in TYPES:
+            if joint_type not in args.types:
+                continue
             if time.monotonic() >= deadline - 60:
                 break
             joint = REPRESENTATIVES[joint_type]
@@ -291,6 +334,8 @@ def run_hardware(args) -> int:
                         hand.request_recording(False)
                         hand.set_control_trace_subscription(False, 5)
                     score = evaluate_trial(samples, ScoreThresholds())
+                    raw_path = raw_dir / f'{joint_type}_J{joint:02d}_{trials_this_type + 1:02d}.jsonl'
+                    raw_path.write_text('\n'.join(json.dumps(row) for row in samples) + '\n', encoding='utf-8')
                     optimizer.observe(point, score.score, score.valid, '; '.join(score.failures))
                     records.append(dict(type=joint_type, kp=point.kp, kd=point.kd, score=score.score,
                                         valid=score.valid, reason='; '.join(score.failures),
@@ -337,8 +382,9 @@ def run_hardware(args) -> int:
         finally:
             hand.close_application()
     _write_report(output, [row for row in records if row.get('phase') != 'best'], ScoreThresholds(), time.monotonic() - started)
+    curves = _write_curves(raw_dir)
     (output / 'parameters.after.json').write_text(json.dumps(final_parameters, indent=2), encoding='utf-8')
-    print(f'HARDWARE complete: {len(records)} records, report {output / "report.md"}')
+    print(f'HARDWARE complete: {len(records)} records, {curves} curves, report {output / "report.md"}')
     return 0
 
 
@@ -351,11 +397,16 @@ def main(argv=None):
     parser.add_argument('--port', default='COM12')
     parser.add_argument('--max-minutes', type=float, default=60.0)
     parser.add_argument('--max-trials', type=int, default=11)
+    parser.add_argument('--types', default=','.join(TYPES), help='comma-separated subset of aa,mcp,pip,dip')
     args = parser.parse_args(argv)
     if args.dry_run == args.hardware:
         parser.error('choose exactly one of --dry-run or --hardware')
     if args.max_minutes <= 0 or args.max_trials <= 0:
         parser.error('max values must be positive')
+    selected_types = tuple(name.strip().lower() for name in args.types.split(',') if name.strip())
+    if not selected_types or any(name not in TYPES for name in selected_types):
+        parser.error(f'--types must be a subset of {",".join(TYPES)}')
+    args.types = selected_types
     return run_dry(args) if args.dry_run else run_hardware(args)
 
 
