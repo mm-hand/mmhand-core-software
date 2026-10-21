@@ -106,7 +106,7 @@ int main() {
     auto damped=controller.compute(0,0,fb,3010,servo,lut,3,p);
     assert(damped.derivative[0] < -20.0f && damped.targets[0] < 90); // measured damping, no target kick
     p.values[JointKdAa]=0.0f; controller.resetAll(); fb.fast=fb.slow=0;
-    p.values[JointKiAa]=0.2f; p.values[FeedbackIntegralConfirmMs]=20;
+    p.values[JointKiAa]=0.2f; p.values[JointKiIntegralConfirmMs]=20;
     controller.compute(0,0,fb,990,servo,lut,3,p);
     JointControlResult integrated;
     for(uint32_t t=1000;t<=1100;t+=10) integrated=controller.compute(0,1,fb,t,servo,lut,3,p);

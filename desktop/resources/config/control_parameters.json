@@ -1,9 +1,9 @@
 {
-  "schema_version": 3,
-  "revision": 207,
+  "schema_version": 4,
+  "revision": 209,
   "joint_kp": {
     "aa": 1.0,
-    "mcp": 0.4,
+    "mcp": 1.0,
     "pip": 1.0,
     "dip": 1.2,
     "cmc": 1.0
@@ -13,7 +13,10 @@
     "mcp": 0.0,
     "pip": 0.0,
     "dip": 0.0,
-    "cmc": 0.0
+    "cmc": 0.0,
+    "integral_limit_counts": 100,
+    "integral_noise_deg": 0.1,
+    "integral_confirm_ms": 200
   },
   "joint_kd": {
     "aa": 0.0,
@@ -22,18 +25,12 @@
     "dip": 0.0,
     "cmc": 0.0
   },
-  "single_tendon": {
-    "integral_limit_counts": 100
-  },
   "dual_tendon": {
-    "integral_limit_counts": 100,
     "pair_recovery_gain": 0.0
   },
   "feedback": {
     "fast_window_ms": 20,
-    "slow_window_ms": 500,
-    "integral_noise_deg": 0.1,
-    "integral_confirm_ms": 200
+    "slow_window_ms": 500
   },
   "reversal": {
     "confirm_deg": 1.0,

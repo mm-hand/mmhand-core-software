@@ -26,11 +26,11 @@ CURRENT_PATH = CONFIG_DIR / 'control_parameters.json'
 
 BOUNDS = {
     'joint_kp': {'aa': (0.0, 2.0), 'mcp': (0.0, 2.0), 'pip': (0.0, 2.0), 'dip': (0.0, 2.0), 'cmc': (0.0, 2.0)},
-    'joint_ki': {'aa': (0.0, 1.0), 'mcp': (0.0, 1.0), 'pip': (0.0, 1.0), 'dip': (0.0, 1.0), 'cmc': (0.0, 1.0)},
+    'joint_ki': {'aa': (0.0, 1.0), 'mcp': (0.0, 1.0), 'pip': (0.0, 1.0), 'dip': (0.0, 1.0), 'cmc': (0.0, 1.0),
+                 'integral_limit_counts': (0, 500), 'integral_noise_deg': (0.0, 2.0), 'integral_confirm_ms': (0, 1000)},
     'joint_kd': {'aa': (0.0, 0.5), 'mcp': (0.0, 0.5), 'pip': (0.0, 0.5), 'dip': (0.0, 0.5), 'cmc': (0.0, 0.5)},
-    'single_tendon': {'integral_limit_counts': (0, 500)},
-    'dual_tendon': {'integral_limit_counts': (0, 500), 'pair_recovery_gain': (0.0, 0.5)},
-    'feedback': {'fast_window_ms': (10, 100), 'slow_window_ms': (100, 1000), 'integral_noise_deg': (0.0, 2.0), 'integral_confirm_ms': (0, 1000)},
+    'dual_tendon': {'pair_recovery_gain': (0.0, 0.5)},
+    'feedback': {'fast_window_ms': (10, 100), 'slow_window_ms': (100, 1000)},
     'reversal': {'confirm_deg': (0.1, 10.0), 'confirm_ms': (0, 500), 'takeup_counts': (0, 300), 'exit_travel_deg': (0.05, 5.0)},
     'collision': {'arm_velocity_flex_deg_s': (0.1, 100.0), 'arm_velocity_extend_deg_s': (0.1, 100.0), 'stall_velocity_flex_deg_s': (0, 20.0), 'stall_velocity_extend_deg_s': (0, 20.0), 'min_error_deg': (0.5, 30.0), 'target_reset_deg': (0.1, 10.0), 'retreat_deg': (0.1, 10.0)},
     'output': {'lut_release_margin_counts': (0, 500), 'lut_tight_margin_counts': (0, 1000)},
@@ -41,7 +41,7 @@ BOUNDS = {
 def validate(data: dict) -> dict:
     if not isinstance(data, dict) or set(data) != {'schema_version', 'revision', *BOUNDS}:
         raise ValueError('Control parameter groups do not match the current schema')
-    if data['schema_version'] != 3 or not isinstance(data['revision'], int) or data['revision'] < 1:
+    if data['schema_version'] != 4 or not isinstance(data['revision'], int) or data['revision'] < 1:
         raise ValueError('Control parameter schema or revision is invalid')
     for group, fields in BOUNDS.items():
         values = data[group]
@@ -68,7 +68,7 @@ def configuration_values(data: dict) -> bytes:
 
 
 def configuration_payload(data: dict) -> bytes:
-    return struct.pack('>BI', 3, data['revision']) + configuration_values(data) + struct.pack('>I', configuration_crc(data))
+    return struct.pack('>BI', 4, data['revision']) + configuration_values(data) + struct.pack('>I', configuration_crc(data))
 
 
 def configuration_frame(data: dict) -> bytes:

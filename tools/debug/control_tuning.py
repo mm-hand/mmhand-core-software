@@ -46,7 +46,7 @@ def main():
                         help='explicit one-time Clear Faults before this test; never retry after failure')
     parser.add_argument('--case', choices=list('ABCDEFGHIJKP'), default='A')
     parser.add_argument('--duration', type=float, default=300, help='disabled health duration in seconds')
-    parser.add_argument('--parameter', choices=['kp','kd','pair','takeup','confirm','ki','ilimit','fast'], default='kp')
+    parser.add_argument('--parameter', choices=['kp','kd','pair','takeup','confirm','ki','ilimit','inoise','iconfirm','fast'], default='kp')
     parser.add_argument('--values', help='comma separated sweep values')
     parser.add_argument('--base-kp',type=float,help='fixed Kp for the tested joint type in non-Kp sweeps')
     parser.add_argument('--base-parameters',type=Path,help='explicit fixed configuration for this experiment')
@@ -330,7 +330,6 @@ def main():
         if args.trial: candidates=[t for t in candidates if t.name in args.trial.split(',')]
         if not candidates: raise RuntimeError('no matching trials')
         initial=hand._control_parameters.snapshot(); initial.pop('crc32',None)
-        tendon_group='dual_tendon' if len(row['motors'])==2 else 'single_tendon'
         # J00..J19: four joints per finger in AA/MCP/PIP/DIP order; J20: thumb CMC.
         kp_fields=('aa','mcp','pip','dip','cmc')
         kp_field=kp_fields[-1] if args.joint==20 else kp_fields[args.joint%4]
@@ -342,7 +341,8 @@ def main():
                 'pair':[0,.01,.03,.05,.08],
                 'takeup':[40,80,140],
                 'confirm':[.1,.25,.5,1.],
-                'ki':[0,.02,.05,.1], 'ilimit':[20,50,100], 'fast':[10,20,30]}[args.parameter]
+                'ki':[0,.02,.05,.1], 'ilimit':[20,50,100],
+                'inoise':[.05,.1,.2], 'iconfirm':[100,200,500], 'fast':[10,20,30]}[args.parameter]
         fixed=json.loads(args.base_parameters.read_text(encoding='utf-8')) if args.base_parameters else initial
         fixed.pop('crc32',None)
         (args.output/'parameters.fixed.json').write_text(json.dumps(fixed,indent=2),encoding='utf-8')
@@ -354,7 +354,9 @@ def main():
                         'kd':('joint_kd',kp_field),
                         'pair':('dual_tendon','pair_recovery_gain'),'takeup':('reversal','takeup_counts'),
                         'confirm':('reversal','confirm_deg'),
-                        'ki':('joint_ki',kp_field),'ilimit':(tendon_group,'integral_limit_counts'),
+                        'ki':('joint_ki',kp_field),'ilimit':('joint_ki','integral_limit_counts'),
+                        'inoise':('joint_ki','integral_noise_deg'),
+                        'iconfirm':('joint_ki','integral_confirm_ms'),
                         'fast':('feedback','fast_window_ms')}
                 g,k=groups[args.parameter]; proposal[g][k]=point
             if args.mode=='sweep' and args.parameter=='kp':

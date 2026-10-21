@@ -232,9 +232,11 @@ J00–J19 每四个一组依次 AA/MCP/PIP/DIP，J20 = 拇指 CMC。
 已有标定包不会自动回溯修正；需要重做相应关节的 Motor Calibration 才会生成
 新的直线 LUT。
 
-控制参数表 35→43：删除单/双腱共享的 `ki_per_s`，新增
+控制参数表 35→43→42：删除单/双腱共享的 `ki_per_s`，新增
 `joint_ki.aa/mcp/pip/dip/cmc` 与 `joint_kd.aa/mcp/pip/dip/cmc` 各五组；
-SET 载荷 149→181 字节，参数 schema 版本 2→3。默认 Ki=Kd=0，因此不改变
+积分限幅、噪声门限、确认时间统一并入 `joint_ki`，单双腱共用一个
+`integral_limit_counts`；删除 `single_tendon` 组。最终 42 参数、
+SET 载荷 177 字节、参数 schema 版本 4。默认 Ki=Kd=0，因此不改变
 现有行为。Kd 单位秒，D 项为 `-Kd·s(q)·q̇`，q̇ 取 20 ms 快窗均值的差分，
 25 ms 一阶低通、±400°/s 限幅；只在 Tracking 相位生效，换向/补绳/碰撞保持
 与反馈不新鲜时置零。D 分量不新增遥测字段，可由

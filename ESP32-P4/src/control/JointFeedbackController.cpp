@@ -158,15 +158,15 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
     const float kp = p[jointKpParameter(joint)];
     const float ki = p[jointKiParameter(joint)];
     const float kd = p[jointKdParameter(joint)];
-    const float iLimit = p[count == 1 ? SingleTendonIntegralLimitCounts : DualTendonIntegralLimitCounts];
+    const float iLimit = p[JointKiIntegralLimitCounts];
     const float error = target - fb.fast, slowError = target - fb.slow;
     const float integralError = sign(error) == sign(slowError) ?
-        sign(error) * fmaxf(0, fabsf(slowError) - p[FeedbackIntegralNoiseDeg]) : 0;
+        sign(error) * fmaxf(0, fabsf(slowError) - p[JointKiIntegralNoiseDeg]) : 0;
     if (fb.fresh && state.errorSign != sign(integralError)) {
         state.errorSign = sign(integralError); state.errorSince = now;
     }
     const bool integrate = fb.fresh && fb.sampleDt > 0 && !state.saturated && state.phase == Tracking &&
-        state.errorSign != 0 && now - state.errorSince >= p[FeedbackIntegralConfirmMs];
+        state.errorSign != 0 && now - state.errorSince >= p[JointKiIntegralConfirmMs];
     float raw[MAX_JOINT_ACTUATORS] = {};
     for (uint8_t i = 0; i < count; ++i) {
         if (integrate) state.integral[i] = clip(state.integral[i] + ki * slope[i] * integralError * fb.sampleDt, -iLimit, iLimit);

@@ -75,7 +75,7 @@ CMD_MOTOR_ABS_ZERO = 0xF1  # Direct电机页按非空电机位图将当前位置
 CMD_MOTOR_DIRECT_RELEASE = 0xF2  # 结束当前普通直控并保留扭矩和故障；非零token匹配已执行事务，零匹配当前直控代际
 CMD_PROTOCOL_HELLO = 0xF3  # 双向版本及控制模型与反馈拓扑契约握手，不授权运动
 CMD_CONTROL_RELEASE = 0xF6  # 释放普通控制权，不锁存急停，不恢复旧目标
-CMD_CONTROL_PARAMETERS_SET = 0xF8  # 原子设置43个控制与输入滤波参数，版本3、修订、浮点数组、CRC32
+CMD_CONTROL_PARAMETERS_SET = 0xF8  # 原子设置42个控制与输入滤波参数，版本4、修订、浮点数组、CRC32
 CMD_CONTROL_PARAMETERS_QUERY = 0xF9  # 读回P4当前控制参数修订、CRC和已配置状态
 
 PROTO_ACK_STATUS_OK = 0  # 命令已同步执行成功
@@ -157,7 +157,7 @@ COMMAND_PAYLOAD_LENGTHS = {
     CMD_MOTOR_DIRECT_RELEASE: 4,
     CMD_PROTOCOL_HELLO: 9,
     CMD_CONTROL_RELEASE: 0,
-    CMD_CONTROL_PARAMETERS_SET: 181,
+    CMD_CONTROL_PARAMETERS_SET: 177,
     CMD_CONTROL_PARAMETERS_QUERY: 0,
 }
 

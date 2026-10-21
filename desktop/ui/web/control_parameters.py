@@ -14,12 +14,11 @@ from nicegui import ui
 from desktop.core.control_parameters import BOUNDS
 
 TITLES = {
-    'joint_kp': 'Joint Kp (AA / MCP / PIP / DIP / CMC)',
-    'joint_ki': 'Joint Ki (AA / MCP / PIP / DIP / CMC, 1/s)',
-    'joint_kd': 'Joint Kd (AA / MCP / PIP / DIP / CMC, s)',
-    'single_tendon': 'Single-tendon integral limit',
-    'dual_tendon': 'Dual-tendon integral limit and pair recovery',
-    'feedback': 'Encoder windows and integral', 'reversal': 'Fast reversal',
+    'joint_kp': 'Kp config',
+    'joint_ki': 'Ki config',
+    'joint_kd': 'Kd config',
+    'dual_tendon': 'Dual-tendon pair recovery',
+    'feedback': 'Encoder windows', 'reversal': 'Fast reversal',
     'collision': 'Collision thresholds', 'output': 'Output limits',
     'ros2_input': 'ROS2 One Euro and stationary anchor',
 }
@@ -33,10 +32,10 @@ def build(hand, act):
             ui.tooltip('Apply the drafted parameter revision. The host writes it to the configuration and P4 applies the whole revision when idle.')
         defaults = ui.button('Restore Defaults', on_click=lambda: act(hand.request_restore_control_defaults))
         status = ui.label().classes('text-sm')
-    ui.label('Kp/Ki/Kd apply per joint type (AA/MCP/PIP/DIP/CMC); there are no per-joint overrides. P4 applies an entire revision only when idle.').classes('text-sm')
+    ui.label('Kp/Ki/Kd are shared per joint type; integral limit, noise and confirm time are shared by single and dual tendons. P4 applies an entire revision only when idle.').classes('text-sm')
     with ui.column().classes('w-full gap-3'):
         for group, fields in BOUNDS.items():
-            with ui.expansion(TITLES[group], value=group in ('joint_kp', 'joint_ki', 'joint_kd', 'single_tendon', 'dual_tendon')).classes('w-full bg-white rounded'):
+            with ui.expansion(TITLES[group], value=group in ('joint_kp', 'joint_ki', 'joint_kd', 'dual_tendon')).classes('w-full bg-white rounded'):
                 with ui.row().classes('w-full gap-3'):
                     for name, (lower, upper) in fields.items():
                         controls[(group, name)] = ui.number(name.upper() if group.startswith('joint_') else name.replace('_', ' '), min=lower, max=upper,

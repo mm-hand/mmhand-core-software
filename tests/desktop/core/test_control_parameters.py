@@ -24,7 +24,7 @@ def test_persist_validate_restore_and_invalid_current_is_not_overwritten(tmp_pat
     invalid=ControlParameterStore(path)
     assert invalid.error and path.read_text()=='{corrupt'
     invalid.restore_defaults()
-    assert not invalid.error and json.loads(path.read_text())['schema_version']==3
+    assert not invalid.error and json.loads(path.read_text())['schema_version']==4
 
 
 def test_bounds_match_generated_schema_order():

@@ -1864,8 +1864,8 @@ class LowerComputerComm:
             return build_state_sync_request_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "task_diag_subscribe":
             return build_task_diag_subscribe_cmd(bool(cmd[1]))
-        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "control_trace_subscribe":
-            return build_control_trace_subscribe_cmd(bool(cmd[1]))
+        if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "control_trace_subscribe":
+            return build_control_trace_subscribe_cmd(bool(cmd[1]), int(cmd[2]))
         if isinstance(cmd, tuple) and len(cmd) == 4 and cmd[0] == "manual_encoder_single":
             return build_manual_encoder_single_cmd(cmd[1], cmd[2], cmd[3])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "rope_init":
