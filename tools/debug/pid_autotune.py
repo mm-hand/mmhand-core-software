@@ -284,7 +284,8 @@ def run_hardware(args) -> int:
                 proposal['joint_kd'][joint_type] = point.kd
                 proposal['joint_ki'][joint_type] = 0.0
                 proposal['dual_tendon']['pair_recovery_gain'] = 0.0
-                proposal['reversal']['takeup_counts'] = 0
+                for _name in ('aa', 'mcp', 'pip', 'dip', 'cmc'):
+                    proposal['reversal'][f'takeup_counts_{_name}'] = 0
                 try:
                     _apply(hand, proposal)
                     hand.select_joints([joint])

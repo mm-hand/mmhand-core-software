@@ -374,9 +374,9 @@
     {
       "name": "CMD_CONTROL_PARAMETERS_SET",
       "value": 248,
-      "payload_bytes": 177,
+      "payload_bytes": 241,
       "requires_handshake": true,
-      "description": "原子设置42个控制与输入滤波参数，版本4、修订、浮点数组、CRC32"
+      "description": "原子设置58个控制与输入滤波参数，版本5、修订、浮点数组、CRC32"
     },
     {
       "name": "CMD_CONTROL_PARAMETERS_QUERY",

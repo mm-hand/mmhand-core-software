@@ -33,6 +33,11 @@ from .teleop_input import TeleopInputFilter
 StateCallback = Callable[[HandModel], None]
 JointTargetCallback = Callable[[dict], None]
 
+# ROS2 的 Float32MultiArray 在 URDF 限位处可能舍入到 float64 边界之外
+# （例如 J01/J05 下限 -15°、J08 上限 30°）。只容忍该表示误差；超出容差
+# 仍整帧拒绝，通过的值再钳位到精确的 URDF 限位。
+ROS2_JOINT_LIMIT_TOLERANCE_DEG = 1e-4
+
 
 def list_ports() -> List[tuple]:
     return _list_ports()
@@ -706,13 +711,22 @@ class HandBackend(ApplicationActions):
         values = list(angles)
         raw_values = list(raw_targets) if raw_targets is not None else list(values)
         try:
-            valid = (len(values) == ENCODER_COUNT and all(
-                math.isfinite(float(value)) and get_spec(joint).urdf_range_deg[0] <= float(value) <= get_spec(joint).urdf_range_deg[1]
-                for joint, value in enumerate(values)))
+            if len(values) != ENCODER_COUNT:
+                raise ValueError('joint target count')
+            clamped_values = []
+            for joint, value in enumerate(values):
+                number = float(value)
+                low, high = get_spec(joint).urdf_range_deg
+                if not math.isfinite(number) or not (
+                    low - ROS2_JOINT_LIMIT_TOLERANCE_DEG
+                    <= number
+                    <= high + ROS2_JOINT_LIMIT_TOLERANCE_DEG
+                ):
+                    raise ValueError('joint target outside URDF limits')
+                clamped_values.append(min(max(number, low), high))
         except (ValueError, TypeError):
-            valid = False
-        if not valid:
             return JointCommandResult(sent=False, message='ROS2 frame rejected: requires 21 finite URDF degree values within joint limits', targets=values)
+        values = clamped_values
         with self._ros2_output_lock:
             if self._calibration_workflow.is_host_calibration_active():
                 reason = "host_calibration_active"

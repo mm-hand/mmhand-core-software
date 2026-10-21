@@ -32,7 +32,7 @@ def build(hand, act):
             ui.tooltip('Apply the drafted parameter revision. The host writes it to the configuration and P4 applies the whole revision when idle.')
         defaults = ui.button('Restore Defaults', on_click=lambda: act(hand.request_restore_control_defaults))
         status = ui.label().classes('text-sm')
-    ui.label('Kp/Ki/Kd are shared per joint type; integral limit, noise and confirm time are shared by single and dual tendons. P4 applies an entire revision only when idle.').classes('text-sm')
+    ui.label('Kp/Ki/Kd, integral limit/noise/confirm, reversal confirm/takeup/exit are per joint type; pair recovery applies to AA/CMC. Collision, windows, output and ROS2 timing remain global in schema v5. P4 applies an entire revision only when idle.').classes('text-sm')
     with ui.column().classes('w-full gap-3'):
         for group, fields in BOUNDS.items():
             with ui.expansion(TITLES[group], value=group in ('joint_kp', 'joint_ki', 'joint_kd', 'dual_tendon')).classes('w-full bg-white rounded'):

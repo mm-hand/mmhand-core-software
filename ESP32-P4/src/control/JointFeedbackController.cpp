@@ -49,6 +49,36 @@ Parameter jointKdParameter(uint8_t joint) {
         default: return JointKdDip;
     }
 }
+Parameter typeParameter(uint8_t joint, Parameter aa, Parameter mcp, Parameter pip,
+                        Parameter dip, Parameter cmc) {
+    if (joint + 1 == ENCODER_TOTAL_NUM) return cmc;
+    switch (joint % 4) {
+        case 0: return aa;
+        case 1: return mcp;
+        case 2: return pip;
+        default: return dip;
+    }
+}
+Parameter jointIntegralLimitParameter(uint8_t joint) {
+    return typeParameter(joint, JointKiIntegralLimitCountsAa, JointKiIntegralLimitCountsMcp,
+                         JointKiIntegralLimitCountsPip, JointKiIntegralLimitCountsDip,
+                         JointKiIntegralLimitCountsCmc);
+}
+Parameter jointConfirmDegParameter(uint8_t joint) {
+    return typeParameter(joint, ReversalConfirmDegAa, ReversalConfirmDegMcp,
+                         ReversalConfirmDegPip, ReversalConfirmDegDip,
+                         ReversalConfirmDegCmc);
+}
+Parameter jointTakeupParameter(uint8_t joint) {
+    return typeParameter(joint, ReversalTakeupCountsAa, ReversalTakeupCountsMcp,
+                         ReversalTakeupCountsPip, ReversalTakeupCountsDip,
+                         ReversalTakeupCountsCmc);
+}
+Parameter jointExitTravelParameter(uint8_t joint) {
+    return typeParameter(joint, ReversalExitTravelDegAa, ReversalExitTravelDegMcp,
+                         ReversalExitTravelDegPip, ReversalExitTravelDegDip,
+                         ReversalExitTravelDegCmc);
+}
 }
 void JointFeedbackController::reset(uint8_t joint) { if (joint < ENCODER_TOTAL_NUM) states[joint] = {}; }
 void JointFeedbackController::suspend(uint8_t joint, uint32_t now) {
@@ -138,19 +168,19 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
         }
     }
     state.lastTarget = target;
-    if (state.candidate && (target - state.candidateAnchor) * state.candidate >= p[ReversalConfirmDeg] &&
+    if (state.candidate && (target - state.candidateAnchor) * state.candidate >= p[jointConfirmDegParameter(joint)] &&
         now - state.candidateSince >= p[ReversalConfirmMs]) {
         state.direction = state.candidate; state.candidate = 0;
         // The old loading direction must not carry integral bias into take-up.
         for (uint8_t i = 0; i < count; ++i) state.integral[i] = 0;
         state.errorSign = 0;
         state.errorSince = now;
-        state.phase = p[ReversalTakeupCounts] > 0 ? Takeup : Tracking;
+        state.phase = p[jointTakeupParameter(joint)] > 0 ? Takeup : Tracking;
         state.responseAnchor = fb.fast;
         for (uint8_t i = 0; i < count; ++i) state.motorAnchor[i] = measured[i];
     }
     if (state.phase == Takeup &&
-        state.direction * (fb.fast - state.responseAnchor) >= p[ReversalExitTravelDeg]) {
+        state.direction * (fb.fast - state.responseAnchor) >= p[jointExitTravelParameter(joint)]) {
         // The joint answered; hand back to plain tracking and let the lift die.
         state.phase = Tracking;
     }
@@ -158,7 +188,7 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
     const float kp = p[jointKpParameter(joint)];
     const float ki = p[jointKiParameter(joint)];
     const float kd = p[jointKdParameter(joint)];
-    const float iLimit = p[JointKiIntegralLimitCounts];
+    const float iLimit = p[jointIntegralLimitParameter(joint)];
     const float error = target - fb.fast, slowError = target - fb.slow;
     const float integralError = sign(error) == sign(slowError) ?
         sign(error) * fmaxf(0, fabsf(slowError) - p[JointKiIntegralNoiseDeg]) : 0;
@@ -182,7 +212,7 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
             // reversal anchor in the winding direction, whichever of PI and the
             // anchor target is further along. PI passing the target ends the lift.
             const int8_t motorDirection = sign(slope[i]) * state.direction;
-            const float reference = state.motorAnchor[i] + motorDirection * p[ReversalTakeupCounts];
+            const float reference = state.motorAnchor[i] + motorDirection * p[jointTakeupParameter(joint)];
             const float lifted = motorDirection > 0 ? fmaxf(raw[i], reference) : fminf(raw[i], reference);
             out.reversal[i] = lifted - raw[i];
             raw[i] = lifted;

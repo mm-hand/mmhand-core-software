@@ -73,10 +73,10 @@ int main()
     // Firmware calibration has no admission API; it runs exclusively in the host.
     assert(p4::system::canAcceptRunFeedback(SYSTEM_STATE_READY));
     assert(!p4::system::canAcceptRunFeedback(SYSTEM_STATE_RECOVERY_REQUIRED));
-    assert(p4::system::protocolContractMatches(2, 31, 42, 2, 31, 42));
-    assert(!p4::system::protocolContractMatches(1, 31, 42, 2, 31, 42));
-    assert(!p4::system::protocolContractMatches(2, 30, 42, 2, 31, 42));
-    assert(!p4::system::protocolContractMatches(2, 31, 43, 2, 31, 42));
+    assert(p4::system::protocolContractMatches(2, 31, 58, 2, 31, 58));
+    assert(!p4::system::protocolContractMatches(1, 31, 58, 2, 31, 58));
+    assert(!p4::system::protocolContractMatches(2, 30, 58, 2, 31, 58));
+    assert(!p4::system::protocolContractMatches(2, 31, 59, 2, 31, 58));
     return 0;
 }
 ''',

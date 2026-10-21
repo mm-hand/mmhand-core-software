@@ -1,5 +1,5 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "fields": [
     {
       "group": "joint_kp",
@@ -63,7 +63,31 @@
     },
     {
       "group": "joint_ki",
-      "name": "integral_limit_counts",
+      "name": "integral_limit_counts_aa",
+      "minimum": 0,
+      "maximum": 500
+    },
+    {
+      "group": "joint_ki",
+      "name": "integral_limit_counts_mcp",
+      "minimum": 0,
+      "maximum": 500
+    },
+    {
+      "group": "joint_ki",
+      "name": "integral_limit_counts_pip",
+      "minimum": 0,
+      "maximum": 500
+    },
+    {
+      "group": "joint_ki",
+      "name": "integral_limit_counts_dip",
+      "minimum": 0,
+      "maximum": 500
+    },
+    {
+      "group": "joint_ki",
+      "name": "integral_limit_counts_cmc",
       "minimum": 0,
       "maximum": 500
     },
@@ -129,7 +153,31 @@
     },
     {
       "group": "reversal",
-      "name": "confirm_deg",
+      "name": "confirm_deg_aa",
+      "minimum": 0.1,
+      "maximum": 10.0
+    },
+    {
+      "group": "reversal",
+      "name": "confirm_deg_mcp",
+      "minimum": 0.1,
+      "maximum": 10.0
+    },
+    {
+      "group": "reversal",
+      "name": "confirm_deg_pip",
+      "minimum": 0.1,
+      "maximum": 10.0
+    },
+    {
+      "group": "reversal",
+      "name": "confirm_deg_dip",
+      "minimum": 0.1,
+      "maximum": 10.0
+    },
+    {
+      "group": "reversal",
+      "name": "confirm_deg_cmc",
       "minimum": 0.1,
       "maximum": 10.0
     },
@@ -141,13 +189,61 @@
     },
     {
       "group": "reversal",
-      "name": "takeup_counts",
+      "name": "takeup_counts_aa",
       "minimum": 0,
       "maximum": 300
     },
     {
       "group": "reversal",
-      "name": "exit_travel_deg",
+      "name": "takeup_counts_mcp",
+      "minimum": 0,
+      "maximum": 300
+    },
+    {
+      "group": "reversal",
+      "name": "takeup_counts_pip",
+      "minimum": 0,
+      "maximum": 300
+    },
+    {
+      "group": "reversal",
+      "name": "takeup_counts_dip",
+      "minimum": 0,
+      "maximum": 300
+    },
+    {
+      "group": "reversal",
+      "name": "takeup_counts_cmc",
+      "minimum": 0,
+      "maximum": 300
+    },
+    {
+      "group": "reversal",
+      "name": "exit_travel_deg_aa",
+      "minimum": 0.05,
+      "maximum": 5.0
+    },
+    {
+      "group": "reversal",
+      "name": "exit_travel_deg_mcp",
+      "minimum": 0.05,
+      "maximum": 5.0
+    },
+    {
+      "group": "reversal",
+      "name": "exit_travel_deg_pip",
+      "minimum": 0.05,
+      "maximum": 5.0
+    },
+    {
+      "group": "reversal",
+      "name": "exit_travel_deg_dip",
+      "minimum": 0.05,
+      "maximum": 5.0
+    },
+    {
+      "group": "reversal",
+      "name": "exit_travel_deg_cmc",
       "minimum": 0.05,
       "maximum": 5.0
     },

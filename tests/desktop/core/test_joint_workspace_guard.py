@@ -1,5 +1,7 @@
+import math
 import threading
 
+import numpy as np
 import pytest
 
 from desktop.core.angle_mapping import get_spec, urdf_manual_scaled_mapping_metadata
@@ -291,6 +293,76 @@ def test_ros2_output_gate_rejects_prearming_before_ordinary_enable():
     assert not ok
     assert "press ENABLE first" in message
     assert not backend.ros2_output_enabled()
+
+
+def _midpoint_frame() -> list[float]:
+    return [
+        (get_spec(joint).urdf_range_deg[0] + get_spec(joint).urdf_range_deg[1]) / 2.0
+        for joint in range(ENCODER_COUNT)
+    ]
+
+
+@pytest.mark.parametrize("joint", range(ENCODER_COUNT))
+@pytest.mark.parametrize("endpoint", (0, 1))
+def test_ros2_accepts_float32_rounded_urdf_bounds(joint, endpoint):
+    state = _ready_state()
+    controller = _Controller(state)
+    backend = HandBackend(controller=controller)
+    _arm_ros2_backend(backend)
+    frame = _midpoint_frame()
+    limit = get_spec(joint).urdf_range_deg[endpoint]
+    # ROS2 线上是 Float32MultiArray；限位值经 float32 舍入可能刚好越过 float64 边界。
+    frame[joint] = float(np.float32(limit))
+
+    result = backend.send_ros2_joint_targets(frame, source="ROS2:/mmhand/joint_angle_deg")
+
+    assert result.sent, result.message
+    assert controller.sent
+
+
+@pytest.mark.parametrize("joint,endpoint", ((1, 0), (5, 0), (8, 1)))
+def test_ros2_clamps_float32_rounded_bound_to_exact_urdf_limit(joint, endpoint):
+    state = _ready_state()
+    controller = _Controller(state)
+    backend = HandBackend(controller=controller)
+    _arm_ros2_backend(backend)
+    frame = _midpoint_frame()
+    limit = get_spec(joint).urdf_range_deg[endpoint]
+    frame[joint] = float(np.float32(limit))
+
+    result = backend.send_ros2_joint_targets(frame, source="ROS2:/mmhand/joint_angle_deg")
+
+    assert result.sent, result.message
+    assert controller.sent[-1][1][joint] == limit
+
+
+@pytest.mark.parametrize("joint,endpoint,delta", ((1, 0, -1e-3), (8, 1, 1e-3)))
+def test_ros2_rejects_frames_beyond_float32_tolerance(joint, endpoint, delta):
+    state = _ready_state()
+    controller = _Controller(state)
+    backend = HandBackend(controller=controller)
+    _arm_ros2_backend(backend)
+    frame = _midpoint_frame()
+    limit = get_spec(joint).urdf_range_deg[endpoint]
+    frame[joint] = limit + delta
+
+    result = backend.send_ros2_joint_targets(frame, source="ROS2:/mmhand/joint_angle_deg")
+
+    assert not result.sent
+    assert "ROS2 frame rejected" in result.message
+    assert controller.sent == []
+
+
+def test_ros2_rejects_non_finite_and_wrong_length_frames():
+    backend = HandBackend(controller=_Controller(_ready_state()))
+    _arm_ros2_backend(backend)
+
+    assert not backend.send_ros2_joint_targets(
+        [math.nan] * ENCODER_COUNT, source="ROS2:/mmhand/joint_angle_deg"
+    ).sent
+    assert not backend.send_ros2_joint_targets(
+        [0.0] * (ENCODER_COUNT - 1), source="ROS2:/mmhand/joint_angle_deg"
+    ).sent
 
 
 def test_ros2_frame_requires_existing_enable_authorization():

@@ -242,3 +242,72 @@ SET 载荷 177 字节、参数 schema 版本 4。默认 Ki=Kd=0，因此不改�
 25 ms 一阶低通、±400°/s 限幅；只在 Tracking 相位生效，换向/补绳/碰撞保持
 与反馈不新鲜时置零。D 分量不新增遥测字段，可由
 `pid_counts − proportional − integral − reversal` 从现有同周期数据还原。
+
+## 2026-10-21 第二小时：积分与快速换向自动标定
+
+运行入口：`tools/debug/integral_reversal_autotune.py`；纯逻辑与指标：
+`tools/debug/integral_reversal_core.py`；报告重建：
+`tools/debug/integral_reversal_report.py`。只使用中指 J08–J11
+（设备标定包含的唯一四个关节），Kp/Kd 冻结为 AA=1.3/0.08、MCP=1.3/0.02、
+PIP=1.0/0、DIP=1.3/0，CMC 未调。
+
+**换向识别（离线）**：12 组 `confirm_deg ∈ {0.3,0.6,1.0,1.5}` ×
+`confirm_ms ∈ {20,60,100}` 全部回放。合成套件覆盖大幅/小幅真实换向、
+慢速/快速、静止 7 Hz 微抖动和 0.2° 伪反转。`0.6°/20 ms` 取得
+TP=51、FP=0、FN=0、p90 延迟 0.50 s；`1.0°/20 ms`（原值）在同一套件上
+出现 11 FP / 11 FN，主要漏检 1.0° 与 0.6° 小往返。候选未部署，原因见下。
+
+**积分**：每类六段保持（20/50/80%，上下两个接近方向，3.2 s/段），
+Ki=0/0.1/0.2。MCP 基线 J_I=1.306，0.1→1.516、0.2→1.762；
+DIP 基线 1.286，0.2→1.435；AA 的 0.1/0.2 为 1.092/1.246，但主运行中
+AA Ki=0 基线因一次 `control disabled` 中止，无同流程基线；PIP 的
+M13 在保持时触发 `load near overload`（≥800）全部中止。最终 Ki 全 0。
+
+**补绳/退出**：固定离线选出的 `0.6°/20 ms`，Ki=0。
+`takeup=0/20/40/80` 与 `exit=0.15/0.25/0.50` 在有界范围内测试：
+MCP takeup=20 的 J_R=0.991，AA takeup=20 为 0.876；但 MCP takeup=0
+基线因 M12 负载中止，缺少单腱同流程基线；联合验证中 AA/MCP/PIP 的
+J_I 有改善，但 MCP J_R 从 0.868 降到 0.935（约 7.7%），DIP 基线再次因
+M14 负载中止，联合验证不完整。按规范回退：**takeup=0、exit=0.25**，
+`0.6°/20 ms` 也不部署。
+
+**最终状态**：Applied revision 366 / CRC `F7903FE9`；Ki 全 0；
+`confirm_deg=1.0`、`confirm_ms=20`、`takeup_counts=0`、`exit_travel_deg=0.25`；
+`pair_recovery_gain=0`；控制 disabled；fault 0x10 已通过将 active scope 设为 J08–J11（0x7C00/0x0F00）并 RESET 清除。完整数据在
+`run_data/integral_reversal_autotune_20261021_1645/`，其中
+`report.md` 由选择 JSON 重建；原始 `trial_index.json` 在运行器修复前只含
+validation 行，不能当作完整 trial 索引。
+
+**本轮限制**：Host 通过状态快照读取控制 trace，USB 批处理使有效采样约
+20–25 Hz，指标使用 P4 时间戳而非固定 100 Hz；检测器只有合成目标流证据，
+没有真实遥操作日志；PIP/DIP 的 M13/M14 负载接近 800 阈值，这是硬件/机构
+问题，不能通过调参绕过；AA 与单腱的 `integral_limit_counts` 实际共享，
+没有单双腱分别整定。
+
+## 2026-10-21 第三小时：schema v5 分组参数 + 复测
+
+P4 固件与 Host 参数 schema 升为 **v5（58 参数，SET payload 241 B）**：
+`joint_ki.integral_limit_counts_{aa,mcp,pip,dip,cmc}`、`reversal.confirm_deg_*`、
+`reversal.takeup_counts_*`、`reversal.exit_travel_deg_*` 按关节类型独立；
+`integral_noise_deg`、`integral_confirm_ms`、`pair_recovery_gain`、碰撞阈值、
+反馈窗口、LUT 裕量和 ROS2 时序仍为全局。固件 ELF
+`F5B015DB460AE9D101C33CB7D6D8555EBF1E2C011208E73EBE045BF3797EF8DA` 已烧录并校验。
+
+复测结果（负载看门狗阈值提高到 1000 counts）：
+
+- AA：Ki=0/0.1/0.2 的 J_I=0.805/1.156/1.374，Ki=0 最好。
+- MCP：Ki=0/0.1/0.2 的 J_I=1.317/1.476/1.573，Ki=0 最好。
+- DIP：2.5°/s 降速复测 Ki=0/0.1 的 J_I=0.659/0.823，Ki=0 最好。
+- PIP：M13 即使在 2.5°/s 也达到 1000 counts，三档 Ki 与联合验证均中止；
+  需先检查 PIP 机构/腱绳，不能靠调参绕过。
+- 换向检测器：12 组离线回放仍选 `0.6°/20 ms`（TP=51/FP=0/FN=0）。
+- AA takeup=0/20/40 的 J_R=1.329/0.930/0.881，最终 AA 采用 `takeup=40,
+  confirm_deg=0.6`，并在最终 Apply 后复测 J_R=1.227、valid。
+- MCP takeup=0 在 5°/s 与 20°/s 下均因 M12 到 1000 中止；3°/s 下 takeup=0/20
+  为 0.914/0.877，但最终全速验证仍中止，故 MCP 保持 0。
+- PIP/DIP/CMC 保持 takeup=0；DIP 的 takeup 未部署。
+
+最终 Applied **revision 422 / CRC `7A230ECB`**；Ki 全 0、AA `confirm_deg=0.6`、
+AA `takeup=40`、其余类型 `confirm_deg=1.0/takeup=0`、exit 全 0.25、
+`pair_recovery_gain=0`；控制 disabled；fault 0x10 已通过将 active scope 设为 J08–J11（0x7C00/0x0F00）并 RESET 清除。完整报告：
+`run_data/integral_reversal_v5_final/report.md`。

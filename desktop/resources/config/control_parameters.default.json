@@ -1,6 +1,5 @@
 {
-  "schema_version": 4,
-  "revision": 1,
+  "schema_version": 5,
   "joint_kp": {
     "aa": 1.3,
     "mcp": 1.3,
@@ -14,7 +13,11 @@
     "pip": 0.0,
     "dip": 0.0,
     "cmc": 0.0,
-    "integral_limit_counts": 100,
+    "integral_limit_counts_aa": 100,
+    "integral_limit_counts_mcp": 100,
+    "integral_limit_counts_pip": 100,
+    "integral_limit_counts_dip": 100,
+    "integral_limit_counts_cmc": 100,
     "integral_noise_deg": 0.1,
     "integral_confirm_ms": 200
   },
@@ -33,10 +36,22 @@
     "slow_window_ms": 500
   },
   "reversal": {
-    "confirm_deg": 1.0,
+    "confirm_deg_aa": 1.0,
+    "confirm_deg_mcp": 1.0,
+    "confirm_deg_pip": 1.0,
+    "confirm_deg_dip": 1.0,
+    "confirm_deg_cmc": 1.0,
     "confirm_ms": 20,
-    "takeup_counts": 0,
-    "exit_travel_deg": 0.25
+    "takeup_counts_aa": 0,
+    "takeup_counts_mcp": 0,
+    "takeup_counts_pip": 0,
+    "takeup_counts_dip": 0,
+    "takeup_counts_cmc": 0,
+    "exit_travel_deg_aa": 0.25,
+    "exit_travel_deg_mcp": 0.25,
+    "exit_travel_deg_pip": 0.25,
+    "exit_travel_deg_dip": 0.25,
+    "exit_travel_deg_cmc": 0.25
   },
   "collision": {
     "arm_velocity_flex_deg_s": 8.0,
@@ -60,5 +75,6 @@
     "exit_deg": 0.25,
     "exit_confirm_ms": 20,
     "max_gap_ms": 500
-  }
+  },
+  "revision": 1
 }

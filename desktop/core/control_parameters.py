@@ -24,14 +24,24 @@ CONFIG_DIR = Path(__file__).resolve().parents[1] / 'resources' / 'config'
 DEFAULT_PATH = CONFIG_DIR / 'control_parameters.default.json'
 CURRENT_PATH = CONFIG_DIR / 'control_parameters.json'
 
+TYPES = ('aa', 'mcp', 'pip', 'dip', 'cmc')
 BOUNDS = {
-    'joint_kp': {'aa': (0.0, 2.0), 'mcp': (0.0, 2.0), 'pip': (0.0, 2.0), 'dip': (0.0, 2.0), 'cmc': (0.0, 2.0)},
-    'joint_ki': {'aa': (0.0, 1.0), 'mcp': (0.0, 1.0), 'pip': (0.0, 1.0), 'dip': (0.0, 1.0), 'cmc': (0.0, 1.0),
-                 'integral_limit_counts': (0, 500), 'integral_noise_deg': (0.0, 2.0), 'integral_confirm_ms': (0, 1000)},
-    'joint_kd': {'aa': (0.0, 0.5), 'mcp': (0.0, 0.5), 'pip': (0.0, 0.5), 'dip': (0.0, 0.5), 'cmc': (0.0, 0.5)},
+    'joint_kp': {name: (0.0, 2.0) for name in TYPES},
+    'joint_ki': {
+        **{name: (0.0, 1.0) for name in TYPES},
+        **{f'integral_limit_counts_{name}': (0, 500) for name in TYPES},
+        'integral_noise_deg': (0.0, 2.0),
+        'integral_confirm_ms': (0, 1000),
+    },
+    'joint_kd': {name: (0.0, 0.5) for name in TYPES},
     'dual_tendon': {'pair_recovery_gain': (0.0, 0.5)},
     'feedback': {'fast_window_ms': (10, 100), 'slow_window_ms': (100, 1000)},
-    'reversal': {'confirm_deg': (0.1, 10.0), 'confirm_ms': (0, 500), 'takeup_counts': (0, 300), 'exit_travel_deg': (0.05, 5.0)},
+    'reversal': {
+        **{f'confirm_deg_{name}': (0.1, 10.0) for name in TYPES},
+        'confirm_ms': (0, 500),
+        **{f'takeup_counts_{name}': (0, 300) for name in TYPES},
+        **{f'exit_travel_deg_{name}': (0.05, 5.0) for name in TYPES},
+    },
     'collision': {'arm_velocity_flex_deg_s': (0.1, 100.0), 'arm_velocity_extend_deg_s': (0.1, 100.0), 'stall_velocity_flex_deg_s': (0, 20.0), 'stall_velocity_extend_deg_s': (0, 20.0), 'min_error_deg': (0.5, 30.0), 'target_reset_deg': (0.1, 10.0), 'retreat_deg': (0.1, 10.0)},
     'output': {'lut_release_margin_counts': (0, 500), 'lut_tight_margin_counts': (0, 1000)},
     'ros2_input': {'min_cutoff_hz': (0.01, 10.0), 'beta': (0, 1.0), 'derivative_cutoff_hz': (0.01, 10.0), 'enter_deg': (0.01, 1.0), 'enter_dwell_ms': (0, 1000), 'exit_deg': (0.02, 2.0), 'exit_confirm_ms': (0, 500), 'max_gap_ms': (100, 5000)},
@@ -41,7 +51,7 @@ BOUNDS = {
 def validate(data: dict) -> dict:
     if not isinstance(data, dict) or set(data) != {'schema_version', 'revision', *BOUNDS}:
         raise ValueError('Control parameter groups do not match the current schema')
-    if data['schema_version'] != 4 or not isinstance(data['revision'], int) or data['revision'] < 1:
+    if data['schema_version'] != 5 or not isinstance(data['revision'], int) or data['revision'] < 1:
         raise ValueError('Control parameter schema or revision is invalid')
     for group, fields in BOUNDS.items():
         values = data[group]
@@ -68,7 +78,7 @@ def configuration_values(data: dict) -> bytes:
 
 
 def configuration_payload(data: dict) -> bytes:
-    return struct.pack('>BI', 4, data['revision']) + configuration_values(data) + struct.pack('>I', configuration_crc(data))
+    return struct.pack('>BI', 5, data['revision']) + configuration_values(data) + struct.pack('>I', configuration_crc(data))
 
 
 def configuration_frame(data: dict) -> bytes:

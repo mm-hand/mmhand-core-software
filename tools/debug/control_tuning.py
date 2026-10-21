@@ -352,9 +352,11 @@ def main():
             if point is not None:
                 groups={'kp':('joint_kp',kp_field),
                         'kd':('joint_kd',kp_field),
-                        'pair':('dual_tendon','pair_recovery_gain'),'takeup':('reversal','takeup_counts'),
-                        'confirm':('reversal','confirm_deg'),
-                        'ki':('joint_ki',kp_field),'ilimit':('joint_ki','integral_limit_counts'),
+                        'pair':('dual_tendon','pair_recovery_gain'),
+                        'takeup':('reversal',f'takeup_counts_{kp_field}'),
+                        'confirm':('reversal',f'confirm_deg_{kp_field}'),
+                        'ki':('joint_ki',kp_field),
+                        'ilimit':('joint_ki',f'integral_limit_counts_{kp_field}'),
                         'inoise':('joint_ki','integral_noise_deg'),
                         'iconfirm':('joint_ki','integral_confirm_ms'),
                         'fast':('feedback','fast_window_ms')}
@@ -363,7 +365,7 @@ def main():
                 proposal['joint_ki'][kp_field]=0
                 proposal['joint_kd'][kp_field]=0
                 proposal['dual_tendon']['pair_recovery_gain']=0
-                proposal['reversal']['takeup_counts']=0
+                proposal['reversal'][f'takeup_counts_{kp_field}']=0
             set_parameters(proposal)
             for trial in candidates:
                 for repeat in range(trial.repetitions):

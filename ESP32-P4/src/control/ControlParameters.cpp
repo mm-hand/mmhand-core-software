@@ -32,7 +32,7 @@ bool parametersConfigured() {
 }
 bool applyParameterPayload(const uint8_t* payload, size_t length) {
     constexpr size_t bytes = ParameterCount * 4;
-    if (!payload || length != 9 + bytes || payload[0] != 4) return false;
+    if (!payload || length != 9 + bytes || payload[0] != 5) return false;
     Parameters next;
     next.revision = u32(payload + 1);
     next.crc = u32(payload + 5 + bytes);
