@@ -95,7 +95,7 @@ def run(args):
         _wait(lambda: hand._control_parameter_sync.startswith('APPLIED'), 15, 'calibration sync')
         safe = _make_safe(hand)
         print('safe', _apply_verified(hand, safe), flush=True)
-        ranges = {'aa': (-25.8, 23.8), 'mcp': (-3.6, 79.6),
+        ranges = {'aa': (-25.8, 23.8), 'mcp': (-3.6, 74.0),
                   'pip': (0.8, 79.2), 'dip': (-1.6, 89.6)}
         for joint_type in args.types:
             if joint_type not in core.TYPES:
@@ -108,7 +108,7 @@ def run(args):
             low, high = ranges[joint_type]
             plan, truth = core.build_reversal_plan(
                 low, high, delta_deg=min(4.0, 0.07 * (high - low)),
-                speeds=(('low', 5.0),))
+                speeds=(('low', 5.0),), high_cap=core.TEST_HIGH_CAP_DEG.get(joint_type))
             base_points = plan
             feasible = None
             failures = 0

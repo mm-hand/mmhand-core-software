@@ -340,3 +340,16 @@ Kp=0.2 也无法向下移动；已停止运动、恢复安全参数、faults=0�
 退回内部工作区后再测。PIP 仍因 M13 到 1000 未完成；DIP 在 MCP 卡死后
 enable 被取消，未完成。新增 `tools/debug/takeup_ramp_autotune.py` 做
 Bmax 阶梯（40→…→2000）与 B0/vB 细化；MCP/PIP/DIP 需机械恢复后再跑。
+
+### MCP 测试轨迹上端限制（2026-10-21 补充）
+
+自动测试的 MCP 轨迹增加 74° 上端帽：`build_hold_plan`、`build_reversal_plan`、
+`build_validation_plan` 均接受 `high_cap`，实际最大目标角：
+
+- hold 60.48°
+- reversal 62.48°
+- validation 40.20°
+
+全部 < 75°。`_run_plan` 在使能前还会检查 J09 当前角：若 >74.5° 直接拒绝，
+避免在 89–90° 卡死状态下再次启动测试。曲线见
+`run_data/analysis/mcp_capped_plan.png`。

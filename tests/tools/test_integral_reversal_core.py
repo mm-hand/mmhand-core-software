@@ -152,3 +152,14 @@ def test_validate_combined_rejects_degraded_reversal():
     ok, reasons = core.validate_combined(baseline, candidate)
     assert not ok
     assert reasons
+
+
+def test_mcp_test_plans_stay_below_75_degrees():
+    low, high = -3.6, 79.6
+    cap = core.TEST_HIGH_CAP_DEG['mcp']
+    assert cap == 74.0
+    for plan in (core.build_hold_plan(low, high, high_cap=cap),
+                 core.build_reversal_plan(low, high, high_cap=cap)[0],
+                 core.build_validation_plan(low, high, high_cap=cap)[0]):
+        assert max(point.target_deg for point in plan) < 75.0
+        assert max(point.target_deg for point in plan) <= cap + 1e-9

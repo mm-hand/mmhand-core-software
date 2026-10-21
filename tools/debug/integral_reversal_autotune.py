@@ -291,6 +291,13 @@ class Watchdog:
 
 def _run_plan(hand, output: Path, joint: int, motors, points, label: str,
               low: float, high: float, revision: int, crc: int) -> tuple:
+    cap = core.TEST_HIGH_CAP_DEG.get('mcp') if joint == core.REPRESENTATIVE_JOINTS['mcp'] else None
+    before = hand.get_state_snapshot()
+    current = before.encoders[joint].current_angle_deg
+    if cap is not None and current > cap + 0.5:
+        raise RuntimeError(f'J{joint:02d} current {current:.2f} above test cap {cap:.1f}; recover first')
+    if cap is not None and max(point.target_deg for point in points) > cap + 1e-6:
+        raise RuntimeError(f'plan target exceeds MCP test cap {cap:.1f}')
     _enable(hand, joint, motors)
     watchdog = Watchdog(output, joint, motors, low, high)
     state = hand.get_state_snapshot()
@@ -546,7 +553,8 @@ def run_hardware(args) -> int:
             motors = joint_motors(joint)
             row = rows[joint]
             points = core.build_hold_plan(row['internal_low_deg'],
-                                          row['internal_high_deg'])
+                                          row['internal_high_deg'],
+                                          high_cap=core.TEST_HIGH_CAP_DEG.get(joint_type))
             ki_values = (0.0, 0.1, 0.2)
             for ki in ki_values:
                 if time.monotonic() + _plan_estimate(points) + 6.0 > timeline['integral']:
@@ -647,7 +655,8 @@ def run_hardware(args) -> int:
                 points, truth = core.build_reversal_plan(
                     row['internal_low_deg'], row['internal_high_deg'],
                     speeds=(('low', 5.0),) if candidate_takeup != 0 else
-                    (('low', 5.0), ('high', 20.0)))
+                    (('low', 5.0), ('high', 20.0)),
+                    high_cap=core.TEST_HIGH_CAP_DEG.get(joint_type))
                 if time.monotonic() + _plan_estimate(points) + 6.0 > timeline['takeup']:
                     break
                 proposal = copy.deepcopy(safe)
@@ -726,6 +735,7 @@ def run_hardware(args) -> int:
                         motors = joint_motors(joint)
                         points, truth = core.build_reversal_plan(
                             row['internal_low_deg'], row['internal_high_deg'],
+                            high_cap=core.TEST_HIGH_CAP_DEG.get(joint_type),
                             speeds=(('low', 5.0),))
                         proposal = copy.deepcopy(safe)
                         for name in ALL_TYPES:
@@ -802,7 +812,9 @@ def run_hardware(args) -> int:
             joint = core.REPRESENTATIVE_JOINTS[joint_type]
             motors = joint_motors(joint)
             row = rows[joint]
-            points, truth = core.build_validation_plan(row['internal_low_deg'], row['internal_high_deg'])
+            points, truth = core.build_validation_plan(
+                row['internal_low_deg'], row['internal_high_deg'],
+                high_cap=core.TEST_HIGH_CAP_DEG.get(joint_type))
             for variant in ('baseline', 'candidate'):
                 if time.monotonic() + _plan_estimate(points) > timeline['validation']:
                     validation_ok = False

@@ -19,6 +19,14 @@ from typing import Iterable, Optional, Sequence
 import numpy as np
 
 TYPES = ('aa', 'mcp', 'pip', 'dip')
+# Test trajectories must stay away from the MCP upper mechanical limit.
+TEST_HIGH_CAP_DEG = {'mcp': 74.0}
+
+
+def test_high_cap(joint_type: str, high: float) -> float:
+    return min(float(high), TEST_HIGH_CAP_DEG.get(joint_type, float(high)))
+
+
 REPRESENTATIVE_JOINTS = {'aa': 8, 'mcp': 9, 'pip': 10, 'dip': 11}
 JOINT_TYPES = {joint: name for name, joint in REPRESENTATIVE_JOINTS.items()}
 CANDIDATE_JOINTS = tuple(REPRESENTATIVE_JOINTS[name] for name in TYPES)
@@ -169,10 +177,15 @@ class ReversalTrial:
 
 def build_validation_plan(low: float, high: float, *, speed_deg_s: float = 5.0,
                           hold_s: float = 2.0, sine_s: float = 8.0,
-                          delta_deg: Optional[float] = None) -> tuple:
+                          delta_deg: Optional[float] = None,
+                          high_cap: Optional[float] = None) -> tuple:
     """Combined check: 50% hold, 0.2 Hz/5 deg sine, then a short back-and-forth."""
     if not (_finite(low) and _finite(high) and high > low):
         raise ValueError('invalid workspace')
+    if high_cap is not None:
+        high = min(high, float(high_cap))
+        if high <= low:
+            raise ValueError('high_cap leaves no test workspace')
     span = high - low
     center = 0.5 * (low + high)
     amplitude = min(5.0, 0.15 * span)
@@ -239,10 +252,15 @@ def _hold(points: list, target_deg: float, hold_s: float, t0: float, segment: st
 
 
 def build_hold_plan(low: float, high: float, *, speed_deg_s: float = 5.0,
-                    hold_s: float = 3.2, dt: float = 0.01) -> list:
+                    hold_s: float = 3.2, dt: float = 0.01,
+                    high_cap: Optional[float] = None) -> list:
     """Six holds: 20/50/80 approached upward, then 80/50/20 approached downward."""
     if not (_finite(low) and _finite(high) and high > low):
         raise ValueError('invalid workspace')
+    if high_cap is not None:
+        high = min(high, float(high_cap))
+        if high <= low:
+            raise ValueError('high_cap leaves no test workspace')
     if hold_s <= 0 or speed_deg_s <= 0:
         raise ValueError('hold_s and speed must be positive')
     span = high - low
@@ -296,7 +314,8 @@ def build_reversal_plan(low: float, high: float, *, centers=(0.20, 0.80),
                         delta_deg: Optional[float] = None,
                         speed_deg_s: float = 5.0,
                         speeds: Sequence[tuple] = (('low', 5.0), ('high', 20.0)),
-                        settle_s: float = 0.35) -> tuple:
+                        settle_s: float = 0.35,
+                        high_cap: Optional[float] = None) -> tuple:
     """Back-and-forth plan around two centres at two speeds.
 
     The plan is continuous; truth events are derived from the designed target
@@ -304,6 +323,10 @@ def build_reversal_plan(low: float, high: float, *, centers=(0.20, 0.80),
     """
     if not (_finite(low) and _finite(high) and high > low):
         raise ValueError('invalid workspace')
+    if high_cap is not None:
+        high = min(high, float(high_cap))
+        if high <= low:
+            raise ValueError('high_cap leaves no test workspace')
     span = high - low
     p = lambda fraction: low + fraction * span
     delta = float(delta_deg) if delta_deg is not None else min(4.0, 0.07 * span)
