@@ -203,9 +203,15 @@ def run_hardware(args) -> int:
     hand.open_application()
     if not hand.connect(args.port):
         raise RuntimeError(f'failed to connect {args.port}')
+    inspected = hand._calibration_workflow.inspect_snapshot(Path(args.calibration))
+    ok, message = hand._controller.load_calibration_snapshot(inspected)
+    if not ok:
+        raise RuntimeError(f'calibration load failed: {message}')
+    _wait(lambda: hand._control_parameter_sync.startswith('APPLIED'), 15, 'calibration parameter sync timeout')
     current = hand._control_parameters.snapshot()
     current.pop('crc32', None)
     verified = copy.deepcopy(current)
+    _operation(hand, hand.request_clear_faults(), 10)
     (output / 'parameters.before.json').write_text(json.dumps(current, indent=2), encoding='utf-8')
     started = time.monotonic()
     deadline = started + args.max_minutes * 60.0
@@ -225,6 +231,7 @@ def run_hardware(args) -> int:
             trajectory = build_composite_trajectory(row['internal_low_deg'], row['internal_high_deg'])
             optimizer = DiscreteEI(grid_for(joint_type), initial_points(joint_type, 1.2 if joint_type == 'dip' else 1.0))
             trials_this_type = 0
+            consecutive_failures = 0
             while trials_this_type < args.max_trials and time.monotonic() < deadline - 60:
                 point = optimizer.suggest()
                 if point is None:
@@ -235,57 +242,85 @@ def run_hardware(args) -> int:
                 proposal['joint_ki'][joint_type] = 0.0
                 proposal['dual_tendon']['pair_recovery_gain'] = 0.0
                 proposal['reversal']['takeup_counts'] = 0
-                _apply(hand, proposal)
-                hand.select_joints([joint])
-                hand.select_motors(list(motors))
-                _operation(hand, hand.request_enable())
-                _wait(lambda: hand.get_state_snapshot().control_enabled, 5, 'enable timeout')
-                hand.request_recording(True)
-                _wait(lambda: hand._recorder.is_running(), 5, 'recording not running')
-                hand.set_control_trace_subscription(True, 1)
-                samples = []
                 try:
-                    state = _healthy(hand, joint, motor_mask)
-                    values = list(state.target_angles)
-                    start = state.encoders[joint].current_angle_deg
-                    target = row['internal_low_deg'] + 0.10 * (row['internal_high_deg'] - row['internal_low_deg'])
-                    approach_start = time.monotonic()
-                    while time.monotonic() - approach_start < 2.0:
-                        fraction = min(1.0, (time.monotonic() - approach_start) / 2.0)
-                        values = _set_target(hand, values, joint, start + (target - start) * fraction, 'autotune approach')
-                        time.sleep(0.02)
-                    _healthy(hand, joint, motor_mask)
-                    trajectory_start = time.monotonic()
-                    p4_start = hand.get_state_snapshot().control_trace_p4_time_ms
-                    last_sequence = -1
-                    for item in trajectory:
-                        while time.monotonic() - trajectory_start < item.time_s:
-                            time.sleep(0.002)
-                        values = _set_target(hand, values, joint, item.target_deg, 'autotune trajectory')
+                    _apply(hand, proposal)
+                    hand.select_joints([joint])
+                    hand.select_motors(list(motors))
+                    _operation(hand, hand.request_enable())
+                    _wait(lambda: hand.get_state_snapshot().control_enabled, 5, 'enable timeout')
+                    hand.request_recording(True)
+                    _wait(lambda: hand._recorder.is_running(), 5, 'recording not running')
+                    hand.set_control_trace_subscription(True, 1)
+                    _wait(lambda: hand.get_state_snapshot().has_control_trace and
+                          time.time() - hand.get_state_snapshot().control_trace_last_rx_ts < 0.15,
+                          3, 'control trace not ready')
+                    samples = []
+                    try:
                         state = _healthy(hand, joint, motor_mask)
-                        if state.control_trace_sequence == last_sequence:
-                            continue
-                        last_sequence = state.control_trace_sequence
-                        elapsed = ((state.control_trace_p4_time_ms - p4_start) & 0xFFFFFFFF) * 0.001
-                        actual = state.control_trace_actual_deg[joint]
-                        if not row['internal_low_deg'] - 2.0 <= actual <= row['internal_high_deg'] + 2.0:
-                            raise RuntimeError('measured angle outside test envelope')
-                        samples.append({'phase': item.phase, 'position_bin': item.position_bin,
-                                        'speed_bin': item.speed_bin, 'direction': item.direction,
-                                        'time': elapsed, 'target': state.control_trace_target_deg[joint],
-                                        'actual': actual, 'motor_cmd': state.control_trace_motor_command_abs[motors[0]]})
-                finally:
-                    _release(hand)
-                    hand.request_recording(False)
-                    hand.set_control_trace_subscription(False, 5)
-                score = evaluate_trial(samples, ScoreThresholds())
-                optimizer.observe(point, score.score, score.valid, '; '.join(score.failures))
-                records.append(dict(type=joint_type, kp=point.kp, kd=point.kd, score=score.score,
-                                    valid=score.valid, reason='; '.join(score.failures),
-                                    dynamic=score.dynamic_bins, hold=score.hold_bins))
+                        values = list(state.target_angles)
+                        start = state.encoders[joint].current_angle_deg
+                        target = row['internal_low_deg'] + 0.10 * (row['internal_high_deg'] - row['internal_low_deg'])
+                        approach_start = time.monotonic()
+                        approach_duration = max(1.0, min(8.0, abs(target - start) / 5.0))
+                        while time.monotonic() - approach_start < approach_duration:
+                            fraction = min(1.0, (time.monotonic() - approach_start) / approach_duration)
+                            values = _set_target(hand, values, joint, start + (target - start) * fraction, 'autotune approach')
+                            time.sleep(0.02)
+                        _healthy(hand, joint, motor_mask)
+                        trajectory_start = time.monotonic()
+                        p4_start = hand.get_state_snapshot().control_trace_p4_time_ms
+                        last_sequence = -1
+                        for item in trajectory:
+                            while time.monotonic() - trajectory_start < item.time_s:
+                                time.sleep(0.002)
+                            values = _set_target(hand, values, joint, item.target_deg, 'autotune trajectory')
+                            state = _healthy(hand, joint, motor_mask)
+                            if state.control_trace_sequence == last_sequence:
+                                continue
+                            last_sequence = state.control_trace_sequence
+                            elapsed = ((state.control_trace_p4_time_ms - p4_start) & 0xFFFFFFFF) * 0.001
+                            actual = state.control_trace_actual_deg[joint]
+                            if not row['internal_low_deg'] - 2.0 <= actual <= row['internal_high_deg'] + 2.0:
+                                raise RuntimeError('measured angle outside test envelope')
+                            samples.append({'phase': item.phase, 'position_bin': item.position_bin,
+                                            'speed_bin': item.speed_bin, 'direction': item.direction,
+                                            'time': elapsed, 'target': state.control_trace_target_deg[joint],
+                                            'actual': actual, 'motor_cmd': state.control_trace_motor_command_abs[motors[0]]})
+                    finally:
+                        _release(hand)
+                        hand.request_recording(False)
+                        hand.set_control_trace_subscription(False, 5)
+                    score = evaluate_trial(samples, ScoreThresholds())
+                    optimizer.observe(point, score.score, score.valid, '; '.join(score.failures))
+                    records.append(dict(type=joint_type, kp=point.kp, kd=point.kd, score=score.score,
+                                        valid=score.valid, reason='; '.join(score.failures),
+                                        dynamic=score.dynamic_bins, hold=score.hold_bins))
+                    print(f"{joint_type} trial {trials_this_type + 1}/{args.max_trials} "
+                          f"J{joint:02d} Kp={point.kp:.3f} Kd={point.kd:.3f} "
+                          f"score={score.score:.4f} valid={score.valid} "
+                          f"bins={score.dynamic_bins}/{score.hold_bins} {('; '.join(score.failures))}",
+                          flush=True)
+                    consecutive_failures = 0
+                except RuntimeError as exc:
+                    consecutive_failures += 1
+                    reason = str(exc)
+                    optimizer.observe(point, None, False, reason)
+                    records.append(dict(type=joint_type, kp=point.kp, kd=point.kd, score=None,
+                                        valid=False, reason=reason, dynamic=0, hold=0))
+                    print(f"{joint_type} trial {trials_this_type + 1}/{args.max_trials} "
+                          f"J{joint:02d} Kp={point.kp:.3f} Kd={point.kd:.3f} FAILED: {reason}",
+                          flush=True)
+                    try:
+                        _apply(hand, verified)
+                    except Exception:
+                        pass
                 trials_this_type += 1
                 hand.select_joints([])
                 hand.select_motors([])
+                if consecutive_failures >= 3:
+                    records.append(dict(type=joint_type, kp=0, kd=0, score=None, valid=False,
+                                        reason='three consecutive candidate failures'))
+                    break
             best = optimizer.best
             if best:
                 verified['joint_kp'][joint_type] = best.point.kp
