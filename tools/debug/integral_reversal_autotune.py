@@ -62,6 +62,7 @@ def _text(path: Path, value: str) -> None:
 def _safe_snapshot(hand) -> dict:
     snapshot = hand.control_parameter_snapshot()
     snapshot.pop('crc32', None)
+    snapshot.pop('ramp_crc32',None)
     return snapshot
 
 
@@ -90,6 +91,15 @@ def _set_all_pair(proposal: dict, value: float = 0.0) -> None:
     proposal['dual_tendon']['pair_recovery_gain'] = value
 
 
+def _set_all_ramp(proposal: dict, b0: float = 0.0, vb: float = 0.0,
+                  load_limit: float = 900.0) -> None:
+    for name in ALL_TYPES:
+        proposal['reversal_ramp'][f'b0_{name}'] = b0
+        proposal['reversal_ramp'][f'vb_{name}'] = vb
+        proposal['reversal_ramp'][f'load_limit_{name}'] = load_limit
+    proposal['reversal_ramp']['takeup_timeout_ms'] = 600
+
+
 def _set_integral_defaults(proposal: dict, limit: float = 100, noise: float = 0.1,
                            confirm_ms: float = 200) -> None:
     for name in ALL_TYPES:
@@ -107,7 +117,7 @@ def _analysis_params(proposal: dict, joint_type: str, ki: float) -> dict:
                 integral_confirm_ms=ki_group['integral_confirm_ms'],
                 confirm_deg=reversal[f'confirm_deg_{joint_type}'],
                 confirm_ms=reversal['confirm_ms'],
-                takeup_counts=reversal[f'takeup_counts_{joint_type}'],
+                takeup_counts=reversal[f'takeup_max_{joint_type}'],
                 exit_travel_deg=reversal[f'exit_travel_deg_{joint_type}'],
                 fast_window_ms=proposal['feedback']['fast_window_ms'],
                 slow_window_ms=proposal['feedback']['slow_window_ms'])
@@ -487,9 +497,14 @@ def run_hardware(args) -> int:
         _set_integral_defaults(safe)
         safe['reversal'] = {'confirm_ms': SAFE_CONFIRM_MS}
         _set_all_reversal(safe, 'confirm_deg', SAFE_CONFIRM_DEG)
-        _set_all_reversal(safe, 'takeup_counts', 0.0)
+        _set_all_reversal(safe, 'takeup_max', 0.0)
+        _set_all_ramp(safe, 0.0, 0.0)
         _set_all_reversal(safe, 'exit_travel_deg', SAFE_EXIT_TRAVEL_DEG)
         _set_all_pair(safe, 0.0)
+        safe['reversal_ramp'] = {**{f'b0_{name}': 0.0 for name in ALL_TYPES},
+                                 **{f'vb_{name}': 0.0 for name in ALL_TYPES},
+                                 **{f'load_limit_{name}': 900 for name in ALL_TYPES},
+                                 'takeup_timeout_ms': 600}
         validate(safe)
         _json(output / 'parameters.safe.json', safe)
         _apply_verified(hand, safe)
@@ -542,7 +557,8 @@ def run_hardware(args) -> int:
                 proposal['joint_ki'][joint_type] = ki
                 proposal['reversal']['confirm_ms'] = SAFE_CONFIRM_MS
                 _set_all_reversal(proposal, 'confirm_deg', SAFE_CONFIRM_DEG)
-                _set_all_reversal(proposal, 'takeup_counts', 0.0)
+                _set_all_reversal(proposal, 'takeup_max', 0.0)
+                _set_all_ramp(proposal, 0.0, 0.0)
                 _set_all_reversal(proposal, 'exit_travel_deg', SAFE_EXIT_TRAVEL_DEG)
                 _set_all_pair(proposal, 0.0)
                 validate(proposal)
@@ -639,7 +655,8 @@ def run_hardware(args) -> int:
                     proposal['joint_ki'][name] = 0.0
                 proposal['reversal']['confirm_ms'] = selected['confirm_ms']
                 _set_all_reversal(proposal, 'confirm_deg', selected['confirm_deg'])
-                _set_all_reversal(proposal, 'takeup_counts', candidate_takeup)
+                _set_all_reversal(proposal, 'takeup_max', candidate_takeup)
+                _set_all_ramp(proposal, 2.0 if candidate_takeup > 0 else 0.0, 20.0 if candidate_takeup > 0 else 0.0)
                 _set_all_reversal(proposal, 'exit_travel_deg', SAFE_EXIT_TRAVEL_DEG)
                 _set_all_pair(proposal, 0.0)
                 validate(proposal)
@@ -715,7 +732,8 @@ def run_hardware(args) -> int:
                             proposal['joint_ki'][name] = 0.0
                         proposal['reversal']['confirm_ms'] = selected['confirm_ms']
                         _set_all_reversal(proposal, 'confirm_deg', selected['confirm_deg'])
-                        _set_all_reversal(proposal, 'takeup_counts', best_takeup)
+                        _set_all_reversal(proposal, 'takeup_max', best_takeup)
+                        _set_all_ramp(proposal, 2.0 if best_takeup > 0 else 0.0, 20.0 if best_takeup > 0 else 0.0)
                         _set_all_reversal(proposal, 'exit_travel_deg', exit_travel)
                         _set_all_pair(proposal, 0.0)
                         validate(proposal)
@@ -800,7 +818,8 @@ def run_hardware(args) -> int:
                 _set_all_reversal(proposal, 'confirm_deg', selected['confirm_deg'])
                 takeup = 0.0 if variant == 'baseline' else selected['takeup_counts']
                 exit_travel = SAFE_EXIT_TRAVEL_DEG if variant == 'baseline' else selected['exit_travel_deg']
-                _set_all_reversal(proposal, 'takeup_counts', takeup)
+                _set_all_reversal(proposal, 'takeup_max', takeup)
+                _set_all_ramp(proposal, 2.0 if takeup > 0 else 0.0, 20.0 if takeup > 0 else 0.0)
                 _set_all_reversal(proposal, 'exit_travel_deg', exit_travel)
                 _set_all_pair(proposal, 0.0)
                 validate(proposal)
@@ -865,7 +884,8 @@ def run_hardware(args) -> int:
                 final['joint_ki'][name] = selected['ki'][name]
             final['reversal']['confirm_ms'] = selected['confirm_ms']
             _set_all_reversal(final, 'confirm_deg', selected['confirm_deg'])
-            _set_all_reversal(final, 'takeup_counts', selected['takeup_counts'])
+            _set_all_reversal(final, 'takeup_max', selected['takeup_counts'])
+            _set_all_ramp(final, 2.0 if selected['takeup_counts'] > 0 else 0.0, 20.0 if selected['takeup_counts'] > 0 else 0.0)
             _set_all_reversal(final, 'exit_travel_deg', selected['exit_travel_deg'])
         else:
             final = copy.deepcopy(safe)
@@ -1129,12 +1149,17 @@ def run_dry(args) -> int:
     reversal = {'confirm_ms': selected['confirm_ms']}
     for name in ALL_TYPES:
         reversal[f'confirm_deg_{name}'] = selected['confirm_deg']
-        reversal[f'takeup_counts_{name}'] = selected['takeup_counts']
+        reversal[f'takeup_max_{name}'] = selected['takeup_counts']
         reversal[f'exit_travel_deg_{name}'] = selected['exit_travel_deg']
-    final = dict(schema_version=5, revision=1,
+    reversal_ramp = {**{f'b0_{name}': (2.0 if selected['takeup_counts'] > 0 else 0.0) for name in ALL_TYPES},
+                     **{f'vb_{name}': (20.0 if selected['takeup_counts'] > 0 else 0.0) for name in ALL_TYPES},
+                     **{f'load_limit_{name}': 900 for name in ALL_TYPES},
+                     'takeup_timeout_ms': 600}
+    final = dict(schema_version=6, revision=1, ramp_revision=1,
                  joint_kp=dict(EXPECTED_KP), joint_ki=joint_ki,
                  joint_kd=dict(EXPECTED_KD),
                  dual_tendon=dict(pair_recovery_gain=0.0),
+                 reversal_ramp=reversal_ramp,
                  feedback=dict(fast_window_ms=20, slow_window_ms=500),
                  reversal=reversal,
                  collision=dict(arm_velocity_flex_deg_s=8.0, arm_velocity_extend_deg_s=8.0,

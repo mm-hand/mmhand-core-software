@@ -177,6 +177,12 @@
       "value": 29,
       "timestamp": true,
       "description": "同周期PI、换向和慢反馈分量及采样分频"
+    },
+    {
+      "name": "PACKET_TYPE_CONTROL_RAMP_PARAMETERS",
+      "value": 30,
+      "timestamp": false,
+      "description": "渐进快速换向参数应用结果及实际修订和CRC读回"
     }
   ],
   "commands": [
@@ -376,7 +382,7 @@
       "value": 248,
       "payload_bytes": 241,
       "requires_handshake": true,
-      "description": "原子设置58个控制与输入滤波参数，版本5、修订、浮点数组、CRC32"
+      "description": "原子设置58个控制与输入滤波参数，版本6、修订、浮点数组、CRC32"
     },
     {
       "name": "CMD_CONTROL_PARAMETERS_QUERY",
@@ -384,6 +390,20 @@
       "payload_bytes": 0,
       "requires_handshake": true,
       "description": "读回P4当前控制参数修订、CRC和已配置状态"
+    },
+    {
+      "name": "CMD_CONTROL_RAMP_PARAMETERS_SET",
+      "value": 251,
+      "payload_bytes": 73,
+      "requires_handshake": true,
+      "description": "原子设置16个渐进快速换向参数（B0/vB/负载阈值/超时），版本1、修订、浮点数组、CRC32"
+    },
+    {
+      "name": "CMD_CONTROL_RAMP_PARAMETERS_QUERY",
+      "value": 252,
+      "payload_bytes": 0,
+      "requires_handshake": true,
+      "description": "读回P4当前渐进快速换向参数修订、CRC和已配置状态"
     }
   ],
   "proto_ack_status": {

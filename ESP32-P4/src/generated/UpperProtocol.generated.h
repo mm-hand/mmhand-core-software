@@ -46,6 +46,7 @@ inline constexpr uint8_t PACKET_TYPE_SERVO_REBASE_ZERO_RESULT = 0x19; ///< 硬�
 inline constexpr uint8_t PACKET_TYPE_DIRECT_TARGET_RESULT = 0x1A; ///< 通用直控目标完成总线同步写后的事务结果，与机械到位独立
 inline constexpr uint8_t PACKET_TYPE_CONTROL_PARAMETERS = 0x1C; ///< 控制参数整组应用结果及实际修订和CRC读回
 inline constexpr uint8_t PACKET_TYPE_CONTROL_COMPONENTS = 0x1D; ///< 同周期PI、换向和慢反馈分量及采样分频
+inline constexpr uint8_t PACKET_TYPE_CONTROL_RAMP_PARAMETERS = 0x1E; ///< 渐进快速换向参数应用结果及实际修订和CRC读回
 
 // Desktop -> P4 命令及 ACK 状态。
 inline constexpr uint8_t CMD_SERVO_MAINTENANCE = 0xF4; ///< 舵机维护会话、探测及单步改号
@@ -77,8 +78,10 @@ inline constexpr uint8_t CMD_MOTOR_ABS_ZERO = 0xF1; ///< Direct电机页按非�
 inline constexpr uint8_t CMD_MOTOR_DIRECT_RELEASE = 0xF2; ///< 结束当前普通直控并保留扭矩和故障；非零token匹配已执行事务，零匹配当前直控代际
 inline constexpr uint8_t CMD_PROTOCOL_HELLO = 0xF3; ///< 双向版本及控制模型与反馈拓扑契约握手，不授权运动
 inline constexpr uint8_t CMD_CONTROL_RELEASE = 0xF6; ///< 释放普通控制权，不锁存急停，不恢复旧目标
-inline constexpr uint8_t CMD_CONTROL_PARAMETERS_SET = 0xF8; ///< 原子设置58个控制与输入滤波参数，版本5、修订、浮点数组、CRC32
+inline constexpr uint8_t CMD_CONTROL_PARAMETERS_SET = 0xF8; ///< 原子设置58个控制与输入滤波参数，版本6、修订、浮点数组、CRC32
 inline constexpr uint8_t CMD_CONTROL_PARAMETERS_QUERY = 0xF9; ///< 读回P4当前控制参数修订、CRC和已配置状态
+inline constexpr uint8_t CMD_CONTROL_RAMP_PARAMETERS_SET = 0xFB; ///< 原子设置16个渐进快速换向参数（B0/vB/负载阈值/超时），版本1、修订、浮点数组、CRC32
+inline constexpr uint8_t CMD_CONTROL_RAMP_PARAMETERS_QUERY = 0xFC; ///< 读回P4当前渐进快速换向参数修订、CRC和已配置状态
 inline constexpr uint8_t PROTO_ACK_STATUS_OK = 0; ///< 命令已同步执行成功
 inline constexpr uint8_t PROTO_ACK_STATUS_UNSUPPORTED_MODE = 1; ///< 当前状态或 owner 不允许该命令
 inline constexpr uint8_t PROTO_ACK_STATUS_QUEUED = 2; ///< 异步请求已入队，最终结果看状态包
@@ -156,6 +159,8 @@ inline constexpr size_t generatedCommandPayloadLength(uint8_t command)
         case CMD_CONTROL_RELEASE: return 0;
         case CMD_CONTROL_PARAMETERS_SET: return 241;
         case CMD_CONTROL_PARAMETERS_QUERY: return 0;
+        case CMD_CONTROL_RAMP_PARAMETERS_SET: return 73;
+        case CMD_CONTROL_RAMP_PARAMETERS_QUERY: return 0;
         default: return SIZE_MAX;
     }
 }
@@ -183,6 +188,8 @@ inline constexpr bool generatedCommandRequiresHandshake(uint8_t command)
         case CMD_CONTROL_RELEASE: return true;
         case CMD_CONTROL_PARAMETERS_SET: return true;
         case CMD_CONTROL_PARAMETERS_QUERY: return true;
+        case CMD_CONTROL_RAMP_PARAMETERS_SET: return true;
+        case CMD_CONTROL_RAMP_PARAMETERS_QUERY: return true;
         default: return false;
     }
 }

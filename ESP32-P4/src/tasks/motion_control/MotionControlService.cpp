@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "../../control/JointFeedbackController.h"
+#include "../../control/RampParameters.h"
 #include "../../control/FeedbackFilter.h"
 #include "JointAngleMapper.h"
 #include "ControlCommandSnapshotReader.h"
@@ -336,6 +337,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
     }
     const uint32_t nowMs = input.nowMs;
     const auto controlParameters = mmhand::control::readParameters();
+    const auto rampParameters = mmhand::control::readRampParameters();
 
     // 使用引用保留原控制公式的可读命名，同时把所有历史量集中到运行上下文。
     ControlServiceRuntime& runtime = g_controlRuntime;
@@ -930,8 +932,8 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                         continue;
                     }
                     const auto result = g_jointController.compute(joint, localTargets[joint], g_feedbackEstimates[joint],
-                        nowMs, servoData, calibrationSnapshot[joint].result,
-                        sharedAtomicLoad(&sharedData->active_motor_mask), controlParameters);
+                        nowMs, servoData, telemetryData, calibrationSnapshot[joint].result,
+                        sharedAtomicLoad(&sharedData->active_motor_mask), controlParameters, rampParameters);
                     if (!result.count) {
                         g_jointController.reset(joint);
                         appendJointActuatorHoldTargets(&targetBatch, joint, servoData, kFeedbackServoSpeed, SERVO_TARGET_ACC_DEFAULT);

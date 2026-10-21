@@ -36,6 +36,7 @@
 #include "HostCommandRouter.h"
 #include "../servo_bus/ServoMaintenance.h"
 #include "../../control/ControlParameters.h"
+#include "../../control/RampParameters.h"
 
 #include <math.h>
 #include <string.h>
@@ -50,6 +51,17 @@ void sendControlParameterResult(uint8_t status)
 {
     const auto applied = mmhand::control::readParameters();
     uint8_t packet[14] = {PROTOCOL_HEADER, 12, PACKET_TYPE_CONTROL_PARAMETERS, 1, status};
+    size_t offset = 5;
+    appendU32BigEndian(packet, &offset, applied.revision);
+    appendU32BigEndian(packet, &offset, applied.crc);
+    packet[offset++] = PROTOCOL_TAIL;
+    FW_SERIAL_WRITE(packet, offset);
+}
+
+void sendRampControlParameterResult(uint8_t status)
+{
+    const auto applied = mmhand::control::readRampParameters();
+    uint8_t packet[14] = {PROTOCOL_HEADER, 12, PACKET_TYPE_CONTROL_RAMP_PARAMETERS, 1, status};
     size_t offset = 5;
     appendU32BigEndian(packet, &offset, applied.revision);
     appendU32BigEndian(packet, &offset, applied.crc);
@@ -189,6 +201,24 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         const uint8_t result = !idle || servoMaintenanceBlocksCommands() ? 2 :
             mmhand::control::applyParameterPayload(frame + 1, frameLen - 1) ? 0 : 1;
         sendControlParameterResult(result);
+        sendProtoAckPacket(cmd, sharedData->system_state, result == 0 ?
+            PROTO_ACK_STATUS_OK : result == 2 ? PROTO_ACK_STATUS_UNSUPPORTED_MODE : PROTO_ACK_STATUS_INVALID_DATA);
+        return;
+    }
+    if (cmd == CMD_CONTROL_RAMP_PARAMETERS_QUERY) {
+        sendRampControlParameterResult(mmhand::control::rampParametersConfigured() ? 0 : 3);
+        return;
+    }
+    if (cmd == CMD_CONTROL_RAMP_PARAMETERS_SET) {
+        const bool idle = !sharedAtomicLoad(&sharedData->control_enabled) &&
+            sharedAtomicLoad(&sharedData->servo_target_owner) == SERVO_TARGET_OWNER_NONE &&
+            (sharedData->system_state == SYSTEM_STATE_UNCONTROLLABLE ||
+             sharedData->system_state == SYSTEM_STATE_IDLE ||
+             sharedData->system_state == SYSTEM_STATE_READY ||
+             sharedData->system_state == SYSTEM_STATE_RECOVERY_REQUIRED);
+        const uint8_t result = !idle || servoMaintenanceBlocksCommands() ? 2 :
+            mmhand::control::applyRampParameterPayload(frame + 1, frameLen - 1) ? 0 : 1;
+        sendRampControlParameterResult(result);
         sendProtoAckPacket(cmd, sharedData->system_state, result == 0 ?
             PROTO_ACK_STATUS_OK : result == 2 ? PROTO_ACK_STATUS_UNSUPPORTED_MODE : PROTO_ACK_STATUS_INVALID_DATA);
         return;

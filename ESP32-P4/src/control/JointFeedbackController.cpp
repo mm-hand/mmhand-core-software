@@ -6,6 +6,7 @@
 #include "../config/ControlConfig.h"
 #include "../system/calibration/TendonCalibrationLut.h"
 #include "../system/rtos/SharedSafetyState.h"
+#include "../hal/servo/ServoValue.h"
 #include <math.h>
 
 namespace mmhand::control {
@@ -69,15 +70,38 @@ Parameter jointConfirmDegParameter(uint8_t joint) {
                          ReversalConfirmDegPip, ReversalConfirmDegDip,
                          ReversalConfirmDegCmc);
 }
-Parameter jointTakeupParameter(uint8_t joint) {
-    return typeParameter(joint, ReversalTakeupCountsAa, ReversalTakeupCountsMcp,
-                         ReversalTakeupCountsPip, ReversalTakeupCountsDip,
-                         ReversalTakeupCountsCmc);
+Parameter jointTakeupMaxParameter(uint8_t joint) {
+    return typeParameter(joint, ReversalTakeupMaxAa, ReversalTakeupMaxMcp,
+                         ReversalTakeupMaxPip, ReversalTakeupMaxDip,
+                         ReversalTakeupMaxCmc);
 }
 Parameter jointExitTravelParameter(uint8_t joint) {
     return typeParameter(joint, ReversalExitTravelDegAa, ReversalExitTravelDegMcp,
                          ReversalExitTravelDegPip, ReversalExitTravelDegDip,
                          ReversalExitTravelDegCmc);
+}
+RampParameter rampTypeParameter(uint8_t joint, RampParameter aa, RampParameter mcp,
+                                RampParameter pip, RampParameter dip, RampParameter cmc) {
+    if (joint + 1 == ENCODER_TOTAL_NUM) return cmc;
+    switch (joint % 4) {
+        case 0: return aa;
+        case 1: return mcp;
+        case 2: return pip;
+        default: return dip;
+    }
+}
+RampParameter jointB0Parameter(uint8_t joint) {
+    return rampTypeParameter(joint, ReversalRampB0Aa, ReversalRampB0Mcp,
+                             ReversalRampB0Pip, ReversalRampB0Dip, ReversalRampB0Cmc);
+}
+RampParameter jointVbParameter(uint8_t joint) {
+    return rampTypeParameter(joint, ReversalRampVbAa, ReversalRampVbMcp,
+                             ReversalRampVbPip, ReversalRampVbDip, ReversalRampVbCmc);
+}
+RampParameter jointLoadLimitParameter(uint8_t joint) {
+    return rampTypeParameter(joint, ReversalRampLoadLimitAa, ReversalRampLoadLimitMcp,
+                             ReversalRampLoadLimitPip, ReversalRampLoadLimitDip,
+                             ReversalRampLoadLimitCmc);
 }
 }
 void JointFeedbackController::reset(uint8_t joint) { if (joint < ENCODER_TOTAL_NUM) states[joint] = {}; }
@@ -95,8 +119,9 @@ void JointFeedbackController::suspend(uint8_t joint, uint32_t now) {
 void JointFeedbackController::resetAll() { for (auto& state : states) state = {}; }
 
 JointControlResult JointFeedbackController::compute(uint8_t joint, float target, const FeedbackEstimate& fb,
-    uint32_t now, const ServoAngleData_t& servo, const JointCalibrationResult& lut,
-    uint32_t motorMask, const Parameters& p) {
+    uint32_t now, const ServoAngleData_t& servo, const ServoTelemetryData_t& telemetry,
+    const JointCalibrationResult& lut, uint32_t motorMask, const Parameters& p,
+    const RampParameters& ramp) {
     JointControlResult out;
     if (joint >= ENCODER_TOTAL_NUM || !p.configured || !fb.ready || !isfinite(target)) return out;
     const uint8_t count = getJointActuatorCount(joint);
@@ -175,8 +200,11 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
         for (uint8_t i = 0; i < count; ++i) state.integral[i] = 0;
         state.errorSign = 0;
         state.errorSince = now;
-        state.phase = p[jointTakeupParameter(joint)] > 0 ? Takeup : Tracking;
+        state.phase = p[jointTakeupMaxParameter(joint)] > 0 ? Takeup : Tracking;
         state.responseAnchor = fb.fast;
+        state.takeupStartMs = now;
+        state.takeupMagnitude = ramp[jointB0Parameter(joint)];
+        state.takeupFrozen = false;
         for (uint8_t i = 0; i < count; ++i) state.motorAnchor[i] = measured[i];
     }
     if (state.phase == Takeup &&
@@ -197,6 +225,31 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
     }
     const bool integrate = fb.fresh && fb.sampleDt > 0 && !state.saturated && state.phase == Tracking &&
         state.errorSign != 0 && now - state.errorSince >= p[JointKiIntegralConfirmMs];
+    float takeupB = 0.0f;
+    if (state.phase == Takeup) {
+        const float elapsedMs = (float)(now - state.takeupStartMs);
+        const float bmax = p[jointTakeupMaxParameter(joint)];
+        const float b0 = ramp[jointB0Parameter(joint)];
+        const float vb = ramp[jointVbParameter(joint)];
+        const float loadLimit = ramp[jointLoadLimitParameter(joint)];
+        float b = fminf(bmax, b0 + vb * elapsedMs * 0.001f);
+        bool overload = false;
+        bool hardOverload = false;
+        for (uint8_t i = 0; i < count; ++i) {
+            const int16_t load = mmhand::servo::loadMagnitude(telemetry.load[out.motors[i]]);
+            overload = overload || (float)load >= loadLimit;
+            hardOverload = hardOverload || load >= 1000;
+        }
+        if (overload) state.takeupFrozen = true;
+        if (state.takeupFrozen) b = fminf(b, state.takeupMagnitude);
+        else state.takeupMagnitude = b;
+        takeupB = b;
+        const float timeoutMs = ramp[ReversalRampTakeupTimeoutMs];
+        if ((timeoutMs > 0.0f && elapsedMs >= timeoutMs) || hardOverload) {
+            state.phase = Tracking;
+            takeupB = 0.0f;
+        }
+    }
     float raw[MAX_JOINT_ACTUATORS] = {};
     for (uint8_t i = 0; i < count; ++i) {
         if (integrate) state.integral[i] = clip(state.integral[i] + ki * slope[i] * integralError * fb.sampleDt, -iLimit, iLimit);
@@ -207,21 +260,16 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
         out.derivative[i] = (state.phase == Tracking && derivativeRate != 0.0f)
             ? -kd * slope[i] * derivativeRate : 0.0f;
         raw[i] = measured[i] + out.proportional[i] + state.integral[i] + out.derivative[i];
-        if (state.phase == Takeup) {
-            // The take-up floor: the command must sit at least A counts past the
-            // reversal anchor in the winding direction, whichever of PI and the
-            // anchor target is further along. PI passing the target ends the lift.
+        if (state.phase == Takeup && takeupB > 0.0f) {
+            // PDF Eq.(7): b_i is an additive winding bias on top of PI, growing
+            // from B0 to Bmax and frozen when the load threshold is reached.
             const int8_t motorDirection = sign(slope[i]) * state.direction;
-            const float reference = state.motorAnchor[i] + motorDirection * p[jointTakeupParameter(joint)];
-            const float lifted = motorDirection > 0 ? fmaxf(raw[i], reference) : fminf(raw[i], reference);
-            out.reversal[i] = lifted - raw[i];
-            raw[i] = lifted;
+            out.reversal[i] = motorDirection * takeupB;
+            raw[i] += out.reversal[i];
         }
     }
-    if (state.phase == Takeup) {
-        bool lifting = false;
-        for (uint8_t i = 0; i < count; ++i) lifting = lifting || out.reversal[i] != 0.0f;
-        if (!lifting) state.phase = Tracking; // PI alone already covers the take-up distance.
+    if (state.phase == Takeup && takeupB <= 0.0f) {
+        state.phase = Tracking;
     }
     if (count == 2) {
         const float z0 = model[0] - measured[0], z1 = model[1] - measured[1];

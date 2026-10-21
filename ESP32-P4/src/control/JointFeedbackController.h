@@ -3,7 +3,9 @@
  */
 #pragma once
 #include "ControlParameters.h"
+#include "RampParameters.h"
 #include "FeedbackFilter.h"
+#include "../data/ServoTypes.h"
 #include "../system/SystemRuntimeContext.h"
 #include "../system/calibration/CalibrationRuntimeStore.h"
 
@@ -25,9 +27,9 @@ struct JointControlResult {
 class JointFeedbackController {
 public:
     JointControlResult compute(uint8_t joint, float target, const FeedbackEstimate& feedback,
-        uint32_t now, const ServoAngleData_t& servo,
+        uint32_t now, const ServoAngleData_t& servo, const ServoTelemetryData_t& telemetry,
         const JointCalibrationResult& calibration, uint32_t motorMask,
-        const Parameters& parameters);
+        const Parameters& parameters, const RampParameters& ramp);
     void reset(uint8_t joint);
     void suspend(uint8_t joint, uint32_t now);
     void resetAll();
@@ -40,6 +42,9 @@ private:
         int8_t direction = 0, candidate = 0;
         Phase phase = Tracking;
         float lastTarget = 0, candidateAnchor = 0, responseAnchor = 0;
+        uint32_t takeupStartMs = 0;
+        float takeupMagnitude = 0;
+        bool takeupFrozen = false;
         float integral[MAX_JOINT_ACTUATORS] = {};
         float motorAnchor[MAX_JOINT_ACTUATORS] = {};
         // D-term measurement history: filtered joint velocity, never target kick.

@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "fields": [
     {
       "group": "joint_kp",
@@ -189,33 +189,33 @@
     },
     {
       "group": "reversal",
-      "name": "takeup_counts_aa",
+      "name": "takeup_max_aa",
       "minimum": 0,
-      "maximum": 300
+      "maximum": 2000
     },
     {
       "group": "reversal",
-      "name": "takeup_counts_mcp",
+      "name": "takeup_max_mcp",
       "minimum": 0,
-      "maximum": 300
+      "maximum": 2000
     },
     {
       "group": "reversal",
-      "name": "takeup_counts_pip",
+      "name": "takeup_max_pip",
       "minimum": 0,
-      "maximum": 300
+      "maximum": 2000
     },
     {
       "group": "reversal",
-      "name": "takeup_counts_dip",
+      "name": "takeup_max_dip",
       "minimum": 0,
-      "maximum": 300
+      "maximum": 2000
     },
     {
       "group": "reversal",
-      "name": "takeup_counts_cmc",
+      "name": "takeup_max_cmc",
       "minimum": 0,
-      "maximum": 300
+      "maximum": 2000
     },
     {
       "group": "reversal",

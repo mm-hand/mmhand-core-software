@@ -311,3 +311,32 @@ P4 固件与 Host 参数 schema 升为 **v5（58 参数，SET payload 241 B）**
 AA `takeup=40`、其余类型 `confirm_deg=1.0/takeup=0`、exit 全 0.25、
 `pair_recovery_gain=0`；控制 disabled；fault 0x10 已通过将 active scope 设为 J08–J11（0x7C00/0x0F00）并 RESET 清除。完整报告：
 `run_data/integral_reversal_v5_final/report.md`。
+
+## 2026-10-21 第四小时：schema v6 渐进 takeup + 负载冻结
+
+主参数仍 58 项（payload 241 B）；`reversal.takeup_counts_*` 更名为
+`reversal.takeup_max_*`，上限提高到 2000。另开独立 ramp 参数帧（16 项、
+payload 73 B、命令 0xFB/0xFC、回读 0x1E）：五组 `b0/vb/load_limit` 加
+全局 `takeup_timeout_ms`。固件实现 PDF Eq.(7) 的**叠加式**渐进：
+
+```text
+b_i(t) = min(Bmax, B0 + vB*t)
+raw_i  = PI_raw_i + motorDir_i * b_i
+```
+
+负载任一轴 ≥ `load_limit` 时冻结增长；到 1000 counts 或超时退出；0.25° 退出。
+Host 看门狗仍为 1000。固件 ELF
+`F337BEBEC0C5F485518DF38E7AC370BBA5B56A2DBA3F7876527299AADC58FAD2`
+已烧录；最终 revision 435 / main CRC `4EFD32EB` / ramp revision 14 /
+ramp CRC `59E6952F`，control disabled、faults=0。
+
+AA J08 实测（Bmax=40, B0=5, vB=50, load_limit=900, exit=0.25°）：
+`reversal_counts` 非零比例从固定下限的 3.6% 提升到 **10.1%**，实际 b 峰值
+19 counts，峰值负载 744 counts，11/11 换向事件在超时前退出，J_R=0.901。
+说明渐进叠加确实让 takeup 参与，而不是像旧下限那样被 PI 命令覆盖。
+
+MCP J09 当前机械卡在上端（89–90°，标定上限 90°，M12 负载 1000），降到
+Kp=0.2 也无法向下移动；已停止运动、恢复安全参数、faults=0。需人工把 MCP
+退回内部工作区后再测。PIP 仍因 M13 到 1000 未完成；DIP 在 MCP 卡死后
+enable 被取消，未完成。新增 `tools/debug/takeup_ramp_autotune.py` 做
+Bmax 阶梯（40→…→2000）与 B0/vB 细化；MCP/PIP/DIP 需机械恢复后再跑。

@@ -31,6 +31,7 @@ def test_measured_base_signed_slopes_pair_recovery_windows_and_anchored_reversal
 namespace mmhand::config::control { inline constexpr float kFeedbackDerivativeFilterMs = 25.0f; inline constexpr float kFeedbackDerivativeLimitDegPerS = 400.0f; }
 struct SharedSafetyGuard {};
 struct ServoAngleData_t { int32_t servoAngles[27] = {}; uint8_t onlineStatus[27] = {}; };
+struct ServoTelemetryData_t { int16_t load[27] = {}; };
 struct JointCalibrationResult { uint8_t tendonLutMotor[2] = {0,1}; };
 struct SystemRuntimeContext { uint32_t motor_abs_limit_valid_bitmap = 0x7ffffff; int32_t motor_abs_limit_min[27]; int32_t motor_abs_limit_max[27]; };
 struct JointActuatorItem { uint8_t motorChannel; };
@@ -41,8 +42,10 @@ inline bool singleTendonCalibrationMotorAbsRange(const JointCalibrationResult&,u
 inline bool tendonCalibrationMotorAbsRangeWithMargins(const JointCalibrationResult& c,uint8_t a,uint8_t m,int32_t r,int32_t t,int32_t* lo,int32_t* hi) { return singleTendonCalibrationMotorAbsRange(c,a,m,r,t,lo,hi); }
 '''
     fixture += generated + '\n'
+    fixture += (SRC / 'generated/RampParameters.generated.h').read_text(encoding='utf-8') + '\n'
     fixture += stripped(SRC / 'system/SnapshotTimestamp.h') + '\n'
-    for name in ('ControlParameters', 'FeedbackFilter', 'JointFeedbackController'):
+    fixture += stripped(SRC / 'hal/servo/ServoValue.h') + '\n'
+    for name in ('ControlParameters', 'RampParameters', 'FeedbackFilter', 'JointFeedbackController'):
         fixture += stripped(SRC / f'control/{name}.h') + '\n'
         source = re.sub(r'^#include ".*"\n', '', (SRC / f'control/{name}.cpp').read_text(encoding='utf-8'), flags=re.M)
         (tmp_path / f'{name}.cpp').write_text('#include "fixture.h"\n' + source, encoding='utf-8')
@@ -70,7 +73,7 @@ int main() {
     Parameters p = readParameters(); assert(p.configured && p.revision == 1);
     // Keep this native test independent of the product default tuning values.
     p.values[JointKpAa]=1.0f; p.values[JointKpMcp]=1.0f;
-    p.values[DualTendonPairRecoveryGain]=0.05f; p.values[ReversalTakeupCountsAa]=80;
+    p.values[DualTendonPairRecoveryGain]=0.05f; p.values[ReversalTakeupMaxAa]=80;
     payload[7] ^= 1; assert(!applyParameterPayload(payload,sizeof(payload)));
     assert(readParameters().crc == p.crc);
     FeedbackFilter filter; FeedbackEstimate e;
@@ -78,69 +81,69 @@ int main() {
     assert(e.ready && e.fresh && fabsf(e.fast-50.5f)<0.001f && fabsf(e.slow-26.5f)<0.001f);
     assert(!filter.update(510,123,true,p).fresh);
     assert(!filter.update(520,123,false,p).ready);
-    ServoAngleData_t servo; servo.onlineStatus[0]=servo.onlineStatus[1]=1;
+    ServoAngleData_t servo; ServoTelemetryData_t telemetry; servo.onlineStatus[0]=servo.onlineStatus[1]=1;
     servo.servoAngles[0]=servo.servoAngles[1]=100;
     JointCalibrationResult lut;
     FeedbackEstimate fb; fb.fast=fb.slow=0; fb.ready=fb.fresh=true; fb.sampleDt=0.01f;
-    JointFeedbackController controller;
-    auto one=controller.compute(0,1,fb,1000,servo,lut,3,p);
+    JointFeedbackController controller; RampParameters ramp;
+    auto one=controller.compute(0,1,fb,1000,servo,telemetry,lut,3,p,ramp);
     assert(one.count==1 && one.targets[0]==110); // measured 100 + 1.0 * signed local slope 10 * 1
     servo.servoAngles[0]=110; servo.servoAngles[1]=105;
-    auto two=controller.compute(1,1,fb,1000,servo,lut,3,p);
+    auto two=controller.compute(1,1,fb,1000,servo,telemetry,lut,3,p,ramp);
     assert(two.count==2 && fabsf(two.proportional[0]-10)<0.01f && fabsf(two.proportional[1]+20)<0.01f);
     assert(fabsf(two.recovery[0]+0.5f)<0.01f && fabsf(two.recovery[1]+0.25f)<0.01f);
-    assert(controller.compute(1,1,fb,1010,servo,lut,1,p).count==0); // incomplete pair rejected
+    assert(controller.compute(1,1,fb,1010,servo,telemetry,lut,1,p,ramp).count==0); // incomplete pair rejected
     p.values[JointKpAa]=2.0f; p.values[JointKpMcp]=1.2f; p.values[JointKpPip]=0.5f;
     p.values[JointKpDip]=1.5f; p.values[JointKpCmc]=0.9f;
     servo.servoAngles[0]=servo.servoAngles[1]=100;
     JointFeedbackController grouped;
-    assert(fabsf(grouped.compute(0,1,fb,2000,servo,lut,3,p).proportional[0]-20)<0.01f); // J00 AA
-    assert(fabsf(grouped.compute(2,1,fb,2000,servo,lut,3,p).proportional[0]-5)<0.01f);  // J02 PIP
-    assert(fabsf(grouped.compute(3,1,fb,2000,servo,lut,3,p).proportional[0]-15)<0.01f); // J03 DIP
-    auto mcp=grouped.compute(1,1,fb,2000,servo,lut,3,p);                                // J01 MCP
+    assert(fabsf(grouped.compute(0,1,fb,2000,servo,telemetry,lut,3,p,ramp).proportional[0]-20)<0.01f); // J00 AA
+    assert(fabsf(grouped.compute(2,1,fb,2000,servo,telemetry,lut,3,p,ramp).proportional[0]-5)<0.01f);  // J02 PIP
+    assert(fabsf(grouped.compute(3,1,fb,2000,servo,telemetry,lut,3,p,ramp).proportional[0]-15)<0.01f); // J03 DIP
+    auto mcp=grouped.compute(1,1,fb,2000,servo,telemetry,lut,3,p,ramp);                                // J01 MCP
     assert(fabsf(mcp.proportional[0]-12)<0.01f && fabsf(mcp.proportional[1]+24)<0.01f);
-    auto cmc=grouped.compute(20,1,fb,2000,servo,lut,3,p);                               // J20 CMC
+    auto cmc=grouped.compute(20,1,fb,2000,servo,telemetry,lut,3,p,ramp);                               // J20 CMC
     assert(fabsf(cmc.proportional[0]-9)<0.01f && fabsf(cmc.proportional[1]+18)<0.01f);
     controller.resetAll(); servo.servoAngles[0]=100;
     p.values[JointKdAa]=0.1f; p.values[JointKiAa]=0.0f;
     fb.fast=fb.slow=0; fb.fresh=true; fb.sampleDt=0.01f;
-    controller.compute(0,0,fb,3000,servo,lut,3,p);
+    controller.compute(0,0,fb,3000,servo,telemetry,lut,3,p,ramp);
     fb.fast=1.0f;
-    auto damped=controller.compute(0,0,fb,3010,servo,lut,3,p);
+    auto damped=controller.compute(0,0,fb,3010,servo,telemetry,lut,3,p,ramp);
     assert(damped.derivative[0] < -20.0f && damped.targets[0] < 90); // measured damping, no target kick
     p.values[JointKdAa]=0.0f; controller.resetAll(); fb.fast=fb.slow=0;
     p.values[JointKiAa]=0.2f; p.values[JointKiIntegralConfirmMs]=20;
-    controller.compute(0,0,fb,990,servo,lut,3,p);
+    controller.compute(0,0,fb,990,servo,telemetry,lut,3,p,ramp);
     JointControlResult integrated;
-    for(uint32_t t=1000;t<=1100;t+=10) integrated=controller.compute(0,1,fb,t,servo,lut,3,p);
+    for(uint32_t t=1000;t<=1100;t+=10) integrated=controller.compute(0,1,fb,t,servo,telemetry,lut,3,p,ramp);
     assert(integrated.integral[0]>0);
     fb.fresh=false;
-    auto unchanged=controller.compute(0,1,fb,1110,servo,lut,3,p);
+    auto unchanged=controller.compute(0,1,fb,1110,servo,telemetry,lut,3,p,ramp);
     assert(fabsf(unchanged.integral[0]-integrated.integral[0])<1e-5f); // no duplicate integration or leakage
     fb.fresh=true;
-    auto pending=controller.compute(0,-1,fb,1120,servo,lut,3,p);
+    auto pending=controller.compute(0,-1,fb,1120,servo,telemetry,lut,3,p,ramp);
     assert(pending.integral[0]>0); // an unconfirmed reversal does not clear I
-    auto confirmed=controller.compute(0,-1,fb,1140,servo,lut,3,p);
+    auto confirmed=controller.compute(0,-1,fb,1140,servo,telemetry,lut,3,p,ramp);
     assert(fabsf(confirmed.integral[0])<1e-5f); // confirmed reversal clears old loading bias
     controller.resetAll();
     p.values[JointKiMcp]=0.2f;
-    controller.compute(1,0,fb,1190,servo,lut,3,p);
-    for(uint32_t t=1200;t<=1300;t+=10) integrated=controller.compute(1,1,fb,t,servo,lut,3,p);
+    controller.compute(1,0,fb,1190,servo,telemetry,lut,3,p,ramp);
+    for(uint32_t t=1200;t<=1300;t+=10) integrated=controller.compute(1,1,fb,t,servo,telemetry,lut,3,p,ramp);
     assert(integrated.integral[0]>0 && integrated.integral[1]<0);
-    controller.compute(1,-1,fb,1310,servo,lut,3,p);
-    confirmed=controller.compute(1,-1,fb,1330,servo,lut,3,p);
+    controller.compute(1,-1,fb,1310,servo,telemetry,lut,3,p,ramp);
+    confirmed=controller.compute(1,-1,fb,1330,servo,telemetry,lut,3,p,ramp);
     assert(fabsf(confirmed.integral[0])<1e-5f && fabsf(confirmed.integral[1])<1e-5f);
-    controller.resetAll(); fb.fresh=true; p.values[JointKiAa]=0;
-    controller.compute(0,0,fb,2000,servo,lut,3,p);
-    controller.compute(0,2,fb,2010,servo,lut,3,p);
-    controller.compute(0,0,fb,2020,servo,lut,3,p);
-    auto reverse=controller.compute(0,0,fb,2040,servo,lut,3,p);
+    controller.resetAll(); fb.fresh=true; p.values[JointKiAa]=0; p.values[ReversalTakeupMaxAa]=80; ramp.values[ReversalRampB0Aa]=40; ramp.values[ReversalRampVbAa]=0; ramp.values[ReversalRampLoadLimitAa]=900;
+    controller.compute(0,0,fb,2000,servo,telemetry,lut,3,p,ramp);
+    controller.compute(0,2,fb,2010,servo,telemetry,lut,3,p,ramp);
+    controller.compute(0,0,fb,2020,servo,telemetry,lut,3,p,ramp);
+    auto reverse=controller.compute(0,0,fb,2040,servo,telemetry,lut,3,p,ramp);
     assert(reverse.reversal[0]<0);
     for(uint32_t t=2050;t<=2300;t+=10) {
         servo.servoAngles[0]=reverse.targets[0];
-        reverse=controller.compute(0,0,fb,t,servo,lut,3,p);
+        reverse=controller.compute(0,0,fb,t,servo,telemetry,lut,3,p,ramp);
     }
-    assert(reverse.targets[0]==20); // anchor 100 minus the fixed take-up floor 80
+    assert(fabsf(reverse.reversal[0]) > 1.0f); // PDF additive take-up bias, not a floor
     FeedbackCollisionGuard guard;
     FeedbackCollisionInput input = {};
     input.contextActive=input.feedbackValid=input.pidPushActive=true;
@@ -171,7 +174,7 @@ int main() {
 }
 '''.replace('PAYLOAD', payload)
     (tmp_path / 'main.cpp').write_text(harness, encoding='utf-8')
-    sources = [str(tmp_path / f'{name}.cpp') for name in ('main','ControlParameters','FeedbackFilter','JointFeedbackController','CollisionSafetyPolicy')]
+    sources = [str(tmp_path / f'{name}.cpp') for name in ('main','ControlParameters','RampParameters','FeedbackFilter','JointFeedbackController','CollisionSafetyPolicy')]
     exe = tmp_path / ('control_test.exe' if os.name == 'nt' else 'control_test')
     command = [compiler, '/nologo', '/std:c++17', '/EHsc', *sources, f'/Fe:{exe}'] if Path(compiler).name.lower()=='cl.exe' else [compiler,'-std=c++17',*sources,'-o',str(exe)]
     subprocess.run(command,cwd=tmp_path,check=True,capture_output=True,text=True,encoding='utf-8',errors='replace')

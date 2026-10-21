@@ -40,7 +40,7 @@ def joint_preparation_device(hand, monkeypatch, *, ready_state=SYSTEM_STATE_READ
     monkeypatch.setattr(comm, 'is_connected', lambda: True)
     monkeypatch.setattr(controller, 'comm', comm)
     hand._selected_joints = (3,)  # Explicit user selection for these enable scenarios.
-    monkeypatch.setattr(comm, 'apply_control_parameters', Mock(return_value=(1, 0)))
+    monkeypatch.setattr(comm, 'apply_control_parameters', Mock(return_value=(1, 0, 1, 0)))
 
     def scope(motors, joints, require_can):
         state.has_active_scope_status = True
@@ -178,7 +178,7 @@ def test_joint_enable_rechecks_current_pose_after_parameter_sync(hand, monkeypat
             state.encoders[3].angle_error = True
         else:
             hand.stop_motion()
-        return (1,0)
+        return (1,0,1,0)
 
     monkeypatch.setattr(comm, 'apply_control_parameters', change_pose)
     item = wait_operation(hand, hand.request_enable())

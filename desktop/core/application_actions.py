@@ -171,14 +171,18 @@ class ApplicationActions(IdResetActions):
         self._control_parameter_sync = 'SYNCING'
         try:
             data = self.control_parameter_snapshot()
-            self.comm.apply_control_parameters(data, cancelled=lambda: epoch != self._application_epoch)
+            revision, crc, ramp_revision, ramp_crc = self.comm.apply_control_parameters(
+                data, cancelled=lambda: epoch != self._application_epoch)
             if epoch != self._application_epoch:
                 self._control_parameter_sync = 'PENDING'
                 return False, 'Parameter synchronization cancelled by STOP'
-            if data['revision'] != self.control_parameter_snapshot()['revision']:
+            latest = self.control_parameter_snapshot()
+            if data['revision'] != latest['revision'] or data['ramp_revision'] != latest['ramp_revision']:
                 self._control_parameter_sync = 'PENDING'
                 return False, 'Parameters changed during synchronization; apply the new revision first'
-            self._control_parameter_sync = f"APPLIED revision {data['revision']} / {data['crc32']:08X}"
+            self._control_parameter_sync = (
+                f'APPLIED revision {revision} / {crc:08X} '
+                f'ramp {ramp_revision} / {ramp_crc:08X}')
             self._control_parameter_retry_count = 0
             self._control_parameter_retry_after = 0.0
             self._update_input_filter()

@@ -330,6 +330,7 @@ def main():
         if args.trial: candidates=[t for t in candidates if t.name in args.trial.split(',')]
         if not candidates: raise RuntimeError('no matching trials')
         initial=hand._control_parameters.snapshot(); initial.pop('crc32',None)
+        initial=hand._control_parameters.snapshot(); initial.pop('ramp_crc32',None)
         # J00..J19: four joints per finger in AA/MCP/PIP/DIP order; J20: thumb CMC.
         kp_fields=('aa','mcp','pip','dip','cmc')
         kp_field=kp_fields[-1] if args.joint==20 else kp_fields[args.joint%4]
@@ -345,6 +346,7 @@ def main():
                 'inoise':[.05,.1,.2], 'iconfirm':[100,200,500], 'fast':[10,20,30]}[args.parameter]
         fixed=json.loads(args.base_parameters.read_text(encoding='utf-8')) if args.base_parameters else initial
         fixed.pop('crc32',None)
+        fixed.pop('ramp_crc32',None)
         (args.output/'parameters.fixed.json').write_text(json.dumps(fixed,indent=2),encoding='utf-8')
         for point in points:
             proposal=copy.deepcopy(fixed)
@@ -353,7 +355,7 @@ def main():
                 groups={'kp':('joint_kp',kp_field),
                         'kd':('joint_kd',kp_field),
                         'pair':('dual_tendon','pair_recovery_gain'),
-                        'takeup':('reversal',f'takeup_counts_{kp_field}'),
+                        'takeup':('reversal',f'takeup_max_{kp_field}'),
                         'confirm':('reversal',f'confirm_deg_{kp_field}'),
                         'ki':('joint_ki',kp_field),
                         'ilimit':('joint_ki',f'integral_limit_counts_{kp_field}'),
@@ -361,11 +363,16 @@ def main():
                         'iconfirm':('joint_ki','integral_confirm_ms'),
                         'fast':('feedback','fast_window_ms')}
                 g,k=groups[args.parameter]; proposal[g][k]=point
+                if args.parameter=='takeup':
+                    proposal['reversal_ramp'][f'b0_{kp_field}']=2 if point and point>0 else 0
+                    proposal['reversal_ramp'][f'vb_{kp_field}']=20 if point and point>0 else 0
             if args.mode=='sweep' and args.parameter=='kp':
                 proposal['joint_ki'][kp_field]=0
                 proposal['joint_kd'][kp_field]=0
                 proposal['dual_tendon']['pair_recovery_gain']=0
-                proposal['reversal'][f'takeup_counts_{kp_field}']=0
+                proposal['reversal'][f'takeup_max_{kp_field}']=0
+                proposal['reversal_ramp'][f'b0_{kp_field}']=0
+                proposal['reversal_ramp'][f'vb_{kp_field}']=0
             set_parameters(proposal)
             for trial in candidates:
                 for repeat in range(trial.repetitions):

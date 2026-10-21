@@ -249,6 +249,7 @@ def run_hardware(args) -> int:
     _wait(lambda: hand._control_parameter_sync.startswith('APPLIED'), 15, 'calibration parameter sync timeout')
     current = hand._control_parameters.snapshot()
     current.pop('crc32', None)
+    current.pop('ramp_crc32',None)
     verified = copy.deepcopy(current)
     _operation(hand, hand.request_clear_faults(), 10)
     (output / 'parameters.before.json').write_text(json.dumps(current, indent=2), encoding='utf-8')
@@ -285,7 +286,9 @@ def run_hardware(args) -> int:
                 proposal['joint_ki'][joint_type] = 0.0
                 proposal['dual_tendon']['pair_recovery_gain'] = 0.0
                 for _name in ('aa', 'mcp', 'pip', 'dip', 'cmc'):
-                    proposal['reversal'][f'takeup_counts_{_name}'] = 0
+                    proposal['reversal'][f'takeup_max_{_name}'] = 0
+                    proposal['reversal_ramp'][f'b0_{_name}'] = 0
+                    proposal['reversal_ramp'][f'vb_{_name}'] = 0
                 try:
                     _apply(hand, proposal)
                     hand.select_joints([joint])

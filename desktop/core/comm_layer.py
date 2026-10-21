@@ -939,6 +939,7 @@ class LowerComputerComm:
         self.port = (port or "").strip()
         self._control_parameter_condition = threading.Condition()
         self._control_parameter_result = None
+        self._control_ramp_parameter_result = None
         self.baudrate = baudrate
         serial_factory = serial.Serial if serial is not None else None
         # 五个通信组件各自拥有单一状态，LowerComputerComm 仅负责编排和旧 API 兼容。
@@ -1043,6 +1044,7 @@ class LowerComputerComm:
                 self._maintenance.close()
             self._maintenance = MaintenanceChannel()
             self._control_parameter_result = None
+            self._control_ramp_parameter_result = None
             self._protocol_compatible = False
             self._ack_tracker.reset()
             self._safety_event_channel.reset()
@@ -1456,12 +1458,18 @@ class LowerComputerComm:
                     with self._control_parameter_condition:
                         self._control_parameter_result = (payload[1], *struct.unpack('>II', payload[2:]))
                         self._control_parameter_condition.notify_all()
+            elif kind == protocol_codec.PACKET_TYPE_CONTROL_RAMP_PARAMETERS:
+                if len(payload) == 10 and payload[0] == 1:
+                    with self._control_parameter_condition:
+                        self._control_ramp_parameter_result = (payload[1], *struct.unpack('>II', payload[2:]))
+                        self._control_parameter_condition.notify_all()
             else:
                 normal.append((kind, payload))
         return self._state_reducer.process_packets(self, normal)
 
     def apply_control_parameters(self, data, *, cancelled=lambda: False, timeout=3.0):
-        from .control_parameters import configuration_frame, configuration_crc
+        from .control_parameters import (configuration_frame, configuration_crc,
+                                         ramp_configuration_frame, ramp_configuration_crc)
         wanted = (0, data['revision'], configuration_crc(data))
         # P4 在 RESET/状态过渡时会用 status=8（协议/运动模型契约暂时不匹配）
         # 拒绝一次 SET；同一 revision 重发是安全且幂等的。最多 3 次，期间仍
@@ -1517,7 +1525,56 @@ class LowerComputerComm:
                 self._control_parameter_condition.wait(min(remaining, 0.05))
             if self._control_parameter_result != wanted:
                 raise ValueError('P4 parameter readback differs from requested revision')
-        return wanted[1:]
+        # Ramp group is a separate atomic frame; apply and read it back too.
+        ramp_wanted = (0, data['ramp_revision'], ramp_configuration_crc(data))
+        last_error = None
+        for attempt in range(1, 4):
+            if cancelled():
+                raise InterruptedError('P4 ramp parameter synchronization cancelled')
+            with self._control_parameter_condition:
+                self._control_ramp_parameter_result = None
+            if not self.send_command(('maintenance_frame', ramp_configuration_frame(data))):
+                raise ConnectionError('P4 ramp parameter transaction could not be queued')
+            deadline = time.monotonic() + timeout
+            with self._control_parameter_condition:
+                while self._control_ramp_parameter_result is None:
+                    if cancelled() or not self.is_connected():
+                        raise InterruptedError('P4 ramp parameter synchronization cancelled')
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        last_error = TimeoutError('P4 ramp parameter application result timed out')
+                        break
+                    self._control_parameter_condition.wait(min(remaining, 0.05))
+                actual = self._control_ramp_parameter_result
+            if actual is None:
+                if attempt < 3:
+                    time.sleep(0.2)
+                continue
+            if actual == ramp_wanted:
+                last_error = None
+                break
+            last_error = ValueError(f'P4 ramp parameter revision/CRC not applied: {actual}')
+            if attempt < 3:
+                time.sleep(0.2)
+        if last_error is not None:
+            raise last_error
+        with self._control_parameter_condition:
+            self._control_ramp_parameter_result = None
+        query = bytes((254, 2, protocol_codec.CMD_CONTROL_RAMP_PARAMETERS_QUERY, 255))
+        if not self.send_command(('maintenance_frame', query)):
+            raise ConnectionError('P4 ramp parameter readback could not be queued')
+        deadline = time.monotonic() + timeout
+        with self._control_parameter_condition:
+            while self._control_ramp_parameter_result is None:
+                if cancelled() or not self.is_connected():
+                    raise InterruptedError('Ramp parameter readback cancelled')
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError('P4 ramp parameter readback timed out')
+                self._control_parameter_condition.wait(min(remaining, 0.05))
+            if self._control_ramp_parameter_result != ramp_wanted:
+                raise ValueError('P4 ramp parameter readback differs from requested revision')
+        return (*wanted[1:], *ramp_wanted[1:])
 
     def maintenance_request(self, session, operation, bus=0, old_id=0, new_id=0, **kwargs):
         from .id_protocol import MaintenanceChannel
