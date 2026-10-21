@@ -2124,7 +2124,7 @@ class HandController:
             return None
         return int(ack[2])
 
-    def _wait_coordinate_result(self, matches, cancelled, timeout_s, *, query_first=False):
+    def _wait_coordinate_result(self, matches, cancelled, timeout_s, *, query_first=False, label="coordinate"):
         """丢失结果只查询现有事务；查询次数不计作新的硬件写请求。"""
         def query():
             with self._coordinate_command_lock:
@@ -2133,22 +2133,53 @@ class HandController:
                 self.request_state_sync(STATE_SYNC_MULTITURN_STATE)
                 return True
 
+        def probe_line(state, count):
+            # 结果匹配诊断：轮询视角下的两类事务字段与状态包新鲜度。
+            rx_ts = state.received_at('system_status_last_rx_ts')
+            return (f"wait[{label}] probe#{count} "
+                    f"rz(req={int(state.servo_reset_zero_request_token)} "
+                    f"res={int(state.servo_reset_zero_result_token)} "
+                    f"st={int(state.servo_reset_zero_status)} "
+                    f"succ=0x{int(state.servo_reset_zero_success_mask):08X} "
+                    f"fail=0x{int(state.servo_reset_zero_failed_mask):08X} "
+                    f"has={int(bool(state.has_servo_reset_zero_status))}) "
+                    f"rb(tok={int(state.servo_rebase_zero_result_token)} "
+                    f"done=0x{(int(state.servo_rebase_zero_success_mask) | int(state.servo_rebase_zero_failed_mask)):08X} "
+                    f"has={int(bool(state.has_servo_rebase_zero_result))}) "
+                    f"rx_age={max(0.0, time.monotonic() - rx_ts):.2f}s "
+                    f"dev={int(bool(self.servo_abs_zero_device_id(state)))}")
+
         queries = 0
         if query_first and query():
             queries = 1
-        deadline = time.monotonic() + max(0.0, timeout_s)
+            log_session("MULTITURN", f"wait[{label}] state-sync query before polling")
+        started = time.monotonic()
+        deadline = started + max(0.0, timeout_s)
+        probes = 0
+        next_probe_log = 0.0
         while True:
             state = self._coordinate_state()
+            probes += 1
             if matches(state):
+                log_session("MULTITURN",
+                            f"wait[{label}] matched probes={probes} elapsed={time.monotonic() - started:.2f}s")
                 return state
             if cancelled():
+                log_session("MULTITURN", f"wait[{label}] cancelled probes={probes}")
                 return None
-            if time.monotonic() >= deadline:
+            now = time.monotonic()
+            if now - started >= next_probe_log:
+                next_probe_log = (now - started) + 0.5
+                log_session("MULTITURN", probe_line(state, probes))
+            if now >= deadline:
                 if queries >= SERVO_COORDINATE_RESULT_SYNC_ATTEMPTS:
+                    log_session("MULTITURN", f"wait[{label}] timed out {probe_line(state, probes)}")
                     return None
                 if not query():
+                    log_session("MULTITURN", f"wait[{label}] query rejected {probe_line(state, probes)}")
                     return None
                 queries += 1
+                log_session("MULTITURN", f"wait[{label}] deadline hit; state-sync query #{queries}")
                 deadline = time.monotonic() + min(
                     max(0.0, timeout_s), SERVO_COORDINATE_RESULT_SYNC_WAIT_S,
                 )
@@ -2170,14 +2201,21 @@ class HandController:
         """迟到 EE 结果仍失效旧锚点，未知结果期间禁止再次改写圈数。"""
         with self._multiturn_io_lock:
             mask = self._servo_turn_zero_unresolved_mask
-            if (not mask or self.comm is not self._servo_turn_zero_comm
-                    or self._servo_abs_zero_connection_generation != self._servo_turn_zero_connection
-                    or self.servo_abs_zero_device_id(state) != self._servo_turn_zero_device_id
-                    or not self._servo_turn_zero_result_matches(
-                        state, self._servo_turn_zero_baseline_token, self._servo_turn_zero_sent_at, mask)):
+            if not mask:
+                return
+            session_ok = (self.comm is self._servo_turn_zero_comm
+                          and self._servo_abs_zero_connection_generation == self._servo_turn_zero_connection
+                          and self.servo_abs_zero_device_id(state) == self._servo_turn_zero_device_id)
+            result_ok = self._servo_turn_zero_result_matches(
+                state, self._servo_turn_zero_baseline_token, self._servo_turn_zero_sent_at, mask)
+            if not session_ok or not result_ok:
+                log_session("MULTITURN", (
+                    f"late servo_reset_zero result not serviced mask=0x{mask:08X} "
+                    f"session={int(session_ok)} result={int(result_ok)}"))
                 return
             self._invalidate_coordinate_anchors(mask, self._servo_turn_zero_reason, state)
             self._servo_turn_zero_unresolved_mask = 0
+            log_session("MULTITURN", f"late servo_reset_zero result serviced mask=0x{mask:08X}")
 
     def _service_servo_rebase_zero_capture(self, state: HandModel) -> None:
         """最终结果先失效旧坐标，再等待结果之后的新同帧 ABS/raw 落盘。"""
@@ -2392,6 +2430,7 @@ class HandController:
                     continue
                 state = self._wait_coordinate_result(
                     matches, changed, SERVO_REBASE_ZERO_RESULT_TIMEOUT_S, query_first=status is None,
+                    label="servo_rebase_zero",
                 )
                 if state is None:
                     if same_session():
@@ -2467,6 +2506,12 @@ class HandController:
             self._service_servo_turn_zero_result(state)
             if (self._servo_turn_zero_unresolved_mask or self._servo_rebase_zero_unresolved_mask
                     or self._servo_rebase_zero_capture_mask or self._multiturn_pending_restore_mask):
+                log_session("MULTITURN", (
+                    f"turn-zero blocked by pending transaction "
+                    f"turn_zero=0x{self._servo_turn_zero_unresolved_mask:08X} "
+                    f"rebase=0x{self._servo_rebase_zero_unresolved_mask:08X} "
+                    f"rebase_capture=0x{self._servo_rebase_zero_capture_mask:08X} "
+                    f"restore=0x{int(self._multiturn_pending_restore_mask):08X}"))
                 return failure("previous servo coordinate transaction is awaiting its result/new feedback")
             if not state.has_servo_reset_zero_status:
                 return failure("P4 firmware does not report calibration turn-reset status")
@@ -2535,7 +2580,10 @@ class HandController:
                 if not motion_gate(send):
                     restore_unaccepted()
                     return failure("calibration turn-reset cancelled or command queue rejected")
-                log_session("MULTITURN", f"servo_reset_zero attempt={attempt}/3 mask=0x{pending:08X}")
+                log_session("MULTITURN", (
+                    f"servo_reset_zero attempt={attempt}/3 mask=0x{pending:08X} "
+                    f"baseline_token={int(baseline_token)} "
+                    f"expect_token={(int(baseline_token) + 1) & 0xffffffff}"))
                 ack = comm.wait_for_ack(
                     CMD_SERVO_RESET_ZERO, SERVO_RESET_ZERO_ACK_TIMEOUT_S, received_after_monotonic=sent_at,
                 )
@@ -2552,6 +2600,7 @@ class HandController:
                     continue
                 result = self._wait_coordinate_result(
                     matches, changed, SERVO_RESET_ZERO_RESULT_TIMEOUT_S, query_first=status is None,
+                    label="servo_reset_zero",
                 )
                 if result is None:
                     if same_session():
