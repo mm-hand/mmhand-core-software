@@ -61,7 +61,7 @@ class DataSessionRecorder:
     ) -> None:
         self.stop()
         os.makedirs(root_dir, exist_ok=True)
-        session = session_name or f"数据记录_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+        session = session_name or f"recordings_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
         session_dir = os.path.join(root_dir, session)
         os.makedirs(session_dir, exist_ok=True)
         selected_topics = list(topics or DEFAULT_TOPICS)
