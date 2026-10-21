@@ -18,12 +18,13 @@ CONFIG_DIR = RESOURCE_DIR / "config"
 # Default runtime root is the config directory itself. Tests and tools may
 # override it with MMHAND_DATA_DIR without touching tracked configuration.
 DATA_DIR = Path(os.environ.get("MMHAND_DATA_DIR") or CONFIG_DIR).expanduser().resolve()
-DEVICE_STATE_DIR = DATA_DIR / "device_state"
 URDF_DIR = RESOURCE_DIR / "hku_hand_v2_urdf"
 # Logs and recordings share the repository-level logs tree. The app writes
 # recordings under logs/; the whole tree is gitignored.
 LOG_DIR = Path(os.environ.get("MMHAND_LOG_DIR") or (PROJECT_ROOT / "logs")).resolve()
 RUN_DATA_DIR = LOG_DIR
+# ID renumber transaction journals live with the runtime logs.
+DEVICE_STATE_DIR = LOG_DIR
 
 
 def relative_display(path) -> str:

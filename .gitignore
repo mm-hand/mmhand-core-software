@@ -14,7 +14,6 @@ __pycache__/
 # Generated project data
 .debug/
 run_data/
-desktop/resources/config/device_state/
 *.mmcal.json
 !desktop/resources/config/calibration_bundle.mmcal.json
 !tests/fixtures/calibration_bundle.mmcal.json
@@ -33,7 +32,6 @@ desktop/resources/hku_hand_v2_urdf_builtin/
 
 *.egg-info/
 desktop/resources/config/*.before-device-isolation.bak
-desktop/resources/config/device_state/**/*.before-device-isolation.bak
 reference/
 .venv/
 # Historical calibration and one-off local validation outputs
