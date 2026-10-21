@@ -68,6 +68,9 @@ int main() {
     assert(!parametersConfigured());
     assert(applyParameterPayload(payload,sizeof(payload)));
     Parameters p = readParameters(); assert(p.configured && p.revision == 1);
+    // Keep this native test independent of the product default tuning values.
+    p.values[JointKpAa]=1.0f; p.values[JointKpMcp]=1.0f;
+    p.values[DualTendonPairRecoveryGain]=0.05f; p.values[ReversalTakeupCounts]=80;
     payload[7] ^= 1; assert(!applyParameterPayload(payload,sizeof(payload)));
     assert(readParameters().crc == p.crc);
     FeedbackFilter filter; FeedbackEstimate e;

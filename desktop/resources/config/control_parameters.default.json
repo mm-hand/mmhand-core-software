@@ -2,10 +2,10 @@
   "schema_version": 4,
   "revision": 1,
   "joint_kp": {
-    "aa": 1.0,
-    "mcp": 1.0,
+    "aa": 1.3,
+    "mcp": 1.3,
     "pip": 1.0,
-    "dip": 1.2,
+    "dip": 1.3,
     "cmc": 1.0
   },
   "joint_ki": {
@@ -19,14 +19,14 @@
     "integral_confirm_ms": 200
   },
   "joint_kd": {
-    "aa": 0.0,
-    "mcp": 0.0,
+    "aa": 0.08,
+    "mcp": 0.02,
     "pip": 0.0,
     "dip": 0.0,
     "cmc": 0.0
   },
   "dual_tendon": {
-    "pair_recovery_gain": 0.05
+    "pair_recovery_gain": 0.0
   },
   "feedback": {
     "fast_window_ms": 20,
@@ -35,7 +35,7 @@
   "reversal": {
     "confirm_deg": 1.0,
     "confirm_ms": 20,
-    "takeup_counts": 80,
+    "takeup_counts": 0,
     "exit_travel_deg": 0.25
   },
   "collision": {
