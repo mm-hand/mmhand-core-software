@@ -298,8 +298,10 @@ def _run_plan(hand, output: Path, joint: int, motors, points, label: str,
         raise RuntimeError(f'J{joint:02d} current {current:.2f} above test cap {cap:.1f}; recover first')
     if cap is not None and max(point.target_deg for point in points) > cap + 1e-6:
         raise RuntimeError(f'plan target exceeds MCP test cap {cap:.1f}')
+    # Watchdog margin is 2 deg; use 73 deg so actual MCP motion cannot exceed 75 deg.
+    watch_high = min(high, cap - 1.0) if cap is not None else high
     _enable(hand, joint, motors)
-    watchdog = Watchdog(output, joint, motors, low, high)
+    watchdog = Watchdog(output, joint, motors, low, watch_high)
     state = hand.get_state_snapshot()
     values = list(state.target_angles)
     raw_path = output / 'raw' / f'{label}.jsonl'
