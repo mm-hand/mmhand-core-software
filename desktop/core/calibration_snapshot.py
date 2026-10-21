@@ -517,8 +517,13 @@ def invalidate_snapshot_multiturn_anchors(
     mask = int(motor_mask) & VALID_MOTOR_MASK
     if mask == 0:
         return None
+    target = Path(path)
+    if not target.exists():
+        # 未标定设备没有快照可作废；与 invalidate_calibration_snapshot_scope
+        # 的缺失容忍一致，归零/Release 事务不得因无文件而崩溃。
+        return None
     with snapshot_write_transaction():
-        payload = read_snapshot(path)
+        payload = read_snapshot(target)
         valid_mask, logical_abs, raw = multiturn_anchor_fields(payload)
         for motor_idx in range(MOTOR_COUNT):
             if mask & (1 << motor_idx):
@@ -532,7 +537,7 @@ def invalidate_snapshot_multiturn_anchors(
             "reason": str(reason),
             "host_time": time.time(),
         }
-        return atomic_write_snapshot(path, payload, backup=False)
+        return atomic_write_snapshot(target, payload, backup=False)
 
 
 def update_manual_snapshot(

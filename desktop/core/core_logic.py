@@ -172,6 +172,7 @@ class HandController:
         self.update_callbacks: List[callable] = []
         self._last_update_callback_error = ""
         self._last_update_loop_error = ""
+        self._last_coordinate_bookkeeping_error = ""
 
         self._control_mode = ControlMode.JOINT_ANGLE
         self._started = False
@@ -1494,6 +1495,13 @@ class HandController:
                         self._service_multiturn_anchor_capture(new_model)
                         self._service_multiturn_restore(new_model, ack_events=restore_ack_events)
                         restore_ack_events.clear()
+                    except Exception as exc:
+                        # 坐标簿记失败不得跳过状态发布；异常留待下个模型重试，
+                        # 否则持续异常会把 current_state 永久冻结成旧快照。
+                        message = f"{type(exc).__name__}: {exc}"
+                        if message != self._last_coordinate_bookkeeping_error:
+                            self._last_coordinate_bookkeeping_error = message
+                            log_session("CTRL", f"coordinate bookkeeping deferred: {message}")
                     finally: self._multiturn_io_lock.release()
                 with self.state_lock:
                     self.current_state.copy_state_from(new_model)
