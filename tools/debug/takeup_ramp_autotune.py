@@ -27,7 +27,7 @@ from tools.debug import integral_reversal_core as core  # noqa: E402
 from tools.debug.integral_reversal_autotune import (  # noqa: E402
     ALL_TYPES, _apply_verified, _lead_in_plan, _release, _run_plan,
     _safe_snapshot, _set_all_pair, _set_all_ramp, _set_all_reversal,
-    _set_integral_defaults, _wait,
+    _set_integral_defaults, _wait, _hold_for,
 )
 
 LADDER = (40, 80, 160, 320, 640, 1000, 1500, 2000)
@@ -131,7 +131,7 @@ def run(args):
                     revision = int(_safe_snapshot(hand)['revision'])
                     crc = configuration_crc(proposal)
                     samples, duration = _run_plan(hand, output, joint, motors, points, label,
-                                                  low, high, revision, crc)
+                                                  low, high, revision, crc, hold_joints=_hold_for(joint))
                     params = dict(proposal['joint_ki'])
                     params.update(proposal['reversal'])
                     params.update(proposal['feedback'])
@@ -194,7 +194,7 @@ def run(args):
                     revision = int(_safe_snapshot(hand)['revision'])
                     crc = configuration_crc(proposal)
                     samples, duration = _run_plan(hand, output, joint, motors, points, label,
-                                                  low, high, revision, crc)
+                                                  low, high, revision, crc, hold_joints=_hold_for(joint))
                     params = dict(proposal['joint_ki'])
                     params.update(proposal['reversal'])
                     params.update(proposal['feedback'])

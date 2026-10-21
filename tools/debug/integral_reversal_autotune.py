@@ -148,9 +148,10 @@ def _wait_trace_ready(hand, joint: int, timeout: float = 4.0) -> None:
     raise RuntimeError('control trace/slow window not ready')
 
 
-def _enable(hand, joint: int, motors) -> None:
+def _enable(hand, joint: int, motors, hold_joints=()) -> None:
     _release(hand)
-    hand.select_joints([joint])
+    hold = [int(item) for item in hold_joints if int(item) != joint]
+    hand.select_joints([joint, *hold])
     hand.select_motors(list(motors))
     _operation(hand, hand.request_enable())
     _wait(lambda: hand.get_state_snapshot().control_enabled, 5, 'enable timeout')
@@ -289,21 +290,36 @@ class Watchdog:
             self.takeup_since = None
 
 
+PROXIMAL_HOLD = {9: (8,), 10: (8, 9), 11: (8, 9, 10)}
+
+
+def _hold_for(joint: int):
+    return PROXIMAL_HOLD.get(int(joint), ())
+
+
 def _run_plan(hand, output: Path, joint: int, motors, points, label: str,
-              low: float, high: float, revision: int, crc: int) -> tuple:
+              low: float, high: float, revision: int, crc: int,
+              hold_joints=()) -> tuple:
     cap = core.TEST_HIGH_CAP_DEG.get('mcp') if joint == core.REPRESENTATIVE_JOINTS['mcp'] else None
     before = hand.get_state_snapshot()
     current = before.encoders[joint].current_angle_deg
+    if joint in (9, 10, 11) and before.encoders[4].current_angle_deg < 20.0:
+        raise RuntimeError('index AA J04 is not at its maximum; move it aside before middle-finger tests')
     if cap is not None and current > cap + 0.5:
         raise RuntimeError(f'J{joint:02d} current {current:.2f} above test cap {cap:.1f}; recover first')
     if cap is not None and max(point.target_deg for point in points) > cap + 1e-6:
         raise RuntimeError(f'plan target exceeds MCP test cap {cap:.1f}')
     # Watchdog margin is 2 deg; use 73 deg so actual MCP motion cannot exceed 75 deg.
     watch_high = min(high, cap - 1.0) if cap is not None else high
-    _enable(hand, joint, motors)
-    watchdog = Watchdog(output, joint, motors, low, watch_high)
+    hold = [int(item) for item in hold_joints if int(item) != joint]
+    hold_targets = {item: float(before.encoders[item].current_angle_deg) for item in hold}
+    all_motors = list(dict.fromkeys([*motors, *[m for item in hold for m in joint_motors(item)]]))
+    _enable(hand, joint, all_motors, hold)
+    watchdog = Watchdog(output, joint, all_motors, low, watch_high)
     state = hand.get_state_snapshot()
     values = list(state.target_angles)
+    for item, angle in hold_targets.items():
+        values[item] = angle
     raw_path = output / 'raw' / f'{label}.jsonl'
     raw_path.parent.mkdir(parents=True, exist_ok=True)
     samples = []
@@ -327,6 +343,8 @@ def _run_plan(hand, output: Path, joint: int, motors, points, label: str,
             target = float(points[point_index].target_deg)
             if elapsed - last_send >= 0.019:
                 values = _set_target(hand, values, joint, target, f'autotune {label}')
+                for item, angle in hold_targets.items():
+                    values = _set_target(hand, values, item, angle, 'hold')
                 last_send = elapsed
             state = _healthy(hand, joint, sum(1 << m for m in motors))
             if state.control_trace_sequence != last_sequence and state.has_control_trace:
@@ -532,7 +550,7 @@ def run_hardware(args) -> int:
         crc = configuration_crc(_safe_snapshot(hand))
         pre_samples, _ = _run_plan(hand, output, joint, motors, pre_plan, 'preflight',
                                    row['internal_low_deg'], row['internal_high_deg'],
-                                   revision, crc)
+                                   revision, crc, hold_joints=_hold_for(joint))
         _json(output / 'preflight.json', dict(samples=len(pre_samples),
                                               sensor_ok=True,
                                               slow_window_ok=True,
@@ -580,7 +598,7 @@ def run_hardware(args) -> int:
                     run_points = _lead_in_plan(hand, joint, points)
                     samples, duration = _run_plan(hand, output, joint, motors, run_points, label,
                                                   row['internal_low_deg'], row['internal_high_deg'],
-                                                  revision, crc)
+                                                  revision, crc, hold_joints=_hold_for(joint))
                     params = _analysis_params(proposal, joint_type, ki)
                     trial = _mk_integral_trial(joint_type, joint, ki,
                                                core.integral_metrics(samples, run_points, motors, params))
@@ -679,7 +697,7 @@ def run_hardware(args) -> int:
                     run_points = _lead_in_plan(hand, joint, points)
                     samples, duration = _run_plan(hand, output, joint, motors, run_points, label,
                                                   row['internal_low_deg'], row['internal_high_deg'],
-                                                  revision, crc)
+                                                  revision, crc, hold_joints=_hold_for(joint))
                     params = _analysis_params(proposal, joint_type, 0.0)
                     trial = core.reversal_metrics(samples, truth, motors, params)
                     trial.joint_type = joint_type
@@ -757,7 +775,7 @@ def run_hardware(args) -> int:
                             run_points = _lead_in_plan(hand, joint, points)
                             samples, duration = _run_plan(hand, output, joint, motors, run_points,
                                                           label, row['internal_low_deg'],
-                                                          row['internal_high_deg'], revision, crc)
+                                                          row['internal_high_deg'], revision, crc, hold_joints=_hold_for(joint))
                             params = _analysis_params(proposal, joint_type, 0.0)
                             trial = core.reversal_metrics(samples, truth, motors, params)
                             trial.joint_type = joint_type
@@ -845,7 +863,7 @@ def run_hardware(args) -> int:
                     run_points = _lead_in_plan(hand, joint, points)
                     samples, duration = _run_plan(hand, output, joint, motors, run_points, label,
                                                   row['internal_low_deg'], row['internal_high_deg'],
-                                                  revision, crc)
+                                                  revision, crc, hold_joints=_hold_for(joint))
                     params = _analysis_params(proposal, joint_type, selected['ki'][joint_type])
                     metrics = _validation_metrics(samples, run_points, truth, motors, params)
                     metrics['joint_type'] = joint_type
