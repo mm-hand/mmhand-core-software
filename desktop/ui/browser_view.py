@@ -286,7 +286,7 @@ def build_page(hand):
         hand.clear_calibration_preview()
         preview_token[0] = None
         paths = hand.application_snapshot(include_curves=False)['calibration_storage']
-        storage.set_text(f"Current device save path: {paths['current']}\nDefault data directory: {paths['data_dir']}\nEarlier default snapshot: {paths['default']}")
+        storage.set_text(f"Default data directory: {paths['data_dir']}")
         import_info.set_text('Choose a calibration file to validate.'); load.set_enabled(False)
         importer.open()
     def top_stop_action():

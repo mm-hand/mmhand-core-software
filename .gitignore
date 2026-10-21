@@ -14,10 +14,9 @@ __pycache__/
 # Generated project data
 .debug/
 run_data/
-desktop/resources/config/calibration_bundle.mmcal.json
-desktop/resources/config/calibration_bundle.mmcal.json.bak
 desktop/resources/config/device_state/
 *.mmcal.json
+!desktop/resources/config/calibration_bundle.mmcal.json
 
 # Local firmware experiments and waveform captures
 ESP32-P4/debug.log

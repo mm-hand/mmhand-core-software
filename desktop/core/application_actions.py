@@ -20,7 +20,7 @@ import threading
 import time
 from uuid import uuid4
 
-from desktop.paths import RUN_DATA_DIR, DATA_DIR, CALIB_LOAD_SNAPSHOT_PATH
+from desktop.paths import RUN_DATA_DIR, CALIB_LOAD_SNAPSHOT_PATH, CONFIG_DIR, relative_display
 from .angle_mapping import get_spec
 from .calibration_diagnostics import (
     format_calibration_diagnostic, format_calibration_warning, format_calibration_batch_summary,
@@ -307,7 +307,7 @@ class ApplicationActions(IdResetActions):
         except (ValueError, RuntimeError):
             current = CALIB_LOAD_SNAPSHOT_PATH
         return dict(current=str(current), default=str(CALIB_LOAD_SNAPSHOT_PATH),
-                    data_dir=str(DATA_DIR))
+                    data_dir=relative_display(CONFIG_DIR))
 
 
 
