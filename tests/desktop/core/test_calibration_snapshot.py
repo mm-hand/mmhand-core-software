@@ -368,3 +368,45 @@ def test_empty_scope_invalidation_is_idempotent_without_rewrite(tmp_path):
 
     assert message == "scope already invalid; snapshot not rewritten"
     assert path.read_bytes() == before
+
+
+def test_retained_out_of_scope_anchors_do_not_block_new_anchor_save(tmp_path):
+    """历史锚点在当前事务范围外时必须原样携带，不能毒化整次锚点保存。"""
+    path = tmp_path / "hand.mmcal.json"
+    _manual_only_bundle(path)
+    invalidate_calibration_snapshot_scope(path, motor_mask=1, joint_mask=1,
+                                          reason="servo_abs_rebase_zero")
+    update_snapshot_multiturn_anchors(
+        path, motor_mask=1,
+        logical_abs=[8192 + m for m in range(MOTOR_COUNT)],
+        raw=[m for m in range(MOTOR_COUNT)])
+
+    invalidate_calibration_snapshot_scope(
+        path, motor_mask=0x000F8000, joint_mask=0x0000F000,
+        reason="servo_abs_rebase_zero")
+
+    # 模拟真实采集路径：requested 是累计位图（含保留位），保留电机携带原值。
+    logical_abs = [111 + m for m in range(MOTOR_COUNT)]
+    raw = [7 + m for m in range(MOTOR_COUNT)]
+    logical_abs[0], raw[0] = 8192, 0
+    saved = update_snapshot_multiturn_anchors(
+        path, motor_mask=0x000F8001,
+        logical_abs=logical_abs, raw=raw)
+
+    bitmap = parse_mask(saved["multiturn_anchor_valid_bitmap"])
+    assert bitmap & 0x000F8001 == 0x000F8001
+    # 范围外的 M00 保留锚点值不被新写入覆盖，也不被截掉。
+    assert bitmap & 1
+    assert saved["multiturn_anchor_logical_abs"][0] == 8192
+    assert saved["multiturn_anchor_raw"][0] == 0
+    assert saved["multiturn_anchor_logical_abs"][15] == 111 + 15
+
+
+def test_new_out_of_scope_anchor_is_still_rejected(tmp_path):
+    path = tmp_path / "hand.mmcal.json"
+    _manual_only_bundle(path)
+    with pytest.raises(CalibrationSnapshotError,
+                       match="new multiturn anchor motors are not active"):
+        update_snapshot_multiturn_anchors(
+            path, motor_mask=1 << 20,
+            logical_abs=[0] * MOTOR_COUNT, raw=[0] * MOTOR_COUNT)

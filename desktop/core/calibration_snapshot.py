@@ -506,19 +506,22 @@ def update_snapshot_multiturn_anchors(
             if key.startswith("scoped_") and key.endswith("_motor_mask"):
                 invalidated_scope_mask |= parse_mask(value)
         anchor_scope_mask = active_mask | (invalidated_scope_mask & VALID_MOTOR_MASK)
-        if requested_mask == 0 or (requested_mask & anchor_scope_mask) != requested_mask:
-            raise CalibrationSnapshotError(
-                "multiturn anchor motors are not active in calibration snapshot"
-            )
         valid_mask, saved_abs, saved_raw = multiturn_anchor_fields(payload)
+        # 门禁只约束本次新增断言的锚点：历史保留的锚点是上次有效范围内写入、
+        # 本次原样携带的旧值，电机坐标未被本事务改动，必须放行。否则任何一次
+        # 局部标定/重置零位都会被范围外的存量锚点毒化，整次保存被拒，采集
+        # 永远无法确认（"new trusted feedback/JSON save unconfirmed"）。
+        newly_mask = requested_mask & ~valid_mask
+        if requested_mask == 0 or (newly_mask & anchor_scope_mask) != newly_mask:
+            raise CalibrationSnapshotError(
+                "new multiturn anchor motors are not active in calibration snapshot"
+            )
         for motor_idx in range(MOTOR_COUNT):
             bit = 1 << motor_idx
             if requested_mask & bit:
                 saved_abs[motor_idx] = int(logical_abs[motor_idx])
                 saved_raw[motor_idx] = int(raw[motor_idx]) % 4096
-        payload["multiturn_anchor_valid_bitmap"] = format_mask(
-            (valid_mask | requested_mask) & anchor_scope_mask
-        )
+        payload["multiturn_anchor_valid_bitmap"] = format_mask(valid_mask | requested_mask)
         payload["multiturn_anchor_logical_abs"] = saved_abs
         payload["multiturn_anchor_raw"] = saved_raw
         payload["multiturn_anchor_updated_motor_mask"] = format_mask(requested_mask)
