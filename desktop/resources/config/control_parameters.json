@@ -1,13 +1,13 @@
 {
   "schema_version": 6,
-  "revision": 536,
-  "ramp_revision": 115,
+  "revision": 555,
+  "ramp_revision": 134,
   "joint_kp": {
-    "aa": 1.3,
-    "mcp": 1.3,
-    "pip": 1.0,
-    "dip": 1.3,
-    "cmc": 1.3
+    "aa": 0.4,
+    "mcp": 0.8,
+    "pip": 0.8,
+    "dip": 0.8,
+    "cmc": 0.8
   },
   "joint_ki": {
     "aa": 0.0,
@@ -24,14 +24,14 @@
     "integral_confirm_ms": 200
   },
   "joint_kd": {
-    "aa": 0.08,
-    "mcp": 0.02,
-    "pip": 0.0,
-    "dip": 0.0,
-    "cmc": 0.08
+    "aa": 0.0,
+    "mcp": 0.1,
+    "pip": 0.1,
+    "dip": 0.1,
+    "cmc": 0.1
   },
   "dual_tendon": {
-    "pair_recovery_gain": 0.3
+    "pair_recovery_gain": 0.0
   },
   "feedback": {
     "fast_window_ms": 20,
