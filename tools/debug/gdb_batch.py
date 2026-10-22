@@ -61,27 +61,35 @@ def repo_root() -> Path:
 def core_tools_dir() -> Path:
     base = Path(os.environ.get("LOCALAPPDATA", "")) / "Arduino15" / "packages" / "esp32" / "tools"
     if not base.is_dir():
+        base = Path.home() / ".arduino15" / "packages" / "esp32" / "tools"
+    if not base.is_dir():
         sys.exit(f"[gdb_batch] esp32 Arduino core tools not found: {base}")
     return base
 
 
 def latest_tool(root: Path, leaf: str) -> Path | None:
     """Newest version directory wins (Espressif names sort chronologically)."""
+    # Windows leaf names carry .exe; accept the platform counterpart too.
+    names = {leaf, leaf[:-4] if leaf.endswith(".exe") else leaf + ".exe"}
     if not root.is_dir():
         return None
     for d in sorted((x for x in root.iterdir() if x.is_dir()), key=lambda p: p.name, reverse=True):
-        exe = d / leaf
-        if exe.is_file():
-            return exe
+        for name in sorted(names):
+            exe = d / name
+            if exe.is_file():
+                return exe
     return None
 
 
 def openocd_is_running() -> bool:
-    out = subprocess.run(
-        ["tasklist", "/FI", "IMAGENAME eq openocd.exe"],
-        capture_output=True, text=True, errors="replace",
-    ).stdout
-    return "openocd.exe" in out.lower()
+    if os.name == 'nt':
+        out = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq openocd.exe"],
+            capture_output=True, text=True, errors="replace",
+        ).stdout
+        return "openocd.exe" in out.lower()
+    out = subprocess.run(["pgrep", "-x", "openocd"], capture_output=True, text=True)
+    return out.returncode == 0
 
 
 def drain_openocd_output(proc: subprocess.Popen, log_path: Path) -> queue.Queue:
