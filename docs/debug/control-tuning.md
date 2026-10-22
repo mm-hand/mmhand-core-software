@@ -354,11 +354,128 @@ Bmax 阶梯（40→…→2000）与 B0/vB 细化；MCP/PIP/DIP 需机械恢复�
 避免在 89–90° 卡死状态下再次启动测试。曲线见
 `run_data/analysis/mcp_capped_plan.png`。
 
-### 中指测试的相邻手指与近端保持（2026-10-21 补充）
+### 中指测试的相邻手指与近端保持（2026-10-21 补充，22:05 更正）
 
-- 食指 AA 是 **J04**，不是 J00（J00 是小指 AA）；当前标定 bundle 只含
-  J08–J11，J04 电机 5/6 没有 ABS 限位，软件不能命令它。
-- 跑 J09/J10/J11 前必须**人工把 J04 摆到最大角度**，让食指避开中指；
-  新加的 preflight 会检查 J04 当前角，<20° 时直接拒绝测试。
+**更正：** 关节顺序是 J00–J03 小指、J04–J07 无名指、J08–J11 中指、
+J12–J15 食指、J16–J20 拇指。食指 root 是 **J12**，不是 J04；J04 是
+无名指 root（M05/M06，当前不在 P4 总线上）。旧记录把 J04 写成食指是错的，
+工具检查已改为 J12。
+
+- 跑 J09/J10/J11 前要让**食指 J12–J15** 让开。本轮已通过维护流程松开食指
+  腱绳并作废其标定，活动标定缩到 J08–J11；无法由软件直接确认时必须由操作者
+  在预检时显式确认（`--assume-index-aa-clear`）。
 - 测试 J09 时固定 J08（中指 AA）；测试 J10 时固定 J08+J09；测试 J11 时
   固定 J08+J09+J10，避免近端关节自由摆动把 MCP/PIP/DIP 带偏。
+- 旧记录中的 `run_data/...` 路径已在 2026-10-21 清理；新的运行产物在
+  `logs/` 下。
+
+## 2026-10-21 第五小时：活动标定路径修复与自动换向重跑（未完成）
+
+- 20:40 提交 `66233cf` 删除 `desktop/resources/config/calibration_bundle.mmcal.json`
+  后，维护放绳流程找不到活动标定，第一次食指放绳失败；已从
+  `mmhand_data/device_state/.../calibration_bundle.mmcal.json` 恢复到该路径。
+  `mmhand_data` 随后已整体删除，备份在 `logs/calibration_backup/`。
+- 食指放绳：J12–J15 通过正常维护流程 Reset Zero 并放 1500 counts，标定作废，
+  P4 活动 scope 自动缩到 J08–J11（`0x0F00/0x7C00`）。
+- J08 用 2°/s 受监控移动从 -28.5° 回到 -9.7°（保留标定，faults=0）。
+- AA 回归（`logs/ramp_v7_20261021_2127/aa/`）：`Bmax=40, B0=5, vB=50` 入选，
+  valid、11/11 退出、engage 5.29%、peak 432、J_R 0.661；R2 的 `b0=2` 候选因
+  engage<5% 或 peak 904 被拒。
+- MCP：第一次 trial 在 enable 阶段把 J09 带到 **-12.04°**，M12 实际 **-6951**
+  （J09 LUT 约 -2358…2695 counts），再上抬时 M12 负载 1000、关节不动；已停止
+  MCP/DIP/PIP，未部署新值。需要人工恢复/放绳并重做 J09 标定。
+- 最终参数已恢复默认：**revision 446 / CRC `7A230ECB`，ramp 25 / `59E6952F`**；
+  AA takeup=40、其余类型 0、MCP Kp=1.3/Kd=0.02、Ki=0、pair=0，控制禁用。
+
+## 2026-10-21 第六小时：自动换向重跑（AA 安全中止，MCP 仍阻塞）
+
+23:18 重新开始前先做无运动预检（`takeup_ramp_autotune.py --preflight-only`）：
+J08=13.69°、J09=-12.19°、J10=-1.01°、J11=50.76°，J12–J15 仍不可读；
+控制禁用、faults=0，活动 scope 仅 J08/J09（`0x300/0x1C00`）。
+
+- **MCP 仍不可测**：J09 当前 -12.17°，M12 逻辑位置 **-11625**，而 J09 的 LUT
+  只覆盖 **-2358…2695**，标定锚点为 -3814；相差约 2.3 圈。直接使能会把
+  M12 拉回 LUT 范围，属于未恢复状态，本轮跳过。
+- **AA 首次试验安全中止**：23:30 应用 tuning base（revision 447）后，从 13.69°
+  以 5°/s 引导到测试下限 -25.8°；第 7.9 s 实测角到 **-30.26°**，越过 2° 包络，
+  Watchdog 触发 `SafetyAbort: measured angle -30.26 outside envelope`。原始
+  `aa_max40_vb50_b05.jsonl` 显示 actual/slow 分离、M10/M11 指令在
+  -673…+1000 counts 间振荡、负载 ±900；没有形成有效 trial，不能据此调参。
+  释放后 J08 自行回到 4.70°，M10/M11=26/352。
+- PIP/DIP 未运行（用户本轮只批准 AA；且活动 scope 只有 J08/J09）。
+- 中止后已恢复默认参数：**revision 450 / CRC `7A230ECB`，ramp 29 /
+  `59E6952F`**，AA takeup=40、其余 0，控制禁用、faults=0。
+
+下一步必须先做机械检查：J08 双腱的松弛/静摩擦和磁编稳定性（本轮表现为
+粘滑式振荡，不是 Kp/换向参数问题）；建议先以 2°/s 受监控移动到 -9.7° 附近，
+再从该点重跑 AA。MCP 需人工重新放绳/回零并重做 J09 标定后，才能进入换向
+参数矩阵。
+
+**23:44 复测（用户批准）**：先用 2°/s 受监控把 J08 从 4.79° 移到 -9.8°
+（207 样本、9.25 s，末帧 actual -9.8 / slow -9.79，负载 0/-20），移动本身
+稳定。23:46 从 -9.7° 重跑 AA，仍在 `center_0.20_hold` 段振荡，实测到
+-27.53°，Watchdog 于 -30.18° 再次 `SafetyAbort`。同角度段对比：
+
+- 21:48 成功轮：target -15.88° 时 M11 实际 ≈ 992、M10 ≈ -26；
+- 23:46 重跑：同一 target 段 M11 实际 389–780、M10 -129…-515。
+
+J08 的关节角与双腱电机位置对应关系已偏移约 600 counts，且释放后 J08 自行
+回到 -1.65°（M10/M11=-112/392），符合双腱松弛/滑移，不是 Kp、Kd 或换向
+参数能修正的问题。**本轮没有形成有效 trial。** 再次恢复默认：
+revision 455 / CRC `7A230ECB`，ramp 34 / `59E6952F`，控制禁用、faults=0。
+
+结论：AA 必须先重新张紧双腱并重做 J08 Motor Calibration（保留 Joint
+Calibration），确认同一角度下 M10/M11 回到 LUT 附近后，才能重跑换向矩阵；
+MCP 仍需人工恢复 J09/M12 并重做标定。PIP/DIP 本轮未动。
+
+## 2026-10-22 00:18 J08 Motor Calibration 成功；AA 换向重跑仍受共模预紧限制
+
+### Host 坐标事务修复
+
+J08 标定前两次都在 rebase 后立即失败，日志为
+`J08 logical ABS zero failed: previous servo ABS rebase is awaiting its result/new feedback`，
+底层是 `MULTITURN save failed: multiturn anchor motors are not active in calibration snapshot`。
+原因是 rebase 结果一到达就调用了 `invalidate_calibration_snapshot_scope`，把
+J08/M10/M11 从快照活动 scope 中移除；随后新的 turn-zero 锚点保存检查
+`active_motor_mask` 必然失败，capture mask 永不释放，下一次 rebase 被拒绝。
+修复两处：
+
+- `host_calibration/runtime.py::_rebase_and_wait` 在返回前等待
+  `_servo_rebase_zero_capture_mask` 清零，确保新锚点在 `prepare_joint`
+  使 scope 失效之前落盘；
+- `calibration_snapshot.py::update_snapshot_multiturn_anchors` 允许最近一次
+  `scoped_*_motor_mask` 记录的已失效 scope 继续保存新坐标锚点，不再要求
+  这些电机仍在 `active_motor_mask` 中。
+
+修复后 `test_calibration_snapshot.py`、`test_host_calibration_runtime.py`、
+`test_host_calibration_flow.py`、`test_servo_coordinate_retry.py`、
+`test_multiturn_restore_retry.py` 共 **207 passed**。
+
+### J08 Motor Calibration 结果（00:18:30）
+
+- success=true，assembly warning=0，自动行程 **2957 counts**
+  （start 12214 / tight 15171 / zero 12442），
+  startServoAbs -424 / tight 808 / zero 808；
+- startDeg -5.0°、tightDeg 59.97°、totalDeg 64.97°；LUT 14 点；
+- 新 LUT：M10 -428…858，M11 1329…101；
+- 标定最终执行了 Rope Init 与 dual LUT zero，控制禁用、faults=0。
+
+标定后恢复到 -9.71° 时，LUT 模型为 M10 13 / M11 908（共模和 921），
+实测 M10 45 / M11 374（和 419）：**共模仍低约 502 counts**。双腱在标定后
+没有回到 LUT 的公共张力，`pair_recovery_gain=0` 时控制器不会修正它。
+
+### AA 换向重跑（部分结果）
+
+- `aa3` 第一条 R1 有效：`Bmax=40, B0=5, vB=50, confirm=0.6°/20ms,
+  exit=0.25°`，engage **5.43%**、exit 100%、峰值负载 **364**、
+  `reversal_counts` 峰值 **15**、score **0.725**；
+- 随后第二条试验在引导/低端越界 **-28.12°**，`SafetyAbort`；
+- `aa4`（把 AA 引导速度改为 2°/s）仍在第一条试验低端越界 **-27.90°**，
+  0 条有效 trial。abort 期间 `reversal_counts=0`，问题是共模预紧，不是
+  takeup 本身。
+- 最终恢复默认：**revision 465 / CRC `7A230ECB`，ramp 44 / `59E6952F`**，
+  AA takeup=40、其余 0，控制禁用、faults=0。未部署新参数。
+
+下一步：先把 J08 共模预紧补回来（机械张紧，或在确认 LUT 正确后小步试
+`pair_recovery_gain`），再重跑 AA 识别；`aa3` 的 40/5/50 只是候选证据，
+不能当作已部署结论。MCP J09/M12 仍需人工恢复后重标。

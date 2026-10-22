@@ -487,7 +487,18 @@ def update_snapshot_multiturn_anchors(
         payload = read_snapshot(path)
         active_mask = parse_mask(payload.get("active_motor_mask")) & VALID_MOTOR_MASK
         requested_mask = int(motor_mask) & VALID_MOTOR_MASK
-        if requested_mask == 0 or (requested_mask & active_mask) != requested_mask:
+        # A coordinate rebase invalidates the joint's Auto/LUT and removes it
+        # from the active scope before the new turn-zero anchor is captured.
+        # The invalidated scope is recorded in the snapshot; its motors still
+        # have a valid new coordinate and must be allowed to persist that
+        # anchor.  Otherwise every calibration rebase deadlocks in
+        # "anchor motors are not active in calibration snapshot".
+        invalidated_scope_mask = 0
+        for key, value in payload.items():
+            if key.startswith("scoped_") and key.endswith("_motor_mask"):
+                invalidated_scope_mask |= parse_mask(value)
+        anchor_scope_mask = active_mask | (invalidated_scope_mask & VALID_MOTOR_MASK)
+        if requested_mask == 0 or (requested_mask & anchor_scope_mask) != requested_mask:
             raise CalibrationSnapshotError(
                 "multiturn anchor motors are not active in calibration snapshot"
             )
@@ -498,7 +509,7 @@ def update_snapshot_multiturn_anchors(
                 saved_abs[motor_idx] = int(logical_abs[motor_idx])
                 saved_raw[motor_idx] = int(raw[motor_idx]) % 4096
         payload["multiturn_anchor_valid_bitmap"] = format_mask(
-            (valid_mask | requested_mask) & active_mask
+            (valid_mask | requested_mask) & anchor_scope_mask
         )
         payload["multiturn_anchor_logical_abs"] = saved_abs
         payload["multiturn_anchor_raw"] = saved_raw

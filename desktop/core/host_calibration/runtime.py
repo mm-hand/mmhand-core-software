@@ -716,6 +716,20 @@ class HostCalibrationIO:
             )
             log_session('HOST_CALIB', self.feedback_recovery_error)
             return False
+        # The new turn-zero anchor must be persisted before prepare_joint
+        # invalidates this joint's scope.  If the invalidation runs first, the
+        # anchor save sees "motors not active in calibration snapshot", the
+        # capture mask never clears, and the next rebase is rejected with
+        # "previous servo ABS rebase is awaiting its result/new feedback".
+        def anchor_captured():
+            return not getattr(self.controller, '_servo_rebase_zero_capture_mask', 0)
+        if not self._wait(anchor_captured, kHostRebaseFeedbackTimeoutMs):
+            capture_mask = getattr(self.controller, '_servo_rebase_zero_capture_mask', 0)
+            self.feedback_recovery_error = (
+                'logical ABS zero applied but the new feedback anchor was not saved '
+                f'(capture_mask=0x{capture_mask:08X})')
+            log_session('HOST_CALIB', self.feedback_recovery_error)
+            return False
         with self.controller.state_lock:
             # SYSTEM_STATUS 可以比归零后的 Known 锚点更旧；以实际验收的
             # post-result ABS/raw 快照为截止，才能识别 Qt 延迟的 F0 中间帧。

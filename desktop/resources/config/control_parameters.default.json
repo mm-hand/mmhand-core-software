@@ -7,7 +7,7 @@
     "mcp": 1.3,
     "pip": 1.0,
     "dip": 1.3,
-    "cmc": 1.0
+    "cmc": 1.3
   },
   "joint_ki": {
     "aa": 0.0,
@@ -28,10 +28,10 @@
     "mcp": 0.02,
     "pip": 0.0,
     "dip": 0.0,
-    "cmc": 0.0
+    "cmc": 0.08
   },
   "dual_tendon": {
-    "pair_recovery_gain": 0.0
+    "pair_recovery_gain": 0.3
   },
   "feedback": {
     "fast_window_ms": 20,
@@ -42,13 +42,13 @@
     "confirm_deg_mcp": 1.0,
     "confirm_deg_pip": 1.0,
     "confirm_deg_dip": 1.0,
-    "confirm_deg_cmc": 1.0,
+    "confirm_deg_cmc": 0.6,
     "confirm_ms": 20,
     "takeup_max_aa": 40,
-    "takeup_max_mcp": 0,
-    "takeup_max_pip": 0,
-    "takeup_max_dip": 0,
-    "takeup_max_cmc": 0,
+    "takeup_max_mcp": 40,
+    "takeup_max_pip": 40,
+    "takeup_max_dip": 40,
+    "takeup_max_cmc": 40,
     "exit_travel_deg_aa": 0.25,
     "exit_travel_deg_mcp": 0.25,
     "exit_travel_deg_pip": 0.25,
@@ -56,16 +56,16 @@
     "exit_travel_deg_cmc": 0.25
   },
   "reversal_ramp": {
-    "b0_aa": 5,
-    "b0_mcp": 0,
-    "b0_pip": 0,
-    "b0_dip": 0,
-    "b0_cmc": 0,
+    "b0_aa": 2,
+    "b0_mcp": 2,
+    "b0_pip": 2,
+    "b0_dip": 5,
+    "b0_cmc": 2,
     "vb_aa": 50,
-    "vb_mcp": 0,
-    "vb_pip": 0,
-    "vb_dip": 0,
-    "vb_cmc": 0,
+    "vb_mcp": 100,
+    "vb_pip": 100,
+    "vb_dip": 100,
+    "vb_cmc": 50,
     "load_limit_aa": 900,
     "load_limit_mcp": 900,
     "load_limit_pip": 900,

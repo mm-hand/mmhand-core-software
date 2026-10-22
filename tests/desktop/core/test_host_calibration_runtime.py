@@ -737,7 +737,9 @@ def test_rebase_requires_feedback_and_range_after_result(io, monkeypatch):
 
     monkeypatch.setattr(io, '_wait', wait)
     assert io._rebase(4)
-    assert checked == [False, True]
+    # Two waits: post-result ABS/range freshness, then the turn-zero anchor
+    # capture (capture mask empty), each probing before and after its update.
+    assert checked == [False, True, True, True]
 
 
 def _rebase_wait_clock(io, monkeypatch, *, on_sleep=None):

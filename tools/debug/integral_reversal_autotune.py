@@ -180,9 +180,12 @@ def _sample_from_state(state, joint: int, motors, segment: str, expected_revisio
     command = list(state.control_trace_motor_command_abs)
     actual_abs = list(detail.get('actual_abs', [0] * 27))
     pid_counts = list(detail.get('pid_counts', [0] * 27))
+    recovery_counts = list(detail.get('recovery_counts', [0] * 27))
     # A single-tendon LUT boundary clamp is normal differential behaviour on a
     # dual-tendon joint; only a joint whose every axis is clipped is saturated.
-    saturated = all(abs(float(command[m]) - (float(actual_abs[m]) + float(pid_counts[m]))) > 1.0
+    # `pid_counts` excludes the pair-recovery offset, so it must be added back.
+    saturated = all(abs(float(command[m]) - (float(actual_abs[m]) + float(pid_counts[m])
+                                             + float(recovery_counts[m]))) > 1.0
                     for m in motors)
     i_values = [abs(int(comp.get('integral_counts', [0] * 27)[m])) for m in motors]
     reversal_values = [abs(int(comp.get('reversal_counts', [0] * 27)[m])) for m in motors]
@@ -213,6 +216,14 @@ class StopRequested(RuntimeError):
     pass
 
 
+class SafetyAbort(RuntimeError):
+    """A trial must stop immediately; retrying with a larger candidate is unsafe."""
+
+
+class PreflightBlocked(RuntimeError):
+    """The commanded plan cannot be started safely (pose, cap or axis check)."""
+
+
 class Watchdog:
     """Host-side safety independent of the P4 collision policy."""
 
@@ -238,35 +249,37 @@ class Watchdog:
             raise StopRequested('STOP file created by operator')
 
     def check(self, state, sample: dict, now: float):
+        # Every condition here means the trial must stop, not retry with another
+        # candidate: the callers classify SafetyAbort separately from I/O errors.
         self._check_stop()
         if not state.control_enabled:
-            raise RuntimeError('control disabled during trial')
+            raise SafetyAbort('control disabled during trial')
         if state.feedback_collision_hold_bitmap & (1 << self.joint):
-            raise RuntimeError('collision HOLD')
+            raise SafetyAbort('collision HOLD')
         if state.multi_turn_unknown_bitmap & self.mask:
-            raise RuntimeError('multi-turn UNKNOWN during trial')
+            raise SafetyAbort('multi-turn UNKNOWN during trial')
         if state.control_trace_motor_command_mask & ~self.mask:
-            raise RuntimeError('command emitted for unselected motor')
+            raise SafetyAbort('command emitted for unselected motor')
         if time.time() - state.control_trace_last_rx_ts > 0.15:
-            raise RuntimeError('control trace older than 150 ms')
+            raise SafetyAbort('control trace older than 150 ms')
         if state.system_fault_bitmap:
-            raise RuntimeError(f'P4 fault bitmap 0x{state.system_fault_bitmap:08X}')
+            raise SafetyAbort(f'P4 fault bitmap 0x{state.system_fault_bitmap:08X}')
         actual = float(sample['actual'])
         target = float(sample['target'])
         if not (self.low - self.margin <= actual <= self.high + self.margin):
-            raise RuntimeError(f'measured angle {actual:.2f} outside envelope')
+            raise SafetyAbort(f'measured angle {actual:.2f} outside envelope')
         if not (self.low - self.margin <= target <= self.high + self.margin):
-            raise RuntimeError(f'target angle {target:.2f} outside envelope')
+            raise SafetyAbort(f'target angle {target:.2f} outside envelope')
         for motor in self.motors:
             if abs(int(state.servo_load[motor])) >= LOAD_STOP_COUNTS:
-                raise RuntimeError(f'M{motor:02d} load >= {LOAD_STOP_COUNTS:.0f}')
+                raise SafetyAbort(f'M{motor:02d} load >= {LOAD_STOP_COUNTS:.0f}')
         self.saturation_window.append((now, bool(sample.get('saturated'))))
         self.saturation_window = [(stamp, value) for stamp, value in self.saturation_window
                                   if now - stamp <= 0.3]
         if len(self.saturation_window) >= 5 and \
                 self.saturation_window[-1][0] - self.saturation_window[0][0] >= 0.15 and \
                 sum(1 for _, value in self.saturation_window if value) / len(self.saturation_window) > 0.8:
-            raise RuntimeError('sustained saturation')
+            raise SafetyAbort('sustained saturation')
         if sample['segment'] != self.segment:
             self.segment = sample['segment']
             self.segment_start = now
@@ -280,35 +293,67 @@ class Watchdog:
             mean = sum(values) / len(values)
             std = math.sqrt(sum((value - mean) ** 2 for value in values) / len(values))
             if std > 2.5:
-                raise RuntimeError(f'hold jitter {std:.2f} deg in {self.segment}')
+                raise SafetyAbort(f'hold jitter {std:.2f} deg in {self.segment}')
         if sample.get('reversal_counts'):
             if self.takeup_since is None:
                 self.takeup_since = now
             elif now - self.takeup_since > core.TAKEUP_TIMEOUT_S:
-                raise RuntimeError('takeup timeout without exit')
+                raise SafetyAbort('takeup timeout without exit')
         else:
             self.takeup_since = None
 
 
-PROXIMAL_HOLD = {9: (8,), 10: (8, 9), 11: (8, 9, 10)}
+PROXIMAL_HOLD = {9: (8,), 10: (8, 9), 11: (8, 9, 10),
+                 13: (12,), 14: (12, 13), 15: (12, 13, 14)}
 
 
 def _hold_for(joint: int):
     return PROXIMAL_HOLD.get(int(joint), ())
 
 
+def index_aa_clear(state, assume: bool = False) -> bool:
+    """Whether the index root J12 is out of the middle finger's way.
+
+    The joint order is pinky J00-J03, ring J04-J07, middle J08-J11, index
+    J12-J15.  J12 shares the J08-J11 test workspace, so the middle-finger
+    tests must know where it is.  When its mapped angle is readable the 20 deg
+    rule is enforced; when it is not (e.g. the index tendon was just released
+    and its calibration invalidated), the operator must confirm the pose and
+    pass the assumption flag.
+    """
+    try:
+        encoder = state.encoders[12]
+    except (AttributeError, IndexError, TypeError):
+        return bool(assume)
+    if bool(getattr(encoder, 'angle_error', True)):
+        return bool(assume)
+    try:
+        angle = float(encoder.current_angle_deg)
+    except (TypeError, ValueError):
+        return bool(assume)
+    return bool(math.isfinite(angle) and angle >= 20.0)
+
+
 def _run_plan(hand, output: Path, joint: int, motors, points, label: str,
               low: float, high: float, revision: int, crc: int,
-              hold_joints=()) -> tuple:
+              hold_joints=(), assume_index_aa_clear: bool = False) -> tuple:
     cap = core.TEST_HIGH_CAP_DEG.get('mcp') if joint == core.REPRESENTATIVE_JOINTS['mcp'] else None
     before = hand.get_state_snapshot()
-    current = before.encoders[joint].current_angle_deg
-    if joint in (9, 10, 11) and before.encoders[4].current_angle_deg < 20.0:
-        raise RuntimeError('index AA J04 is not at its maximum; move it aside before middle-finger tests')
+    try:
+        current = float(before.encoders[joint].current_angle_deg)
+    except (AttributeError, IndexError, TypeError, ValueError):
+        current = float('nan')
+    if not math.isfinite(current):
+        raise PreflightBlocked(f'J{joint:02d} current angle is not available; inspect the sensor first')
+    if getattr(before.encoders[joint], 'angle_error', False):
+        raise PreflightBlocked(f'J{joint:02d} mapped angle packet is invalid; inspect the sensor first')
+    if joint in (9, 10, 11) and not index_aa_clear(before, assume_index_aa_clear):
+        raise PreflightBlocked('index root J12 is not confirmed clear; release/move the index '
+                               'finger and/or pass --assume-index-aa-clear')
     if cap is not None and current > cap + 0.5:
-        raise RuntimeError(f'J{joint:02d} current {current:.2f} above test cap {cap:.1f}; recover first')
+        raise PreflightBlocked(f'J{joint:02d} current {current:.2f} above test cap {cap:.1f}; recover first')
     if cap is not None and max(point.target_deg for point in points) > cap + 1e-6:
-        raise RuntimeError(f'plan target exceeds MCP test cap {cap:.1f}')
+        raise PreflightBlocked(f'plan target exceeds MCP test cap {cap:.1f}')
     # Watchdog margin is 2 deg; use 73 deg so actual MCP motion cannot exceed 75 deg.
     watch_high = min(high, cap - 1.0) if cap is not None else high
     hold = [int(item) for item in hold_joints if int(item) != joint]
@@ -342,9 +387,12 @@ def _run_plan(hand, output: Path, joint: int, motors, points, label: str,
                 segment = points[point_index].segment
             target = float(points[point_index].target_deg)
             if elapsed - last_send >= 0.019:
-                values = _set_target(hand, values, joint, target, f'autotune {label}')
+                # Send the tested joint LAST. Each masked command replaces the
+                # P4 feedback command mask; sending a held neighbour afterwards
+                # would silently drop the tested joint from the feedback loop.
                 for item, angle in hold_targets.items():
                     values = _set_target(hand, values, item, angle, 'hold')
+                values = _set_target(hand, values, joint, target, f'autotune {label}')
                 last_send = elapsed
             state = _healthy(hand, joint, sum(1 << m for m in motors))
             if state.control_trace_sequence != last_sequence and state.has_control_trace:

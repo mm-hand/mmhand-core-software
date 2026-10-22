@@ -14,8 +14,8 @@ __pycache__/
 # Generated project data
 .debug/
 run_data/
+# Active calibration is runtime data created by the first calibration.
 *.mmcal.json
-!desktop/resources/config/calibration_bundle.mmcal.json
 !tests/fixtures/calibration_bundle.mmcal.json
 
 # Local firmware experiments and waveform captures
@@ -41,6 +41,11 @@ simplify-*.log
 
 # Tuning reports are local run artifacts
 docs/debug/pid-autotuning-*.md
+# Local debug plots/notes and temporary test runs
+/docs/debug/assets/
+/docs/debug/anti-slack-*.md
+/.pytest-tmp-*/
+/tools/debug/antislack_*.py
 # Runtime diagnostics and recordings share the repository logs tree
 /logs/
 desktop/resources/config/backups/
