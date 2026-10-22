@@ -322,3 +322,49 @@ def test_manual_update_backfills_missing_hand_profile(tmp_path):
         min_raw=[0] * ENCODER_COUNT, max_raw=[100] * ENCODER_COUNT,
         updated_joint_mask=1 << 15)
     assert read_snapshot(path)["hand_profile"] == HAND_PROFILE
+
+
+def _manual_only_bundle(path):
+    payload = _empty_v6_snapshot()
+    payload["manual_reference_valid_bitmap"] = format_mask((1 << ENCODER_COUNT) - 1)
+    payload["manual_reference_min_raw"] = [100] * ENCODER_COUNT
+    payload["manual_reference_max_raw"] = [5000] * ENCODER_COUNT
+    atomic_write_snapshot(path, payload)
+    return payload
+
+
+def test_empty_scope_invalidation_registers_anchor_scope(tmp_path):
+    """刷机后的空 bundle 首次标定：scoped 登记必须写入，锚点保存才被放行。"""
+    path = tmp_path / "hand.mmcal.json"
+    _manual_only_bundle(path)
+
+    message = invalidate_calibration_snapshot_scope(
+        path, motor_mask=0x000F8000, joint_mask=0x0000F000,
+        reason="servo_abs_rebase_zero")
+
+    assert message == "scope had no data; anchor scope registered"
+    snapshot = read_snapshot(path)
+    assert parse_mask(snapshot["scoped_servo_abs_rebase_zero_motor_mask"]) == 0x000F8000
+    assert parse_mask(snapshot["scoped_servo_abs_rebase_zero_joint_mask"]) == 0x0000F000
+    update_snapshot_multiturn_anchors(
+        path, motor_mask=0x000F8000,
+        logical_abs=[8192 + m for m in range(MOTOR_COUNT)],
+        raw=[m for m in range(MOTOR_COUNT)])
+    saved = read_snapshot(path)
+    assert parse_mask(saved["multiturn_anchor_valid_bitmap"]) & 0x000F8000 == 0x000F8000
+
+
+def test_empty_scope_invalidation_is_idempotent_without_rewrite(tmp_path):
+    path = tmp_path / "hand.mmcal.json"
+    _manual_only_bundle(path)
+    invalidate_calibration_snapshot_scope(
+        path, motor_mask=0x000F8000, joint_mask=0x0000F000,
+        reason="servo_abs_rebase_zero")
+    before = path.read_bytes()
+
+    message = invalidate_calibration_snapshot_scope(
+        path, motor_mask=0x000F8000, joint_mask=0x0000F000,
+        reason="servo_abs_rebase_zero")
+
+    assert message == "scope already invalid; snapshot not rewritten"
+    assert path.read_bytes() == before

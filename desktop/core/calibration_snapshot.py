@@ -730,9 +730,20 @@ def _invalidate_calibration_snapshot_scope_locked(
             if joint_mask & (1 << joint_idx)
         )
     )
-    if not scope_has_data:
-        return "scope already invalid; snapshot not rewritten"
     reason_tag = str(reason).strip().lower() or "coordinate_reset"
+    if not scope_has_data:
+        # 空 bundle（刷机后首次标定）没有数据可失效，但 scoped 范围仍必须登记：
+        # update_snapshot_multiturn_anchors 只放行 active 或 scoped-invalidated
+        # 的电机，漏登记会让新坐标锚点保存被拒，首次标定卡死在
+        # "anchor was not saved"。重复失效已登记的范围时保持不重写。
+        registered = parse_mask(payload.get(f"scoped_{reason_tag}_motor_mask"))
+        if motor_mask & ~registered == 0:
+            return "scope already invalid; snapshot not rewritten"
+        payload[f"scoped_{reason_tag}_invalidated_at"] = time.time()
+        payload[f"scoped_{reason_tag}_motor_mask"] = format_mask(motor_mask)
+        payload[f"scoped_{reason_tag}_joint_mask"] = format_mask(joint_mask)
+        atomic_write_snapshot(target, payload, backup=False)
+        return "scope had no data; anchor scope registered"
     stamp = time.strftime("%Y%m%d_%H%M%S")
     archive = target.parent / "backups" / f"{target.stem}.before_scoped_{reason_tag}_{stamp}{target.suffix}"
     archive.parent.mkdir(parents=True, exist_ok=True)
