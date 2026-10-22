@@ -6,6 +6,7 @@ from desktop.core.calibration_snapshot import (
     _empty_v6_snapshot,
     CalibrationSnapshotError,
     atomic_write_snapshot,
+    format_mask,
     invalidate_calibration_snapshot_scope,
     merge_snapshot,
     parse_mask,
@@ -15,7 +16,7 @@ from desktop.core.calibration_snapshot import (
     update_snapshot_multiturn_anchors,
     validate_snapshot_for_load,
 )
-from desktop.core.protocol import ENCODER_COUNT, MOTOR_COUNT
+from desktop.core.protocol import ENCODER_COUNT, HAND_PROFILE, MOTOR_COUNT
 
 
 def _result(joint: int, motor_a: int, motor_b: int = 0xFF) -> dict:
@@ -59,8 +60,26 @@ def _current_payload(joint: int, result: dict) -> dict:
 
 def test_empty_auto_snapshot_is_not_loadable():
     assert validate_snapshot_for_load(seal_snapshot(_empty_v6_snapshot())) == (
-        "snapshot contains no automatic calibration result"
+        "snapshot contains no calibration result or Manual endpoints"
     )
+
+
+def test_manual_only_snapshot_is_loadable():
+    payload = _empty_v6_snapshot()
+    payload["manual_reference_valid_bitmap"] = format_mask((1 << ENCODER_COUNT) - 1)
+    payload["manual_reference_min_raw"] = [100] * ENCODER_COUNT
+    payload["manual_reference_max_raw"] = [5000] * ENCODER_COUNT
+    assert validate_snapshot_for_load(seal_snapshot(payload)) is None
+
+
+def test_partial_manual_snapshot_is_loadable():
+    payload = _empty_v6_snapshot()
+    payload["manual_reference_min_raw"] = [0] * ENCODER_COUNT
+    payload["manual_reference_max_raw"] = [0] * ENCODER_COUNT
+    payload["manual_reference_min_raw"][15] = 100
+    payload["manual_reference_max_raw"][15] = 5000
+    payload["manual_reference_valid_bitmap"] = format_mask(1 << 15)
+    assert validate_snapshot_for_load(seal_snapshot(payload)) is None
 
 
 def two_finger_snapshot(path):
@@ -281,3 +300,25 @@ def test_manual_identity_is_written_atomically_and_foreign_file_is_rejected(tmp_
         update_manual_snapshot(path, valid_mask=0, min_raw=[0] * 21,
                                max_raw=[0] * 21, identity=foreign)
     assert path.read_bytes() == before
+
+
+def test_manual_snapshot_creation_includes_hand_profile(tmp_path):
+    path = tmp_path / "hand.mmcal.json"
+    update_manual_snapshot(path, identity={
+        "device_id": "0" * 15 + "1", "urdf_repo_path": "models/hand.urdf",
+        "product_fingerprint": {}},
+        valid_mask=1 << 15, min_raw=[0] * ENCODER_COUNT, max_raw=[100] * ENCODER_COUNT,
+        updated_joint_mask=1 << 15)
+    assert read_snapshot(path)["hand_profile"] == HAND_PROFILE
+
+
+def test_manual_update_backfills_missing_hand_profile(tmp_path):
+    path = tmp_path / "hand.mmcal.json"
+    payload = merge_snapshot(None, _current_payload(15, _result(15, 19)),
+                             updated_joint_mask=1 << 15)
+    payload.pop("hand_profile")
+    atomic_write_snapshot(path, payload)
+    update_manual_snapshot(path, valid_mask=1 << 15,
+        min_raw=[0] * ENCODER_COUNT, max_raw=[100] * ENCODER_COUNT,
+        updated_joint_mask=1 << 15)
+    assert read_snapshot(path)["hand_profile"] == HAND_PROFILE

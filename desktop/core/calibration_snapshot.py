@@ -24,6 +24,7 @@ from .motor_mapping import MOTOR_TO_JOINT_INDEX
 from .protocol import (
     DUAL_TENDON_JOINT_INDICES,
     ENCODER_COUNT,
+    HAND_PROFILE,
     MOTOR_COUNT,
     TENDON_LUT_MAX_SAMPLES,
     VALID_MOTOR_MASK,
@@ -275,8 +276,13 @@ def validate_snapshot_for_load(
         for joint_idx, item in enumerate(results):
             if isinstance(item, dict) and bool(item.get("success", False)):
                 joint_mask |= 1 << joint_idx
-    if joint_mask == 0 or motor_mask == 0:
-        return "snapshot contains no automatic calibration result"
+    manual_mask = parse_mask(payload.get("manual_reference_valid_bitmap")) & _JOINT_MASK
+    # Manual-only 与部分标定快照允许加载：Manual 端点逐关节恢复，缺失的
+    # Auto/LUT 关节直接跳过，不会用默认值污染设备。
+    if joint_mask == 0 and manual_mask == 0:
+        return "snapshot contains no calibration result or Manual endpoints"
+    if joint_mask != 0 and motor_mask == 0:
+        return "snapshot contains no automatic calibration motor scope"
 
     missing = [
         joint_idx
@@ -458,6 +464,8 @@ def multiturn_anchor_fields(payload: dict) -> tuple[int, list[int], list[int]]:
 def _empty_v6_snapshot() -> dict:
     """建立新的 V6 空快照。"""
     return {
+        # 导入契约要求快照自带 hand_profile；缺失的文件无法通过 Inspect。
+        "hand_profile": HAND_PROFILE,
         "joint_calib_results": [None] * ENCODER_COUNT,
         "motor_abs_limit_min": [0] * MOTOR_COUNT,
         "motor_abs_limit_max": [0] * MOTOR_COUNT,
@@ -661,6 +669,8 @@ def _update_manual_snapshot_locked(
     payload["updated_motor_mask"] = format_mask(invalid_motor_mask)
     if identity is not None:
         payload.update(identity)
+    # 修复历史 bundle 缺少 hand_profile 的存量文件：下次 Manual 保存即自愈。
+    payload.setdefault("hand_profile", HAND_PROFILE)
     payload["saved_at_host_time"] = time.time()
     return atomic_write_snapshot(target, payload)
 

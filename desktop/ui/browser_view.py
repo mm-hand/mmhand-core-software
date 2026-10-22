@@ -225,7 +225,7 @@ def build_page(hand):
         ui.run_javascript(self_heal_script())
     # Fast ticks rewrite this label; the injected script watches it for a frozen page.
     heartbeat = ui.label('0').classes(policy.HEARTBEAT_LABEL_CLASS)
-    preview_token, log_sequence = [None], [0]
+    preview_token, inspect_operation, log_sequence = [None], [None], [0]
     displayed_calibration_alerts = set()
     pending_calibration_alerts = []
     with ui.dialog().props('persistent') as calibration_dialog, ui.card().classes('w-[600px] max-w-full'):
@@ -272,9 +272,17 @@ def build_page(hand):
         ui.label('Joint calibration endpoints are saved automatically after verification. Motor calibration results and multi-turn anchors are saved after each successful joint. Failed joints do not replace successful results.').classes('text-sm')
         async def upload(event):
             preview_token[0] = None
+            inspect_operation[0] = None
             import_info.set_text('Validating…'); load.set_enabled(False)
             content = await event.file.read()
-            act(lambda: hand.request_calibration_preview(event.file.name, content))
+            def request():
+                result = hand.request_calibration_preview(event.file.name, content)
+                if result.accepted:
+                    inspect_operation[0] = result.operation_id
+                else:
+                    import_info.set_text('Validation failed: ' + result.message)
+                return result
+            act(request)
         ui.upload(label='Choose .mmcal.json / .json', on_upload=upload, auto_upload=True, max_file_size=10_000_000).props('accept=.json').classes('w-full')
         import_info = ui.label('Choose a calibration file to validate.').classes('whitespace-pre-wrap text-sm')
         ui.label('Restore scope comes from this file. Confirm that the mechanism, servo IDs and mapping have not changed.').classes('text-sm')
@@ -285,6 +293,7 @@ def build_page(hand):
     def open_import():
         hand.clear_calibration_preview()
         preview_token[0] = None
+        inspect_operation[0] = None
         paths = hand.application_snapshot(include_curves=False)['calibration_storage']
         storage.set_text(f"Default data directory: {paths['data_dir']}")
         import_info.set_text('Choose a calibration file to validate.'); load.set_enabled(False)
@@ -443,6 +452,19 @@ def build_page(hand):
             preview_token[0] = preview['token']
             import_info.set_text(f"File: {preview['name']}\nSaved at: {preview['saved_at']}   Profile: {preview['profile']}\nManual scope: 0x{preview['manual_joints']:06X}   Auto joint scope: 0x{preview['joints']:06X}\nMotor scope: 0x{preview['motors']:07X}\nValidation: Passed")
             load.set_enabled(True)
+        elif inspect_operation[0] and preview_token[0] is None and importer.value:
+            # A finished Inspect without a fresh preview must replace the
+            # 'Validating…' placeholder, or the dialog looks stuck forever.
+            operation = next((item for item in snapshot['operations']
+                              if item['operation_id'] == inspect_operation[0]), None)
+            if operation and operation['status'] == 'FAILED':
+                inspect_operation[0] = None
+                import_info.set_text('Validation failed: ' + operation['message'])
+                load.set_enabled(False)
+            elif operation and operation['status'] == 'SUCCESS':
+                inspect_operation[0] = None
+                import_info.set_text('Validation did not produce a preview. Close and reopen this dialog, then retry.')
+                load.set_enabled(False)
         events = hand.log_since(log_sequence[0])
         for line in events['lines']: output.push(line)
         log_sequence[0] = events['sequence']

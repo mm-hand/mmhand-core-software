@@ -3172,26 +3172,27 @@ class HandController:
                 f"snapshot Manual CRC mismatch: {mismatch_text}; "
                 "re-run automatic calibration for these joints"
             )
-        limits_sent_at = time.monotonic()
         # 标定加载只覆盖快照实际包含的电机，P4 上其他已生效关节保持不变。
-        self.comm.send_command(
-            (
-                "calib_load_limits",
-                int(snapshot.get("active_motor_mask", "0"), 0)
-                if isinstance(snapshot.get("active_motor_mask"), str)
-                else int(snapshot.get("active_motor_mask", 0) or 0),
-                valid_bitmap,
-                mins,
-                maxs,
+        raw_active_motor_mask = snapshot.get("active_motor_mask", "0")
+        motor_update_mask = (
+            int(raw_active_motor_mask, 0)
+            if isinstance(raw_active_motor_mask, str)
+            else int(raw_active_motor_mask or 0)
+        )
+        # 固件对 mask 为 0 的 CALIB_LOAD_LIMITS 回 INVALID_DATA；
+        # Manual-only 快照没有电机范围可写，直接跳过。
+        if motor_update_mask:
+            limits_sent_at = time.monotonic()
+            self.comm.send_command(
+                ("calib_load_limits", motor_update_mask, valid_bitmap, mins, maxs)
             )
-        )
-        ack = self.comm.wait_for_ack(
-            CMD_CALIB_LOAD_LIMITS,
-            CALIB_LOAD_ACK_TIMEOUT_S,
-            received_after_monotonic=limits_sent_at,
-        )
-        if not ack or int(ack[2]) != 0:
-            return False, "motor ABS limit load ACK timeout/reject"
+            ack = self.comm.wait_for_ack(
+                CMD_CALIB_LOAD_LIMITS,
+                CALIB_LOAD_ACK_TIMEOUT_S,
+                received_after_monotonic=limits_sent_at,
+            )
+            if not ack or int(ack[2]) != 0:
+                return False, "motor ABS limit load ACK timeout/reject"
 
         loaded = 0
         for joint_idx, result in enumerate(joint_results):
@@ -3211,14 +3212,14 @@ class HandController:
             if not ack or int(ack[2]) != 0:
                 return False, f"J{joint_idx:02d} load ACK timeout/reject"
             loaded += 1
-        if loaded == 0:
+        if loaded == 0 and active_joint_mask != 0:
             return False, "no valid joint calibration result in snapshot"
         log_session("CALIB_LOAD", manual_message)
         # 成功加载标定后，Manual Prepare 的历史释放记录必须失效：下一次
         # Release Rope 需要重新 Reset Zero 才能建立新的 turn0 基准。
         self._manual_prepare_done_motor_mask = 0
         self._manual_prepare_done_device_id = ""
-        return True, f"loaded {loaded} joints"
+        return True, f"loaded {loaded} joints" if loaded else manual_message
 
     def start(self):
         if self.comm:

@@ -782,6 +782,40 @@ class TestLoadCalibrationSnapshot:
             ),
         ]
 
+    def test_manual_only_snapshot_loads_without_motor_commands(self, monkeypatch):
+        """Manual-only 快照必须能加载：不发 limits/LUT 命令，报告恢复的关节数。"""
+        controller = HandController()
+        controller.comm = MagicMock()
+        restore_message = "restored 21 Manual joint(s) to P4 RAM"
+        monkeypatch.setattr(
+            controller, "_restore_snapshot_manual_references",
+            MagicMock(return_value=(True, restore_message)))
+        monkeypatch.setattr(
+            core_logic, "urdf_manual_scaled_mapping_metadata",
+            lambda: (4, 0x12345678))
+        controller.current_state.manual_reference_committed = True
+        controller.current_state.manual_reference_valid_bitmap = (1 << ENCODER_COUNT) - 1
+        controller.current_state.manual_reference_min_raw = [100] * ENCODER_COUNT
+        controller.current_state.manual_reference_max_raw = [5000] * ENCODER_COUNT
+
+        snapshot = seal_snapshot({
+            "hand_profile": "v2",
+            "active_joint_mask": 0,
+            "active_motor_mask": 0,
+            "motor_abs_limit_min": [0] * MOTOR_COUNT,
+            "motor_abs_limit_max": [0] * MOTOR_COUNT,
+            "joint_calib_results": [None] * ENCODER_COUNT,
+            "manual_reference_valid_bitmap": (1 << ENCODER_COUNT) - 1,
+            "manual_reference_min_raw": [100] * ENCODER_COUNT,
+            "manual_reference_max_raw": [5000] * ENCODER_COUNT,
+        })
+
+        ok, message = controller.load_calibration_snapshot(snapshot)
+
+        assert (ok, message) == (True, restore_message)
+        controller.comm.send_command.assert_not_called()
+        controller.comm.wait_for_ack.assert_not_called()
+
 
 class TestShutdownSemantics:
     """普通退出依赖 P4 租约 Hold，显式急停才允许发送锁存式 STOP。"""
