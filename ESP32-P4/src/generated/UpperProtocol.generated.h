@@ -19,6 +19,20 @@ inline constexpr size_t kP4TimestampBytes = 4;
 static_assert(ENCODER_TOTAL_NUM == 21, "Protocol joint count drift");
 static_assert(SERVO_TOTAL_NUM == 27, "Protocol motor count drift");
 
+
+// 触觉阵列尺寸：PC 与 P4 只能从这里取，不得各写一份数字。
+inline constexpr uint8_t TACTILE_GROUP_NUM_PROTOCOL = 5;
+inline constexpr uint8_t TACTILE_SENSOR_PER_GROUP_PROTOCOL = 3;
+inline constexpr uint8_t TACTILE_AXIS_NUM_PROTOCOL = 3;
+inline constexpr uint8_t TACTILE_SENSOR0_TAXELS_PROTOCOL = 52;
+inline constexpr uint8_t TACTILE_SENSOR1_TAXELS_PROTOCOL = 25;
+inline constexpr uint8_t TACTILE_SENSOR2_TAXELS_PROTOCOL = 25;
+static_assert(TACTILE_GROUP_NUM == TACTILE_GROUP_NUM_PROTOCOL, "Tactile group count drift");
+static_assert(TACTILE_SENSOR_PER_GROUP == TACTILE_SENSOR_PER_GROUP_PROTOCOL, "Tactile module count drift");
+static_assert(TACTILE_AXIS_NUM == TACTILE_AXIS_NUM_PROTOCOL, "Tactile axis count drift");
+static_assert(TACTILE_SENSOR0_TAXELS == TACTILE_SENSOR0_TAXELS_PROTOCOL, "Tactile sensor 0 taxels drift");
+static_assert(TACTILE_SENSOR1_TAXELS == TACTILE_SENSOR1_TAXELS_PROTOCOL, "Tactile sensor 1 taxels drift");
+static_assert(TACTILE_SENSOR2_TAXELS == TACTILE_SENSOR2_TAXELS_PROTOCOL, "Tactile sensor 2 taxels drift");
 // P4 -> Desktop 包类型。
 inline constexpr uint8_t PACKET_TYPE_SERVO_MAINTENANCE = 0x1B; ///< 舵机维护事务结果
 inline constexpr uint8_t PACKET_TYPE_SENSOR = 0x01; ///< 21 关节映射角

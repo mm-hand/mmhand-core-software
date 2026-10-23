@@ -25,7 +25,13 @@
   "dimensions": {
     "encoder_count": 21,
     "motor_count": 27,
-    "encoder_raw_modulo": 16384
+    "encoder_raw_modulo": 16384,
+    "tactile_group_count": 5,
+    "tactile_sensor_per_group": 3,
+    "tactile_axis_count": 3,
+    "tactile_sensor0_taxels": 52,
+    "tactile_sensor1_taxels": 25,
+    "tactile_sensor2_taxels": 25
   },
   "packets": [
     {
