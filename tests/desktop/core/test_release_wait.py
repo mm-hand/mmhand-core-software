@@ -1,5 +1,5 @@
 """Release Rope wait/retry semantics: transient feedback must not abort, and
-repeated release on the same device must not reset zero counters again."""
+each repeated release on the same device resets zero counters again."""
 import contextlib
 import threading
 import time
@@ -78,10 +78,11 @@ def make_controller(monkeypatch, motors=(3,), angle=3000):
     return controller, state, mask
 
 
-def accepted_send(state, mask, angle=1500):
+def accepted_send(state, mask):
     """Command handler that records acceptance and moves all selected motors."""
     def send(command):
         if isinstance(command, tuple) and command[0] == 'motor_pos_abs':
+            targets = command[1]
             state.has_direct_target_result = True
             state.direct_target_status = 2
             state.direct_target_applied_mask = mask
@@ -89,7 +90,8 @@ def accepted_send(state, mask, angle=1500):
             state.control_enabled = True
             for motor in range(MOTOR_COUNT):
                 if mask & (1 << motor):
-                    state.servo_angles[motor] = angle
+                    state.servo_angles[motor] = int(targets[motor])
+                    state.servo_raw_positions[motor] = int(targets[motor])
         return True
     return send
 
@@ -211,20 +213,22 @@ def test_release_clears_runtime_calibration_but_keeps_manual(monkeypatch):
     assert state.manual_reference_max_raw[2] == 12000
 
 
-def test_repeat_release_is_idempotent_and_does_not_reset_again(monkeypatch):
+def test_repeat_release_resets_zero_and_releases_again(monkeypatch):
     controller, state, mask = make_controller(monkeypatch)
     with feedback_ticker(state):
         controller.comm.send_command.side_effect = accepted_send(state, mask)
         first = controller.manual_prepare_all_motors()
-        reset_calls = controller.prepare_calibration_turn_zero.call_count
-        invalidate_calls = core_logic.invalidate_calibration_snapshot_scope.call_count
-        send_calls = controller.comm.send_command.call_count
         second = controller.manual_prepare_all_motors()
     assert first.ok and second.ok, second.message
-    assert 'already released' in second.message
-    assert controller.prepare_calibration_turn_zero.call_count == reset_calls == 1
-    assert core_logic.invalidate_calibration_snapshot_scope.call_count == invalidate_calls == 1
-    assert controller.comm.send_command.call_count == send_calls
+    assert controller.prepare_calibration_turn_zero.call_count == 2
+    assert core_logic.invalidate_calibration_snapshot_scope.call_count == 2
+    motor_sends = [
+        call for call in controller.comm.send_command.call_args_list
+        if call.args and isinstance(call.args[0], tuple) and call.args[0][0] == 'motor_pos_abs'
+    ]
+    assert len(motor_sends) == 2
+    # Each release rebuilds turn0 and unwinds another 1500 counts: 3000 -> 1500 -> 0.
+    assert state.servo_angles[3] == 0
 
 
 def test_cancel_during_release_motion_resets_without_marking_done(monkeypatch):

@@ -30,7 +30,7 @@ def build(hand, act, load_calibration, confirm):
         clear_button = maintenance_button(ui.button('Clear Manual Selected', on_click=lambda: confirm(
             'Clear selected Manual endpoints and their Auto/LUT results?', hand.request_clear_manual)))
         release_button = maintenance_button(ui.button('Release Selected Tendons', on_click=lambda: confirm(
-            "Release only the selected joints' tendons. Their motor calibration and multi-turn anchors will be reset. Stop motion first.",
+            "Release only the selected joints' tendons by another 1500 counts. Their motor calibration and multi-turn anchors will be reset. Stop motion first.",
             hand.request_release_rope)))
         counts = label()
     with finger_cards():

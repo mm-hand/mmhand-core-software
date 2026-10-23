@@ -364,10 +364,6 @@ class HandController:
         self._state_sync_waiting_logged = False
         self._host_calibration_io = None
         self._host_calibration_overlay = {}
-        # Manual Prepare（Release Rope）是破坏性维护事务：成功后同一设备再次
-        # 请求同一范围时不能重复 Reset Zero / 二次作废旧标定。
-        self._manual_prepare_done_motor_mask = 0
-        self._manual_prepare_done_device_id = ""
 
     def create_host_calibration_io(self, cancel_check, selected_joint_mask,
                                    selected_motor_mask, *, reset_motor_mask=0,
@@ -630,10 +626,6 @@ class HandController:
     def _reset_local_runtime_state(self, calib_status: str = "IDLE") -> None:
         self._cancel_host_calibration()
         self._host_calibration_overlay = {}
-        # 重连可能意味着 P4/舵机被断电重启，turn counter 已重新随机化；
-        # 不能把上一个连接里的 “已执行 Release” 当成当前设备的真实状态。
-        self._manual_prepare_done_motor_mask = 0
-        self._manual_prepare_done_device_id = ""
         with self.state_lock:
             self.current_state = HandModel()
             self.current_state.calib_status = str(calib_status)
@@ -2606,7 +2598,10 @@ class HandController:
             self._servo_rebase_zero_call_lock.release()
 
     def manual_prepare_all_motors(self, *, motor_mask=None, cancelled=lambda: False, motion_gate=lambda action: action()) -> ManualPrepareResult:
-        """冻结指定的电机集合，归零并放绳 1500 counts。"""
+        """冻结指定的电机集合，归零并放绳 1500 counts。
+
+        可重复调用：每次都在当前位置重新建立 turn0 基准，再放 1500 counts。
+        """
         all_motors = (1 << MOTOR_COUNT) - 1
         if motor_mask is not None and (type(motor_mask) is not int or motor_mask <= 0 or motor_mask & ~all_motors):
             return ManualPrepareResult(False, 'Invalid selected tendon motor scope', 0, 0, 0, 0)
@@ -2625,12 +2620,6 @@ class HandController:
         if refusal is not None:
             return refusal
         selected = [i for i in range(MOTOR_COUNT) if pending_mask & (1 << i)]
-        if pending_mask == 0:
-            return ManualPrepareResult(
-                True,
-                "selected motors already released on this device; no additional reset or calibration invalidation",
-                0, 0, 0, requested_mask,
-            )
         log_session("RELEASE_ROPE", f"requested=0x{requested_mask:05X} pending=0x{pending_mask:05X}")
 
         reset, failure = self._manual_prepare_reset(pending_mask, cancelled, motion_gate)
@@ -2658,7 +2647,6 @@ class HandController:
         if isinstance(outcome, ManualPrepareResult):
             return outcome
         reached_mask = outcome
-        self._manual_prepare_done_motor_mask |= reset_mask
         return ManualPrepareResult(
             True,
             (
@@ -2682,7 +2670,6 @@ class HandController:
             has_abs = (bool(state.has_servo_angle_data)
                        and 0 <= time.monotonic() - state.received_at('servo_abs_last_rx_ts') <= 0.5
                        and state.servo_route_scan_state != 1)
-            device_id = self.servo_abs_zero_device_id(state)
 
         allowed_states = (
             SYSTEM_STATE_UNCONTROLLABLE,
@@ -2702,14 +2689,7 @@ class HandController:
         if not requested_mask or not has_routes or not has_abs:
             return 0, empty._replace(message="Release Rope requires online motors with unique routes and ABS")
 
-        # 同一设备只放绳一次；换了设备就清掉历史记录。
-        if device_id:
-            if self._manual_prepare_done_device_id and self._manual_prepare_done_device_id != device_id:
-                self._manual_prepare_done_motor_mask = 0
-            self._manual_prepare_done_device_id = device_id
-        done_mask = (self._manual_prepare_done_motor_mask
-                     if device_id and self._manual_prepare_done_device_id == device_id else 0)
-        return requested_mask & ~done_mask, None
+        return requested_mask, None
 
     def _manual_prepare_reset(self, pending_mask, cancelled, motion_gate):
         """归零硬件圈数并作废旧标定；返回 (结果元组, 失败结果)。"""
@@ -3143,10 +3123,6 @@ class HandController:
         if loaded == 0 and active_joint_mask != 0:
             return False, "no valid joint calibration result in snapshot"
         log_session("CALIB_LOAD", manual_message)
-        # 成功加载标定后，Manual Prepare 的历史释放记录必须失效：下一次
-        # Release Rope 需要重新 Reset Zero 才能建立新的 turn0 基准。
-        self._manual_prepare_done_motor_mask = 0
-        self._manual_prepare_done_device_id = ""
         return True, f"loaded {loaded} joints" if loaded else manual_message
 
     def start(self):
