@@ -28,7 +28,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from desktop.core.control_parameters import configuration_crc, validate  # noqa: E402
+from desktop.core.control_parameters import DEFAULT_PATH, configuration_crc, validate  # noqa: E402
 from desktop.core.control_tuning import calibration_audit, sine_metrics  # noqa: E402
 from desktop.core.host_calibration.config import joint_motors  # noqa: E402
 from tools.debug import integral_reversal_core as core  # noqa: E402
@@ -1235,7 +1235,9 @@ def run_dry(args) -> int:
                      **{f'vb_{name}': (20.0 if selected['takeup_counts'] > 0 else 0.0) for name in ALL_TYPES},
                      **{f'load_limit_{name}': 900 for name in ALL_TYPES},
                      'takeup_timeout_ms': 600}
-    final = dict(schema_version=6, revision=1, ramp_revision=1,
+    # Started from the current defaults so groups this tuner does not touch stay schema-valid.
+    final = json.loads(DEFAULT_PATH.read_text(encoding='utf-8'))
+    final.update(revision=1, ramp_revision=1,
                  joint_kp=dict(EXPECTED_KP), joint_ki=joint_ki,
                  joint_kd=dict(EXPECTED_KD),
                  dual_tendon=dict(pair_recovery_gain=0.0),
@@ -1248,7 +1250,8 @@ def run_dry(args) -> int:
                  output=dict(lut_release_margin_counts=500, lut_tight_margin_counts=1000),
                  ros2_input=dict(min_cutoff_hz=1.0, beta=0.02, derivative_cutoff_hz=1.0,
                                  enter_deg=0.08, enter_dwell_ms=200, exit_deg=0.25,
-                                 exit_confirm_ms=20, max_gap_ms=500))
+                                 exit_confirm_ms=20, max_gap_ms=500),
+                 adaptive_kp=dict(enabled=0, lag_limit_s=0.12, overshoot_deg=2.0))
     validate(final)
     _json(output / 'final_parameters.json', final)
     _json(output / 'trial_index.json', records)

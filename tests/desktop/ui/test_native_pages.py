@@ -48,6 +48,32 @@ def test_every_native_page_builds_and_refreshes_unknown_feedback(page, name):
     act.assert_not_called()
     assert client.elements
 
+def test_adaptive_kp_is_one_expansion_after_kd_with_one_enable_button(page):
+    hand, client = page
+    hand.request_apply_control_parameters = Mock()
+    act = Mock(side_effect=lambda callback: callback())
+    refresh = control_parameters.build(hand, act)
+    snapshot = idle_snapshot(hand)
+    refresh(snapshot)
+    expansions = [e.text for e in client.elements.values() if isinstance(e, ui.expansion)]
+    assert expansions[expansions.index('Kd config') + 1] == 'Adaptive Kp (runtime multiplier)'
+    assert sum('Adaptive' in text for text in expansions) == 1
+    adaptive = button(client, 'Enable Adaptive Kp Control')
+    snapshot['adaptive_kp'].update(valid=False)
+    refresh(snapshot)
+    assert any(text.startswith('Adaptive: waiting for P4 1 Hz packet')
+               for text in label_texts(client))
+    click(adaptive)
+    proposed = hand.request_apply_control_parameters.call_args.args[0]
+    assert proposed['adaptive_kp']['enabled'] == 1 and 'crc32' not in proposed
+    snapshot['control_parameters']['adaptive_kp']['enabled'] = 1
+    refresh(snapshot)
+    assert button(client, 'Disable Adaptive Kp Control') is not None
+    snapshot['busy'] = True
+    refresh(snapshot)
+    assert not button(client, 'Disable Adaptive Kp Control').enabled
+
+
 def test_feedback_refresh_keeps_native_number_and_slider_draft_without_send(page):
     hand, client = page
     act = Mock()
