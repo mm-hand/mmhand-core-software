@@ -5,7 +5,7 @@
 输入：IO 的反馈、控制权、逻辑范围和原 AutoCalibrationParams。
 输出：每关节的标定结果、ABS 限位和结构化诊断。
 状态所有权：工作空间缓存只由本次序列 IO 实例拥有。
-禁止依赖：禁止依赖 Qt/UI、串口、ROS2 或 Replay；不直接提交协议数据。
+禁止依赖：禁止依赖 NiceGUI/UI、串口、ROS2 或 Replay；不直接提交协议数据。
 
 The motor trajectories, sample windows and stop predicates follow the firmware
 branches. Transport/ownership live in the IO port; committing the resulting

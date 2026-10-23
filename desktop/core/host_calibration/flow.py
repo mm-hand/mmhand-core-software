@@ -5,7 +5,7 @@
 输入：不依赖串口/UI 的校准 IO、active scope 和原固件参数。
 输出：逐关节提交结果、部分成功位图和会话终态。
 状态所有权：仅拥有本轮关节顺序、完成/失败位图；实时反馈归 IO。
-禁止依赖：禁止依赖 Qt/UI、HandController、串口对象或文件持久化。
+禁止依赖：禁止依赖 NiceGUI/UI、HandController、串口对象或文件持久化。
 """
 
 from __future__ import annotations

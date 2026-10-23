@@ -1,11 +1,11 @@
 """safety_rules.py - P4 安全规则的上位机只读解释服务。
 
 职责：加载稳定 rule_id 对应的英文标题、动作和恢复建议，并为现有门禁枚举提供统一文本。
-线程：首次导入时只读 JSON；之后仅访问内存字典，可在通信线程和 Qt 主线程读取。
+线程：首次导入时只读 JSON；之后仅访问内存字典，可在通信线程和 GUI 主线程读取。
 输入：P4 rule_id，或 SYSTEM_STATUS 中的 direct/feedback reject reason。
 输出：面向日志、状态栏和弹窗的英文解释，不参与任何控制裁决。
 状态所有权：规则真值属于 P4；本模块仅拥有展示副本。
-禁止依赖：不得导入 Qt、串口或 HandBackend，不得在 UI 文件复制规则文本。
+禁止依赖：不得导入 GUI、串口或 HandBackend，不得在 UI 文件复制规则文本。
 """
 
 from __future__ import annotations

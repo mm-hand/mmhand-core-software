@@ -5,7 +5,7 @@
 输入：运行 CSV、模型契约、活动关节范围和播放控制事件。
 输出：带时间轴的稀疏关节帧、进度、诊断和停止结果。
 状态所有权：轨迹对象由 ReplayService 拥有；设备运行状态只读且归 HandBackend。
-禁止依赖：禁止依赖 Qt、串口和 ROS2，禁止直接修改 HandModel 或下位机状态。
+禁止依赖：禁止依赖 GUI、串口和 ROS2，禁止直接修改 HandModel 或下位机状态。
 """
 
 from .replay_controller import ReplayController, ReplayStatus

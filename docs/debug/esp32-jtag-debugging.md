@@ -123,7 +123,7 @@ returns a nonzero status; it never silently resets the board. Full OpenOCD
 logs are continuously drained to `.debug/openocd-*.log`.
 
 Close CDC connections and release motion authorization before debugging;
-reconnect after OpenOCD exits. See [USB stability evidence](usb-stability.md).
+reconnect after OpenOCD exits. See [USB stability evidence](control-tuning.md).
 
 Interactive stepping (rarely needed by agents): start OpenOCD with
 `--keep-openocd`, then drive GDB interactively as a human would.
@@ -228,7 +228,7 @@ P4 builds also verify two reproducible USB prerequisites:
 unknown implementations. The latter currently accepts the audited3.3.10
 baseline only. Its guarded empty-packet commit addresses an observed
 re-enumeration state; it is not an automatic chip reset. See
-[USB evidence and acceptance](usb-stability.md) for the actual validation
+[USB evidence and acceptance](control-tuning.md) for the actual validation
 status. A different Arduino version requires a fresh baseline audit.
 
 The launchers set `ESP_FLASH_SIZE 0` BEFORE the board configuration. The

@@ -5,7 +5,7 @@
 输入：端口名、波特率、超时和待发送字节。
 输出：原始接收字节、写入字节数和连接状态。
 状态所有权：本类唯一持有 pyserial 对象与串口写锁；上层不得直接关闭底层句柄。
-禁止依赖：禁止依赖协议解析、HandModel、Qt/UI、状态机或标定业务。
+禁止依赖：禁止依赖协议解析、HandModel、NiceGUI/UI、状态机或标定业务。
 """
 
 from __future__ import annotations

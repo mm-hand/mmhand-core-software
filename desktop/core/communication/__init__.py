@@ -5,7 +5,7 @@
 输入：串口字节流、P4 协议包和 ACK 查询条件。
 输出：完整协议帧、路由结果、不可变时间语义和最新 ``HandModel`` 快照。
 状态所有权：各组件只持有其职责内状态，禁止重新形成跨职责的通信大对象。
-禁止依赖：禁止依赖 Qt/UI、app、ROS2、Replay 和具体业务页面。
+禁止依赖：禁止依赖 NiceGUI/UI、app、ROS2、Replay 和具体业务页面。
 """
 
 from .ack_tracker import AckTracker

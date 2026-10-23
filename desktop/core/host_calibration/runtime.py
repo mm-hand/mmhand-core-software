@@ -5,7 +5,7 @@
 输入：HandController、会话取消条件和活动范围。
 输出：原协议命令、宿主校准状态及逐关节快照。
 状态所有权：本轮方向、工作限位和宿主状态；硬件 owner 仍由 P4 仲裁。
-禁止依赖：禁止依赖 Qt/UI、页面控件或替代 P4 的急停和执行安全校验。
+禁止依赖：禁止依赖 NiceGUI/UI、页面控件或替代 P4 的急停和执行安全校验。
 """
 
 from __future__ import annotations
@@ -665,7 +665,7 @@ class HostCalibrationIO:
                 continue
             if window['active'] and not self._cancel.is_set() and not self.cancel_check():
                 return True
-            # Qt 可晚于 worker 收到该帧；只抑制已经完成归零且当前已 Known 的旧中间帧。
+            # GUI 可晚于 worker 收到该帧；只抑制已经完成归零且当前已 Known 的旧中间帧。
             end_ms = window['end_ms']
             if (end_ms is not None and delta <= ((end_ms - window['start_ms']) & 0xFFFFFFFF)
                     and not (self._state().multi_turn_unknown_bitmap & unknown)):
@@ -738,7 +738,7 @@ class HostCalibrationIO:
             return False
         with self.controller.state_lock:
             # SYSTEM_STATUS 可以比归零后的 Known 锚点更旧；以实际验收的
-            # post-result ABS/raw 快照为截止，才能识别 Qt 延迟的 F0 中间帧。
+            # post-result ABS/raw 快照为截止，才能识别 NiceGUI 延迟的 F0 中间帧。
             window['end_ms'] = accepted_anchor_ms
         return True
 

@@ -5,7 +5,7 @@
 输入：校准 IO 的当前反馈、原 AutoCalibrationParams 和选中关节序列。
 输出：完成/失败/中止结果、原 V4 LUT 和本地 ABS 限位。
 状态所有权：本模块独占单关节状态；结果由总流程按旧协议提交一次。
-禁止依赖：禁止依赖 Qt/UI、串口实现、ROS2 或 Replay。
+禁止依赖：禁止依赖 NiceGUI/UI、串口实现、ROS2 或 Replay。
 """
 
 from __future__ import annotations

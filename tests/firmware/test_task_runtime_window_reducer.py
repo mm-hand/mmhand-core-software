@@ -8,7 +8,7 @@ from desktop.core.communication.state_reducer import StateReducer
 
 
 class _Owner:
-    """只实现任务诊断归并需要的兼容门面，避免引入串口或 Qt 依赖。"""
+    """只实现任务诊断归并需要的兼容门面，避免引入串口或 GUI 依赖。"""
 
     _heartbeat_enabled = False
 

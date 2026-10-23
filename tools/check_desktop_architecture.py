@@ -70,7 +70,7 @@ DEPENDENCY_RULES = (
     ),
 )
 
-QT_IMPORT_PREFIXES = ("PySide", "PyQt", "pyqtgraph")
+LEGACY_GUI_IMPORT_PREFIXES = ("PySide", "PyQt", "pyqtgraph")
 
 
 def iter_target_files(root: Path = PROJECT_ROOT) -> list[Path]:
@@ -133,10 +133,10 @@ def collect_failures(root: Path = PROJECT_ROOT) -> list[str]:
         imports = tuple(_iter_imports(tree, module_name))
         normalized = relative.replace("\\", "/")
 
-        # Qt/OpenGL 只能停留在 UI 适配层，避免核心逻辑无法在 CLI/Linux 测试环境导入。
+        # 旧 GUI/OpenGL 只能停留在 UI 适配层，避免核心逻辑无法在 CLI/Linux 测试环境导入。
         if not normalized.startswith("desktop/ui/"):
             for imported in imports:
-                if any(imported.startswith(prefix) for prefix in QT_IMPORT_PREFIXES):
+                if any(imported.startswith(prefix) for prefix in LEGACY_GUI_IMPORT_PREFIXES):
                     failures.append(f"{relative} 非 UI 层直接依赖 {imported}")
 
         for rule in DEPENDENCY_RULES:

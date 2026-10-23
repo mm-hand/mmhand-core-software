@@ -5,7 +5,7 @@
 输入：P4 字节流、上层类型化命令、配置和持久化数据。
 输出：线程安全的 HandModel 快照、协议帧、ACK 和后端操作结果。
 状态所有权：SerialTransport 持有串口，FrameDecoder 持有半帧，StateReducer 持有 HandModel，AckTracker 持有 ACK。
-禁止依赖：禁止依赖 Qt/UI、app、ROS2 或 Replay 页面，禁止把控件和展示规则带入核心层。
+禁止依赖：禁止依赖 NiceGUI/UI、app、ROS2 或 Replay 页面，禁止把控件和展示规则带入核心层。
 """
 from __future__ import annotations
 

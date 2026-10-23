@@ -440,7 +440,7 @@ def test_expected_turn_unknown_only_covers_static_rebase_window(io, monkeypatch)
     monkeypatch.setattr(io, '_wait', wait)
     assert io._rebase(4)
     during = seen[0]
-    assert io.is_expected_calibration_turn_unknown(during)  # Qt 晚到的真实维护中间帧。
+    assert io.is_expected_calibration_turn_unknown(during)  # GUI 晚到的真实维护中间帧。
     during.system_status_p4_time_ms = 1121
     assert not io.is_expected_calibration_turn_unknown(during)
     during.system_status_p4_time_ms = 1050

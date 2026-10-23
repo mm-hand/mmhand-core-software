@@ -1,4 +1,4 @@
-"""Native component and interaction regression; no serial devices or Qt runtime."""
+"""Native component and interaction regression; no serial devices or GUI runtime."""
 from unittest.mock import Mock
 import pytest
 from nicegui import ui, Client

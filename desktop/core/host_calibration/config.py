@@ -5,7 +5,7 @@
 输入：关节或电机索引。
 输出：安装映射、标定阈值及参数。
 状态所有权：流程实例拥有参数，硬件映射复用 core 唯一映射。
-禁止依赖：禁止依赖 Qt/UI、串口、ROS2 或 Replay。
+禁止依赖：禁止依赖 NiceGUI/UI、串口、ROS2 或 Replay。
 """
 
 from dataclasses import dataclass

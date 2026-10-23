@@ -5,7 +5,7 @@
 输入：不可变事件值；调用方负责在发布前复制可变字典。
 输出：自上次排空以来的全部事件，保持原始顺序。
 状态所有权：本类独占事件 deque 和互斥锁。
-禁止依赖：禁止依赖串口、HandModel、Qt/UI 或具体协议编号。
+禁止依赖：禁止依赖串口、HandModel、NiceGUI/UI 或具体协议编号。
 """
 
 from __future__ import annotations

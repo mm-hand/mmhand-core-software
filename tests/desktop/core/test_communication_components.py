@@ -5,7 +5,7 @@
 输入：假串口、分片协议帧、路由包和最小 HandModel 更新函数。
 输出：组件行为断言及 LowerComputerComm 兼容属性断言。
 状态所有权：每个测试独占组件实例，不共享串口或模型状态。
-禁止依赖：禁止启动真实串口、Qt 事件循环、ROS2 或 P4 硬件。
+禁止依赖：禁止启动真实串口、NiceGUI 事件循环、ROS2 或 P4 硬件。
 """
 
 from __future__ import annotations

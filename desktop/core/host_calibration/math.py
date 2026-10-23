@@ -5,7 +5,7 @@
 输入：14 bit 磁编、logical ABS 样本、Manual 端点和生成的 URDF 契约。
 输出：与原通信协议相同的 V4 标定结果字典。
 状态所有权：仅修改调用者传入的结果及本地采样缓冲。
-禁止依赖：禁止依赖 Qt/UI、串口、ROS2 或 Replay。
+禁止依赖：禁止依赖 NiceGUI/UI、串口、ROS2 或 Replay。
 """
 
 from __future__ import annotations

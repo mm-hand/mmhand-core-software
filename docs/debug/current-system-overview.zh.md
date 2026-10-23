@@ -1,7 +1,7 @@
 # 当前系统代码、协议与验收边界
 
 核对日期：2026-10-16。根目录：`C:/Users/73547/mmhand`。
-依据当前工作区源码和 `docs/debug/refactor-validation.md` 的最新结果；不是根据旧版 AI README 推断。本次只做代码检查与统计，没有新增硬件运动测试，也没有修改生成的 AI README/HTML。
+依据当前工作区源码和 `docs/debug/control-tuning.md` 的最新结果；不是根据旧版 AI README 推断。本次只做代码检查与统计，没有新增硬件运动测试，也没有修改生成的 AI README/HTML。
 
 ## 1. 哪些已经验证，哪些还没有
 
@@ -446,4 +446,4 @@ S3维护等待者→独立USB发送      S3 RX→触觉解析/维护token匹配
 - S3任务装配：`ESP32-S3/src/system/SystemTasks.cpp`和`src/config/Config.h`。
 - S3维护：`ESP32-S3/src/maintenance/TactileMaintenance.cpp`、`hal/HalTactile.cpp`及主机`tactile_maintenance.py`。
 - CAN：`ESP32-P4/src/config/protocol/S3SensorCanProtocol.h`与`ESP32-S3/src/hal/HalTWAI.h/.cpp`。
-- 本轮实测记录：`docs/debug/refactor-validation.md`；对应原始证据在`.debug`，文内旧记录按时间保留，结论应以最新段落为准。
+- 本轮实测记录：`docs/debug/control-tuning.md`；对应原始证据在`.debug`，文内旧记录按时间保留，结论应以最新段落为准。
