@@ -517,38 +517,6 @@ def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
     return result
 
 
-def parse_calib_diag_packet(payload: bytes) -> Optional[dict]:
-    # 当前协议固定携带根因、诊断序号以及本轮成功/失败位图。
-    # 拒绝旧短包，避免把缺失字段误解释为“没有成功关节”。
-    if len(payload) != 37:
-        return None
-    idx = 0
-    result = {
-        "valid": bool(payload[idx]),
-        "reason": int(payload[idx + 1]),
-        "phase": int(payload[idx + 2]),
-        "joint": int(payload[idx + 3]),
-        "motor": int(payload[idx + 4]),
-    }
-    idx = 5
-    result["valueA"] = struct.unpack(">i", payload[idx:idx + 4])[0]
-    idx += 4
-    result["valueB"] = struct.unpack(">i", payload[idx:idx + 4])[0]
-    idx += 4
-    result["valueC"] = struct.unpack(">i", payload[idx:idx + 4])[0]
-    idx += 4
-    result["bitmap"] = struct.unpack(">I", payload[idx:idx + 4])[0]
-    idx += 4
-    result["timestamp_ms"] = struct.unpack(">I", payload[idx:idx + 4])[0]
-    idx += 4
-    result["sequence"] = struct.unpack(">I", payload[idx:idx + 4])[0]
-    idx += 4
-    result["completed_joint_mask"] = struct.unpack(">I", payload[idx:idx + 4])[0]
-    idx += 4
-    result["failed_joint_mask"] = struct.unpack(">I", payload[idx:idx + 4])[0]
-    return result
-
-
 def parse_task_diag_packet(payload: bytes) -> Optional[dict]:
     """解析 P4 一秒窗口任务诊断包 v4；区分固定周期和事件提前唤醒。"""
     if len(payload) != 191 or payload[0] != 4:

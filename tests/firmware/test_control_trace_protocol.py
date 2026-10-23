@@ -67,10 +67,6 @@ def test_control_trace_reducer_keeps_dedicated_p4_timestamps() -> None:
         _heartbeat_enabled = False
 
         @staticmethod
-        def _parse_protocol_payload(_name: str, payload: bytes):
-            return parse_control_trace_packet(payload)
-
-        @staticmethod
         def _apply_connectivity_visibility(_model) -> None:
             pass
 
@@ -92,16 +88,14 @@ def test_control_trace_reducer_keeps_dedicated_p4_timestamps() -> None:
     assert model.control_trace_motor_command_abs[19] == 11900
 
 
-def test_servo_abs_reducer_keeps_its_own_p4_timestamp() -> None:
+def test_servo_abs_reducer_keeps_its_own_p4_timestamp(monkeypatch) -> None:
+    import desktop.core.communication.state_reducer as state_reducer
+    monkeypatch.setattr(state_reducer, "parse_servo_position_packet",
+                        lambda _payload: ([0] * 27, [1000 + index for index in range(27)]))
     """后到的其他状态包不能篡改舵机 ABS 的真实采样时间。"""
 
     class Owner:
         _heartbeat_enabled = False
-
-        @staticmethod
-        def _parse_protocol_payload(name: str, _payload: bytes):
-            assert name == "parse_servo_position_packet"
-            return [0] * 27, [1000 + index for index in range(27)]
 
         @staticmethod
         def _apply_connectivity_visibility(_model) -> None:
@@ -133,7 +127,6 @@ def test_control_parts_match_both_timestamp_and_cycle_and_reset_on_disconnect(
     from desktop.core.protocol import parse_control_components_packet
     class Owner:
         _heartbeat_enabled = False
-        _parse_protocol_payload = staticmethod(lambda name, payload: parse_control_trace_packet(payload))
         _apply_connectivity_visibility = staticmethod(lambda model: None)
     router = P4PacketRouter({PACKET_TYPE_CONTROL_TRACE: 'control_trace',
                             PACKET_TYPE_CONTROL_COMPONENTS: 'control_components'},

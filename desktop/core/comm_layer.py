@@ -917,20 +917,6 @@ class LowerComputerComm:
     _build_tactile_fingers_from_full = staticmethod(_build_tactile_fingers_from_full)
     _tactile_full_stale_after_s = TACTILE_FULL_STALE_AFTER_S
 
-    @staticmethod
-    def _parse_protocol_payload(parser_name: str, payload: bytes):
-        """从唯一协议模块取得 parser，并保留临时覆盖 parser 的能力。
-
-        生产解析器统一归属 ``protocol.py``；局部同名函数只作为调试覆盖点。
-        这样通信拆分后不会因漏写某个重复 import 让整条 RX 链路掉线。
-        """
-        parser = globals().get(str(parser_name))
-        if not callable(parser):
-            parser = getattr(protocol_codec, str(parser_name), None)
-        if not callable(parser):
-            raise RuntimeError(f"protocol parser is unavailable: {parser_name}")
-        return parser(payload)
-
     def __init__(self, port: str, baudrate: int = BAUDRATE):
         self.port = (port or "").strip()
         self._control_parameter_condition = threading.Condition()

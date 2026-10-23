@@ -2,6 +2,7 @@
 
 from desktop.core.communication.ack_tracker import AckTracker
 from desktop.core.communication.packet_router import P4PacketRouter
+import desktop.core.communication.state_reducer as _reducer_module
 from desktop.core.communication.state_reducer import StateReducer
 from desktop.core.data_models import HandModel
 from desktop.core.protocol import (
@@ -17,15 +18,12 @@ class _Owner:
     _heartbeat_enabled = False
 
     @staticmethod
-    def _parse_protocol_payload(_name: str, _payload: bytes):
-        return CMD_MANUAL_ENCODER_SINGLE, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_OK
-
-    @staticmethod
     def _apply_connectivity_visibility(_model) -> None:
         pass
 
 
-def test_manual_single_ack_preserves_unrelated_calibration() -> None:
+def test_manual_single_ack_preserves_unrelated_calibration(monkeypatch) -> None:
+    monkeypatch.setattr(_reducer_module, "parse_proto_ack", lambda _payload: (CMD_MANUAL_ENCODER_SINGLE, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_OK))
     """P4 会按 changedMask 精确失效 Auto，ACK 层不能全局清空。"""
     reducer = StateReducer(
         P4PacketRouter({1: "protocol_ack"}, lambda _kind, payload: (payload, None)),

@@ -3,6 +3,7 @@ import struct
 import pytest
 
 import desktop.core.comm_layer as comm_layer
+import desktop.core.communication.state_reducer as state_reducer
 from desktop.core.comm_layer import LowerComputerComm
 from desktop.core.data_models import HandModel, RAW_TO_DEG
 from desktop.core.protocol import (
@@ -16,16 +17,6 @@ from desktop.core.protocol import (
     parse_servo_position_packet,
     parse_servo_telem_packet,
 )
-
-
-def test_split_state_reducer_can_resolve_protocol_parsers() -> None:
-    """通信拆分后 reducer 使用的 parser 必须从唯一 protocol 模块可达。"""
-    assert LowerComputerComm._parse_protocol_payload(
-        "parse_fault_status_packet", b""
-    ) is None
-    assert LowerComputerComm._parse_protocol_payload(
-        "parse_sensor_packet", b""
-    ) == ([], [])
 
 
 def _sensor_payload(joint_idx: int, value: int) -> bytes:
@@ -139,7 +130,7 @@ def test_changed_calibration_snapshot_keeps_last_angle_until_p4_refresh(monkeypa
 
     new_result = {"joint": joint_idx, "success": True, "angleMax": 70.0}
     monkeypatch.setattr(
-        comm_layer.protocol_codec,
+        state_reducer,
         "parse_joint_calib_snapshot_packet",
         lambda _payload: dict(new_result),
     )
@@ -166,7 +157,7 @@ def test_repeated_identical_snapshot_does_not_invalidate_fresh_angle(monkeypatch
     comm._state_reducer.last_model = model
 
     monkeypatch.setattr(
-        comm_layer.protocol_codec,
+        state_reducer,
         "parse_joint_calib_snapshot_packet",
         lambda _payload: dict(model.joint_calib_results[joint_idx]),
     )

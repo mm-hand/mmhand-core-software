@@ -13,19 +13,22 @@ class _Owner:
     _heartbeat_enabled = False
 
     @staticmethod
-    def _parse_protocol_payload(_name: str, payload: bytes) -> dict:
-        return {
-            "task_id": int(payload[0]),
-            "window_sequence": int(payload[1]),
-            "device_timestamp_ms": 1000 + int(payload[1]),
-        }
-
-    @staticmethod
     def _apply_connectivity_visibility(_model) -> None:
         pass
 
 
-def _reducer() -> StateReducer:
+def fake_task_diag(payload: bytes) -> dict:
+    return {
+        "task_id": int(payload[0]),
+        "window_sequence": int(payload[1]),
+        "device_timestamp_ms": 1000 + int(payload[1]),
+    }
+
+
+def _reducer(monkeypatch) -> StateReducer:
+    # 每个测试都装上假解析器与关闭节流：这两项是模块级状态，不能跨测试泄漏。
+    monkeypatch.setattr(state_reducer_module, "parse_task_diag_packet", fake_task_diag)
+    monkeypatch.setattr(state_reducer_module, "STATE_SNAPSHOT_MIN_INTERVAL_S", 0.0)
     router = P4PacketRouter(
         {1: "task_diagnostic"}, lambda _packet_type, payload: (payload, None)
     )
@@ -37,9 +40,7 @@ def _packets(sequence: int):
 
 
 def test_task_runtime_is_published_only_after_full_window(monkeypatch) -> None:
-    # 连续批次都要拿到快照：关闭发布节流（默认 20 ms 只约束高频遥测）。
-    monkeypatch.setattr(state_reducer_module, "STATE_SNAPSHOT_MIN_INTERVAL_S", 0.0)
-    reducer = _reducer()
+    reducer = _reducer(monkeypatch)
     owner = _Owner()
     partial = reducer.process_packets(owner, _packets(1)[:6])
     assert partial is not None
@@ -54,8 +55,7 @@ def test_task_runtime_is_published_only_after_full_window(monkeypatch) -> None:
 
 
 def test_new_window_discards_partial_old_window(monkeypatch) -> None:
-    monkeypatch.setattr(state_reducer_module, "STATE_SNAPSHOT_MIN_INTERVAL_S", 0.0)
-    reducer = _reducer()
+    reducer = _reducer(monkeypatch)
     owner = _Owner()
     assert reducer.process_packets(owner, _packets(1)[:6]) is not None
 

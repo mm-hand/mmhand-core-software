@@ -56,6 +56,26 @@ from ..protocol import (
     parse_adaptive_kp_packet,
     parse_control_components_packet,
     parse_control_detail_packet,
+    parse_control_trace_packet,
+    parse_direct_target_result_packet,
+    parse_fault_status_packet,
+    parse_joint_calib_snapshot_packet,
+    parse_manual_encoder_reference_packet,
+    parse_motor_abs_limit_packet,
+    parse_multiturn_restore_result_packet,
+    parse_product_fingerprint_packet,
+    parse_proto_ack,
+    parse_safety_event_packet,
+    parse_sensor_packet,
+    parse_servo_logical_range_packet,
+    parse_servo_position_packet,
+    parse_servo_rebase_zero_result_packet,
+    parse_servo_route_status_packet,
+    parse_servo_telem_packet,
+    parse_system_status_packet,
+    parse_tactile_full_fragment,
+    parse_tactile_packet,
+    parse_task_diag_packet,
 )
 from .ack_tracker import AckTracker
 from .event_channel import EventChannel
@@ -254,7 +274,7 @@ class StateReducer:
     def _apply_sensor(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one sensor packet within the RX batch boundary."""
         emitted = False
-        angles, errors = owner._parse_protocol_payload("parse_sensor_packet", payload)
+        angles, errors = parse_sensor_packet(payload)
         if angles:
             for i in range(min(ENCODER_COUNT, len(angles), len(model.encoders))):
                 model.encoders[i].encoder_id = i
@@ -289,7 +309,7 @@ class StateReducer:
     def _apply_encoder_raw(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one encoder_raw packet within the RX batch boundary."""
         emitted = False
-        raw_values, errors = owner._parse_protocol_payload("parse_sensor_packet", payload)
+        raw_values, errors = parse_sensor_packet(payload)
         if raw_values:
             for i in range(min(ENCODER_COUNT, len(raw_values), len(model.encoders))):
                 raw_error = errors[i] if i < len(errors) else False
@@ -328,7 +348,7 @@ class StateReducer:
 
     def _apply_servo_position(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one merged raw+ABS servo position packet."""
-        parsed = owner._parse_protocol_payload("parse_servo_position_packet", payload)
+        parsed = parse_servo_position_packet(payload)
         if parsed is None:
             return False
         raw_positions, angles = parsed
@@ -362,9 +382,7 @@ class StateReducer:
     def _apply_multiturn_restore_result(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one multiturn_restore_result packet within the RX batch boundary."""
         emitted = False
-        parsed = owner._parse_protocol_payload(
-            "parse_multiturn_restore_result_packet", payload
-        )
+        parsed = parse_multiturn_restore_result_packet(payload)
         if parsed is not None and packet_p4_time_ms is not None:
             token, restored_mask, rejected_mask = parsed
             model.multiturn_restore_result_token = int(token)
@@ -380,9 +398,7 @@ class StateReducer:
     def _apply_servo_rebase_zero_result(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one servo_rebase_zero_result packet within the RX batch boundary."""
         emitted = False
-        parsed = owner._parse_protocol_payload(
-            "parse_servo_rebase_zero_result_packet", payload
-        )
+        parsed = parse_servo_rebase_zero_result_packet(payload)
         if parsed is not None:
             token, success_mask, failed_mask = parsed
             previous_identity = (
@@ -417,9 +433,7 @@ class StateReducer:
     def _apply_direct_target_result(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one direct_target_result packet within the RX batch boundary."""
         emitted = False
-        parsed = owner._parse_protocol_payload(
-            "parse_direct_target_result_packet", payload
-        )
+        parsed = parse_direct_target_result_packet(payload)
         if parsed is not None:
             token, requested, applied, rejected, status = parsed
             model.direct_target_token = int(token)
@@ -436,7 +450,7 @@ class StateReducer:
     def _apply_servo_telemetry(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one servo_telemetry packet within the RX batch boundary."""
         emitted = False
-        parsed = owner._parse_protocol_payload("parse_servo_telem_packet", payload)
+        parsed = parse_servo_telem_packet(payload)
         if parsed is not None:
             speeds, loads, currents, volts, temps = parsed
             for i in range(min(MOTOR_COUNT, len(speeds))):
@@ -454,7 +468,7 @@ class StateReducer:
     def _apply_fault_status(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one fault_status packet within the RX batch boundary."""
         emitted = False
-        parsed_fault = owner._parse_protocol_payload("parse_fault_status_packet", payload)
+        parsed_fault = parse_fault_status_packet(payload)
         if parsed_fault is not None:
             fault_bitmap, trigger_loads = parsed_fault
             for i in range(MOTOR_COUNT):
@@ -471,7 +485,7 @@ class StateReducer:
     def _apply_system_status(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one system_status packet within the RX batch boundary."""
         emitted = False
-        parsed = owner._parse_protocol_payload("parse_system_status_packet", payload)
+        parsed = parse_system_status_packet(payload)
         if parsed is not None:
             if packet_p4_time_ms is not None:
                 status_clock_ms = int(packet_p4_time_ms) & 0xFFFFFFFF
@@ -678,9 +692,7 @@ class StateReducer:
     def _apply_servo_route_status(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one servo_route_status packet within the RX batch boundary."""
         emitted = False
-        parsed = owner._parse_protocol_payload(
-            "parse_servo_route_status_packet", payload
-        )
+        parsed = parse_servo_route_status_packet(payload)
         if parsed is not None:
             model.servo_route_controllable_bitmap = int(
                 parsed["controllable_bitmap"]
@@ -699,7 +711,7 @@ class StateReducer:
     def _apply_product_fingerprint(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one product_fingerprint packet within the RX batch boundary."""
         emitted = False
-        parsed = owner._parse_protocol_payload("parse_product_fingerprint_packet", payload)
+        parsed = parse_product_fingerprint_packet(payload)
         if parsed is not None:
             # CRC 在模型中保留整数，写 meta.json 时统一格式化为 8 位十六进制。
             model.product_fingerprint = dict(parsed)
@@ -710,9 +722,7 @@ class StateReducer:
     def _apply_safety_event(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one safety_event packet within the RX batch boundary."""
         emitted = False
-        parsed = owner._parse_protocol_payload(
-            "parse_safety_event_packet", payload
-        )
+        parsed = parse_safety_event_packet(payload)
         if parsed is not None:
             event = dict(parsed)
             event["device_timestamp_ms"] = int(packet_p4_time_ms or 0)
@@ -740,7 +750,7 @@ class StateReducer:
     def _apply_motor_abs_limit(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one motor_abs_limit packet within the RX batch boundary."""
         emitted = False
-        parsed = owner._parse_protocol_payload("parse_motor_abs_limit_packet", payload)
+        parsed = parse_motor_abs_limit_packet(payload)
         if parsed is not None:
             valid_bitmap, mins, maxs = parsed
             model.motor_abs_limit_valid_bitmap = int(valid_bitmap)
@@ -753,7 +763,7 @@ class StateReducer:
     def _apply_servo_logical_range(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one servo_logical_range packet within the RX batch boundary."""
         emitted = False
-        parsed = owner._parse_protocol_payload("parse_servo_logical_range_packet", payload)
+        parsed = parse_servo_logical_range_packet(payload)
         if parsed is not None:
             valid_bitmap, mins, maxs = parsed
             model.servo_logical_range_valid_bitmap = int(valid_bitmap)
@@ -769,7 +779,7 @@ class StateReducer:
     def _apply_manual_reference(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one manual_reference packet within the RX batch boundary."""
         emitted = False
-        parsed = owner._parse_protocol_payload("parse_manual_encoder_reference_packet", payload)
+        parsed = parse_manual_encoder_reference_packet(payload)
         if parsed is not None:
             model.manual_reference_valid_bitmap = int(parsed["valid_bitmap"])
             model.manual_reference_crc = int(parsed["reference_crc"])
@@ -798,7 +808,7 @@ class StateReducer:
     def _apply_joint_calibration_snapshot(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one joint_calibration_snapshot packet within the RX batch boundary."""
         emitted = False
-        parsed = owner._parse_protocol_payload("parse_joint_calib_snapshot_packet", payload)
+        parsed = parse_joint_calib_snapshot_packet(payload)
         if parsed is not None:
             joint_idx = int(parsed.get("joint", -1))
             if 0 <= joint_idx < ENCODER_COUNT:
@@ -826,7 +836,7 @@ class StateReducer:
         if detail is not None:
             self._cache_control_part(packet_p4_time_ms, detail, 'detail')
             return False
-        parsed = owner._parse_protocol_payload("parse_control_trace_packet", payload)
+        parsed = parse_control_trace_packet(payload)
         if parsed is not None and packet_p4_time_ms is not None:
             model.has_control_trace = True
             parts = self._control_parts.pop((packet_p4_time_ms, parsed['sequence']), {})
@@ -868,7 +878,7 @@ class StateReducer:
     def _apply_task_diagnostic(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one task_diagnostic packet within the RX batch boundary."""
         emitted = False
-        parsed = owner._parse_protocol_payload("parse_task_diag_packet", payload)
+        parsed = parse_task_diag_packet(payload)
         if parsed is not None:
             task_value = parsed.get("task_id")
             task_id = int(task_value) if task_value is not None else -1
@@ -908,7 +918,7 @@ class StateReducer:
     def _apply_tactile_summary(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one tactile_summary packet within the RX batch boundary."""
         emitted = False
-        parsed = owner._parse_protocol_payload("parse_tactile_packet", payload)
+        parsed = parse_tactile_packet(payload)
         if parsed is not None:
             _seq, groups, module_valid_mask = parsed
             now = time.time()
@@ -950,7 +960,7 @@ class StateReducer:
     def _apply_tactile_full(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one tactile_full packet within the RX batch boundary."""
         emitted = False
-        parsed = owner._parse_protocol_payload("parse_tactile_full_fragment", payload)
+        parsed = parse_tactile_full_fragment(payload)
         if parsed is not None:
             seq, frag_idx, frag_count, chunk, summary_seq, full_crc = parsed
             accepted = owner._accept_tactile_full_fragment(
@@ -1001,7 +1011,7 @@ class StateReducer:
     def _apply_protocol_ack(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one protocol_ack packet within the RX batch boundary."""
         emitted = False
-        parsed = owner._parse_protocol_payload("parse_proto_ack", payload)
+        parsed = parse_proto_ack(payload)
         if parsed is not None:
             ack_cmd, applied_mode, status = parsed
             if ack_cmd in (
