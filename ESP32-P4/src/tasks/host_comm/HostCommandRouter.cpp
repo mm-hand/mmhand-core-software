@@ -173,17 +173,6 @@ bool upperApplyMotorTargets(SystemRuntimeContext* sharedData,
     return true;
 }
 
-bool upperApplySingleMotorTarget(SystemRuntimeContext* sharedData,
-                                 uint8_t motorIndex,
-                                 int32_t target)
-{
-    if (!sharedData || motorIndex >= SERVO_TOTAL_NUM) return false;
-    int32_t targets[SERVO_TOTAL_NUM] = {};
-    targets[motorIndex] = target;
-    return upperApplyMotorTargets(sharedData, targets, SERVO_TOTAL_NUM, 0,
-        1UL << motorIndex, SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
-}
-
 bool upperReleaseMotorDirect(SystemRuntimeContext* sharedData, uint32_t token)
 {
     if (!sharedData) return false;

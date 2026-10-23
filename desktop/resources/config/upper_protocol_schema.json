@@ -4,6 +4,7 @@
   "retired_command_values": [
     202,
     217,
+    222,
     234,
     239,
     245,
@@ -259,13 +260,6 @@
       "value": 220,
       "payload_bytes": 0,
       "description": "刷新上位机在线计时器，不携带业务数据"
-    },
-    {
-      "name": "CMD_MOTOR_POS_ABS_ONE",
-      "requires_handshake": true,
-      "value": 222,
-      "payload_bytes": 5,
-      "description": "单台 Mxx logical ABS 直控，Mxx 加 int32 counts"
     },
     {
       "name": "CMD_CALIB_LOAD_JOINT",

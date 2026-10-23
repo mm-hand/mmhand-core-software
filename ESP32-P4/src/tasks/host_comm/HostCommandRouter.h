@@ -37,9 +37,4 @@ bool upperApplyActiveScope(SystemRuntimeContext* sharedData,
                            uint32_t activeJointMask,
                            uint8_t requireCanFeedback);
 
-// 暂存一台舵机的逻辑多圈 ABS 目标，并请求状态机进入 RUN_DIRECT。
-bool upperApplySingleMotorTarget(SystemRuntimeContext* sharedData,
-                                 uint8_t motorIndex,
-                                 int32_t target);
-
 #endif // UPPER_COMM_COMMAND_ROUTER_H

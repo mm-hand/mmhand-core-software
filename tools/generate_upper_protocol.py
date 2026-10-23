@@ -124,7 +124,6 @@ def _render_cpp(schema: dict) -> str:
     aliases = {
         "kFloatPayloadBytes": "CMD_ANGLE_CTRL",
         "kMotorPosAbsPayloadBytes": "CMD_MOTOR_POS_ABS",
-        "kMotorPosAbsOnePayloadBytes": "CMD_MOTOR_POS_ABS_ONE",
         "kActiveScopePayloadBytes": "CMD_ACTIVE_SCOPE",
         "kRestoreMultiTurnPayloadBytes": "CMD_RESTORE_MULTITURN",
         "kCalibLoadJointPayloadBytes": "CMD_CALIB_LOAD_JOINT",

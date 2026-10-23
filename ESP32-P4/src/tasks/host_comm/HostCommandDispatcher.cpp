@@ -82,7 +82,6 @@ bool commandConflictsWithServoRebaseZero(uint8_t command)
         case CMD_RUN_FEEDBACK:
         case CMD_ROPE_INIT:
         case CMD_MOTOR_POS_ABS:
-        case CMD_MOTOR_POS_ABS_ONE:
         case CMD_ANGLE_CTRL:
         case CMD_CALIB_LOAD_JOINT:
         case CMD_CALIB_LOAD_LIMITS:
@@ -222,7 +221,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         return;
     }
     if ((cmd == CMD_RUN_FEEDBACK || cmd == CMD_START || cmd == CMD_MOTOR_POS_ABS ||
-         cmd == CMD_MOTOR_POS_ABS_ONE || cmd == CMD_ANGLE_CTRL) &&
+         cmd == CMD_ANGLE_CTRL) &&
         !mmhand::control::parametersConfigured()) {
         FW_LOG_WARN_PRINTF("[UPPER] motion rejected cmd=0x%02X parameters not configured\r\n", (unsigned)cmd);
         sendProtoAckPacket(cmd, sharedData->system_state, PROTO_ACK_STATUS_INVALID_DATA);
@@ -472,18 +471,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         sendProtoAckPacket(CMD_MOTOR_DIRECT_RELEASE, sharedData->system_state, status);
         return;
     }
-
-    if (cmd == CMD_MOTOR_POS_ABS_ONE)
-    {
-        if (frameLen >= 1 + kMotorPosAbsOnePayloadBytes) {
-            const uint8_t motorIndex = frame[1];
-            upperApplySingleMotorTarget(sharedData,
-                                        motorIndex,
-                                        readI32BigEndian(frame + 2));
-        }
-        return;
-    }
-
 
     if (cmd == CMD_ACTIVE_SCOPE)
     {

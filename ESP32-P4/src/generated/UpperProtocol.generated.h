@@ -60,7 +60,6 @@ inline constexpr uint8_t CMD_ACTIVE_SCOPE = 0xD7; ///< 同步 active joint/motor
 inline constexpr uint8_t CMD_RUN_FEEDBACK = 0xD8; ///< 申请状态机进入负反馈运行
 inline constexpr uint8_t CMD_RESTORE_MULTITURN = 0xDA; ///< 按位图恢复 27 路 logical ABS 多圈快照
 inline constexpr uint8_t CMD_HOST_HEARTBEAT = 0xDC; ///< 刷新上位机在线计时器，不携带业务数据
-inline constexpr uint8_t CMD_MOTOR_POS_ABS_ONE = 0xDE; ///< 单台 Mxx logical ABS 直控，Mxx 加 int32 counts
 inline constexpr uint8_t CMD_CALIB_LOAD_JOINT = 0xDF; ///< 恢复单关节唯一 Auto/LUT v4 标定快照
 inline constexpr uint8_t CMD_CALIB_LOAD_LIMITS = 0xE0; ///< 批量恢复 27 路 ABS 标定范围与有效位图
 inline constexpr uint8_t CMD_CLEAR_CALIBRATION = 0xE5; ///< 清除全部 Auto/LUT 标定结果，保留 Manual
@@ -104,7 +103,6 @@ inline constexpr uint8_t STATE_SYNC_ALL = 127; ///< 同步全部静态运行契�
 // 固定 payload 长度；单位 byte，不包含命令字本身。
 inline constexpr size_t kFloatPayloadBytes = 88;
 inline constexpr size_t kMotorPosAbsPayloadBytes = 119;
-inline constexpr size_t kMotorPosAbsOnePayloadBytes = 5;
 inline constexpr size_t kActiveScopePayloadBytes = 9;
 inline constexpr size_t kRestoreMultiTurnPayloadBytes = 112;
 inline constexpr size_t kCalibLoadJointPayloadBytes = 189;
@@ -135,7 +133,6 @@ inline constexpr size_t generatedCommandPayloadLength(uint8_t command)
         case CMD_RUN_FEEDBACK: return 0;
         case CMD_RESTORE_MULTITURN: return kRestoreMultiTurnPayloadBytes;
         case CMD_HOST_HEARTBEAT: return 0;
-        case CMD_MOTOR_POS_ABS_ONE: return kMotorPosAbsOnePayloadBytes;
         case CMD_CALIB_LOAD_JOINT: return kCalibLoadJointPayloadBytes;
         case CMD_CALIB_LOAD_LIMITS: return kCalibLoadLimitsPayloadBytes;
         case CMD_CLEAR_CALIBRATION: return 0;
@@ -170,7 +167,6 @@ inline constexpr bool generatedCommandRequiresHandshake(uint8_t command)
         case CMD_MOTOR_POS_ABS: return true;
         case CMD_RUN_FEEDBACK: return true;
         case CMD_RESTORE_MULTITURN: return true;
-        case CMD_MOTOR_POS_ABS_ONE: return true;
         case CMD_CALIB_LOAD_JOINT: return true;
         case CMD_CALIB_LOAD_LIMITS: return true;
         case CMD_MANUAL_ENCODER_REFERENCE: return true;
