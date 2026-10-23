@@ -71,16 +71,16 @@ def usable_snapshot_aa_result(
 
     # Identity guard: never reuse a result from another hand/model generation.
     state_device = ""
-    if bool(getattr(state, "has_product_fingerprint", False)):
+    if bool(state.has_product_fingerprint):
         state_device = str((getattr(state, "product_fingerprint", {}) or {}).get("device_id", ""))
     snapshot_device = str(snapshot.get("device_id", "") or "")
     if state_device and snapshot_device and state_device != snapshot_device:
         return None
 
     # Manual endpoints and direction must still describe the same reference.
-    if not bool(getattr(state, "has_manual_reference_encoder_directions", False)):
+    if not bool(state.has_manual_reference_encoder_directions):
         return None
-    if not int(getattr(state, "manual_reference_valid_bitmap", 0) or 0) & (1 << joint):
+    if not int(state.manual_reference_valid_bitmap) & (1 << joint):
         return None
     try:
         low = int(state.manual_reference_min_raw[joint])

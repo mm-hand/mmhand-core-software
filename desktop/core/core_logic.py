@@ -290,13 +290,13 @@ class HandController:
     def _safe_motor_hold_targets_from_state(self) -> Optional[List[int]]:
         with self.state_lock:
             state = self.current_state
-            has_abs = bool(getattr(state, "has_servo_angle_data", False))
-            has_raw = bool(getattr(state, "has_servo_raw_data", False))
+            has_abs = bool(state.has_servo_angle_data)
+            has_raw = bool(state.has_servo_raw_data)
             unknown = int(getattr(state, "multi_turn_unknown_bitmap", 0))
-            servo_abs = list(getattr(state, "servo_angles", []) or [])
-            servo_online = list(getattr(state, "servo_online", []) or [])
-            servo_raw = list(getattr(state, "servo_raw_positions", []) or [])
-            servo_raw_online = list(getattr(state, "servo_raw_online", []) or [])
+            servo_abs = list(state.servo_angles or [])
+            servo_online = list(state.servo_online or [])
+            servo_raw = list(state.servo_raw_positions or [])
+            servo_raw_online = list(state.servo_raw_online or [])
 
         if unknown != 0:
             log_session("MULTITURN", f"hold skipped unknown=0x{unknown:08X}")
@@ -586,14 +586,14 @@ class HandController:
     @staticmethod
     def _startup_sync_ready(state: HandModel) -> bool:
         """启动恢复所需的状态、反馈、路由和产品身份均已收到。"""
-        has_servo = bool(getattr(state, "has_servo_angle_data", False)) or bool(
+        has_servo = bool(state.has_servo_angle_data) or bool(
             getattr(state, "has_servo_raw_data", False)
         )
         return (
-            bool(getattr(state, "has_system_status_data", False))
+            bool(state.has_system_status_data)
             and has_servo
-            and bool(getattr(state, "has_servo_route_status", False))
-            and bool(getattr(state, "has_product_fingerprint", False))
+            and bool(state.has_servo_route_status)
+            and bool(state.has_product_fingerprint)
         )
 
     def _service_startup_state_sync(self, state: HandModel) -> None:
@@ -695,9 +695,9 @@ class HandController:
 
     def _multiturn_identity(self, state: HandModel) -> Optional[dict]:
         """组合产品指纹与标定摘要，防止把另一只手的多圈锚点发给当前 P4。"""
-        if not bool(getattr(state, "has_product_fingerprint", False)):
+        if not bool(state.has_product_fingerprint):
             return None
-        reported = dict(getattr(state, "product_fingerprint", {}) or {})
+        reported = dict(state.product_fingerprint or {})
         device_id = str(reported.get("device_id", ""))
         if (int(reported.get("protocol_version", 0)) != HOST_PROTOCOL_VERSION
                 or len(device_id) != 16
@@ -905,15 +905,15 @@ class HandController:
             int(str(payload.get("valid_motor_mask", "0")), 0)
             if payload else 0
         ) & ((1 << MOTOR_COUNT) - 1)
-        online_mask = int(getattr(state, "servo_online_bitmap", 0) or 0)
-        if bool(getattr(state, "has_servo_route_status", False)):
+        online_mask = int(state.servo_online_bitmap)
+        if bool(state.has_servo_route_status):
             online_mask &= int(
                 getattr(state, "servo_route_controllable_bitmap", 0) or 0
             )
-        unknown_mask = int(getattr(state, "multi_turn_unknown_bitmap", 0) or 0)
-        servo_abs = list(getattr(state, "servo_angles", []) or [])
-        servo_raw = list(getattr(state, "servo_raw_positions", []) or [])
-        raw_online = list(getattr(state, "servo_raw_online", []) or [])
+        unknown_mask = int(state.multi_turn_unknown_bitmap)
+        servo_abs = list(state.servo_angles or [])
+        servo_raw = list(state.servo_raw_positions or [])
+        raw_online = list(state.servo_raw_online or [])
         with self._multiturn_anchor_capture_lock:
             blocked_mask = self._multiturn_anchor_capture_blocked_mask
         rebase_delta_ms = (
@@ -924,7 +924,7 @@ class HandController:
             and 0 < rebase_delta_ms < 0x80000000
         )
         fresh_mask = 0
-        if bool(getattr(state, "has_servo_angle_data", False)) and bool(
+        if bool(state.has_servo_angle_data) and bool(
             getattr(state, "has_servo_raw_data", False)
         ):
             for motor_idx in range(MOTOR_COUNT):
@@ -954,7 +954,7 @@ class HandController:
                 valid_motor_mask=valid_mask,
                 logical_abs=abs_values,
                 raw=raw_values,
-                p4_time_ms=int(getattr(state, "p4_time_ms", 0) or 0),
+                p4_time_ms=int(state.p4_time_ms),
             )
         except (OSError, DeviceStateStoreError, CalibrationSnapshotError) as exc:
             state.host_multiturn_status = f"save failed: {exc}"
@@ -1038,16 +1038,16 @@ class HandController:
         if pending_mask == 0:
             return
 
-        online_mask = int(getattr(state, "servo_online_bitmap", 0) or 0)
-        if bool(getattr(state, "has_servo_route_status", False)):
+        online_mask = int(state.servo_online_bitmap)
+        if bool(state.has_servo_route_status):
             online_mask &= int(
                 getattr(state, "servo_route_controllable_bitmap", 0) or 0
             )
-        unknown_mask = int(getattr(state, "multi_turn_unknown_bitmap", 0) or 0)
-        raw_online = list(getattr(state, "servo_raw_online", []) or [])
-        servo_abs = list(getattr(state, "servo_angles", []) or [])
-        servo_raw = list(getattr(state, "servo_raw_positions", []) or [])
-        feedback_ready = bool(getattr(state, "has_servo_angle_data", False)) and bool(
+        unknown_mask = int(state.multi_turn_unknown_bitmap)
+        raw_online = list(state.servo_raw_online or [])
+        servo_abs = list(state.servo_angles or [])
+        servo_raw = list(state.servo_raw_positions or [])
+        feedback_ready = bool(state.has_servo_angle_data) and bool(
             getattr(state, "has_servo_raw_data", False)
         )
         eligible_mask = 0
@@ -1155,23 +1155,23 @@ class HandController:
             self._multiturn_last_restore_attempt_at = 0.0
 
         valid_mask = (1 << MOTOR_COUNT) - 1
-        online = int(getattr(state, "servo_online_bitmap", 0) or 0) & valid_mask
-        unknown = int(getattr(state, "multi_turn_unknown_bitmap", 0) or 0) & valid_mask
+        online = int(state.servo_online_bitmap) & valid_mask
+        unknown = int(state.multi_turn_unknown_bitmap) & valid_mask
         for motor_idx in range(MOTOR_COUNT):
             if not online & (1 << motor_idx):
                 self._multiturn_restore_attempts[motor_idx] = 0
         self._multiturn_restore_confirmed_mask &= online
         self._multiturn_restore_exhausted_mask &= online & unknown
         now = time.monotonic()
-        result_token = int(getattr(state, "multiturn_restore_result_token", 0) or 0)
+        result_token = int(state.multiturn_restore_result_token)
         if self._multiturn_pending_restore_mask:
             pending_mask = self._multiturn_pending_restore_mask
-            restored = int(getattr(state, "multiturn_restore_restored_mask", 0) or 0)
-            rejected = int(getattr(state, "multiturn_restore_rejected_mask", 0) or 0)
-            result_p4_ms = int(getattr(state, "multiturn_restore_result_p4_time_ms", 0) or 0)
+            restored = int(state.multiturn_restore_restored_mask)
+            rejected = int(state.multiturn_restore_rejected_mask)
+            result_p4_ms = int(state.multiturn_restore_result_p4_time_ms)
             baseline_p4_ms = self._multiturn_pending_restore_p4_time_ms
             matches_pending = (
-                bool(getattr(state, "has_multiturn_restore_result", False))
+                bool(state.has_multiturn_restore_result)
                 and self._multiturn_pending_restore_context == context
                 and result_token == self._multiturn_pending_restore_expected_token
                 and float(state.received_at('multiturn_restore_result_last_rx_ts') or 0)
@@ -1269,20 +1269,20 @@ class HandController:
             blocked_mask = self._multiturn_anchor_capture_blocked_mask
         if not unknown & online & ~blocked_mask:
             return
-        if not bool(getattr(state, "has_multiturn_restore_result", False)):
+        if not bool(state.has_multiturn_restore_result):
             self._multiturn_last_restore_attempt_at = now
             with self._coordinate_command_lock:
                 if not self._multiturn_restore_cancelled and self.comm.is_connected():
                     self.comm.send_command(("state_sync", STATE_SYNC_MULTITURN_STATE))
             return
-        if (not bool(getattr(state, "has_system_status_data", False))
+        if (not bool(state.has_system_status_data)
                 or not 0 <= time.monotonic() - float(state.received_at('system_status_last_rx_ts')) <= LOWER_STATUS_STALE_AFTER_S
                 or state.system_state not in (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE,
                                               SYSTEM_STATE_READY, SYSTEM_STATE_RECOVERY_REQUIRED)
                 or state.control_enabled or state.servo_target_owner
-                or not bool(getattr(state, "has_p4_time", False))
-                or not bool(getattr(state, "has_servo_route_status", False))
-                or int(getattr(state, "servo_route_scan_state", 0) or 0) == 1
+                or not bool(state.has_p4_time)
+                or not bool(state.has_servo_route_status)
+                or int(state.servo_route_scan_state) == 1
                 or not self._restore_feedback_ready(state)):
             return
         saved_mask, saved_abs, saved_raw, identity_ready = (
@@ -1290,8 +1290,8 @@ class HandController:
         )
         if not identity_ready or saved_mask == 0:
             return
-        online &= (int(getattr(state, "servo_route_controllable_bitmap", 0) or 0)
-                   & ~int(getattr(state, "servo_route_conflict_bitmap", 0) or 0))
+        online &= (int(state.servo_route_controllable_bitmap)
+                   & ~int(state.servo_route_conflict_bitmap))
         with self._multiturn_anchor_capture_lock:
             blocked_mask = self._multiturn_anchor_capture_blocked_mask
         candidate = (
@@ -1299,8 +1299,8 @@ class HandController:
             & ~self._multiturn_restore_confirmed_mask
             & ~self._multiturn_restore_exhausted_mask & valid_mask
         )
-        current_raw = list(getattr(state, "servo_raw_positions", []) or [])
-        raw_online = list(getattr(state, "servo_raw_online", []) or [])
+        current_raw = list(state.servo_raw_positions or [])
+        raw_online = list(state.servo_raw_online or [])
         restore_abs = [0] * MOTOR_COUNT
         restore_mask = 0
         for motor_idx in range(MOTOR_COUNT):
@@ -1351,7 +1351,7 @@ class HandController:
             self._multiturn_pending_restore_query_count = 0
             self._multiturn_pending_restore_query_at = 0.0
             self._multiturn_pending_restore_query_exhausted = False
-            self._multiturn_pending_restore_ack_sequence = int(getattr(state, "proto_ack_sequence", 0) or 0)
+            self._multiturn_pending_restore_ack_sequence = int(state.proto_ack_sequence)
         attempts = {motor_idx: self._multiturn_restore_attempts[motor_idx]
                     for motor_idx in range(MOTOR_COUNT) if restore_mask & (1 << motor_idx)}
         log_session("MULTITURN", f"host restore requested mask=0x{restore_mask:08X} attempts={attempts}")
@@ -1373,20 +1373,20 @@ class HandController:
                 state = HandModel()
                 state.copy_state_from(self.current_state)
             feedback_ready = (
-                bool(getattr(state, "has_servo_angle_data", False))
-                and bool(getattr(state, "has_servo_raw_data", False))
-                and bool(getattr(state, "has_servo_route_status", False))
+                bool(state.has_servo_angle_data)
+                and bool(state.has_servo_raw_data)
+                and bool(state.has_servo_route_status)
             )
             route_scan_complete = (
-                int(getattr(state, "servo_route_scan_state", 0) or 0) == 2
-                or (int(getattr(state, "servo_route_scan_state", 0) or 0) == 0
-                    and int(getattr(state, "servo_route_scan_progress", 0) or 0) >= 100)
+                int(state.servo_route_scan_state) == 2
+                or (int(state.servo_route_scan_state) == 0
+                    and int(state.servo_route_scan_progress) >= 100)
             )
             if not feedback_ready or not route_scan_complete:
                 last_message = "waiting for complete P4 servo feedback and route scan"
                 time.sleep(0.05)
                 continue
-            online_mask = int(getattr(state, "servo_online_bitmap", 0) or 0)
+            online_mask = int(state.servo_online_bitmap)
             target_mask = requested_mask & online_mask
             if target_mask == 0:
                 return True, "calibration motors are currently offline; deferred recovery"
@@ -1931,7 +1931,7 @@ class HandController:
         with self.state_lock:
             state = self.current_state
             cleared = (
-                int(getattr(state, "manual_reference_valid_bitmap", 0) or 0)
+                int(state.manual_reference_valid_bitmap)
                 == 0
                 and not bool(
                     getattr(state, "manual_reference_committed", False)
@@ -2004,23 +2004,23 @@ class HandController:
             return
         with self.state_lock:
             state = self.current_state
-            results = list(getattr(state, "joint_calib_results", []) or [])
+            results = list(state.joint_calib_results or [])
             for joint in range(ENCODER_COUNT):
                 if joint_mask & (1 << joint):
                     if joint < len(results):
                         results[joint] = None
             state.joint_calib_results = results
             state.auto_calibration_valid_bitmap = (
-                int(getattr(state, "auto_calibration_valid_bitmap", 0) or 0) & ~joint_mask
+                int(state.auto_calibration_valid_bitmap) & ~joint_mask
             )
             state.calibration_warning_bitmap = (
-                int(getattr(state, "calibration_warning_bitmap", 0) or 0) & ~joint_mask
+                int(state.calibration_warning_bitmap) & ~joint_mask
             )
             state.motor_abs_limit_valid_bitmap = (
-                int(getattr(state, "motor_abs_limit_valid_bitmap", 0) or 0) & ~motor_mask
+                int(state.motor_abs_limit_valid_bitmap) & ~motor_mask
             )
-            mins = list(getattr(state, "motor_abs_limit_min", []) or [])
-            maxs = list(getattr(state, "motor_abs_limit_max", []) or [])
+            mins = list(state.motor_abs_limit_min or [])
+            maxs = list(state.motor_abs_limit_max or [])
             for motor in range(MOTOR_COUNT):
                 if motor_mask & (1 << motor):
                     if motor < len(mins):
@@ -2643,13 +2643,13 @@ class HandController:
 
         with self.state_lock:
             state = self.current_state
-            system_state = int(getattr(state, "system_state", -1) or 0)
-            online_mask = int(getattr(state, "servo_online_bitmap", 0) or 0)
+            system_state = int(state.system_state)
+            online_mask = int(state.servo_online_bitmap)
             route_mask = int(
                 getattr(state, "servo_route_controllable_bitmap", 0) or 0
             )
-            has_routes = bool(getattr(state, "has_servo_route_status", False))
-            has_abs = (bool(getattr(state, "has_servo_angle_data", False))
+            has_routes = bool(state.has_servo_route_status)
+            has_abs = (bool(state.has_servo_angle_data)
                        and 0 <= time.monotonic() - state.received_at('servo_abs_last_rx_ts') <= 0.5
                        and state.servo_route_scan_state != 1)
             device_id = self.servo_abs_zero_device_id(state)
@@ -2744,12 +2744,12 @@ class HandController:
                 unknown = int(
                     getattr(state, "multi_turn_unknown_bitmap", 0) or 0
                 ) & pending_mask
-                online = int(getattr(state, "servo_online_bitmap", 0) or 0)
+                online = int(state.servo_online_bitmap)
                 fresh = 0 <= time.monotonic() - state.received_at('servo_abs_last_rx_ts') <= 0.5
                 routable = (state.servo_route_controllable_bitmap & pending_mask) == pending_mask
-                servo_abs = list(getattr(state, "servo_angles", []) or [])
-                servo_raw = list(getattr(state, "servo_raw_positions", []) or [])
-                raw_online = list(getattr(state, "servo_raw_online", []) or [])
+                servo_abs = list(state.servo_angles or [])
+                servo_raw = list(state.servo_raw_positions or [])
+                raw_online = list(state.servo_raw_online or [])
             aligned = (
                 fresh and routable and unknown == 0
                 and (online & pending_mask) == pending_mask
@@ -2822,11 +2822,11 @@ class HandController:
         while time.monotonic() < ready_deadline and not cancelled():
             with self.state_lock:
                 state = self.current_state
-                d_status = int(getattr(state, "direct_target_status", 0) or 0)
-                d_applied = int(getattr(state, "direct_target_applied_mask", 0) or 0)
-                d_rejected = int(getattr(state, "direct_target_rejected_mask", 0) or 0)
-                has_direct_result = bool(getattr(state, "has_direct_target_result", False))
-                run_state = int(getattr(state, "system_state", -1) or 0)
+                d_status = int(state.direct_target_status)
+                d_applied = int(state.direct_target_applied_mask)
+                d_rejected = int(state.direct_target_rejected_mask)
+                has_direct_result = bool(state.has_direct_target_result)
+                run_state = int(state.system_state)
                 fresh = 0 <= time.monotonic() - state.received_at('servo_abs_last_rx_ts') <= 0.5
             if d_rejected & pending_mask:
                 ready_rejected_mask = d_rejected & pending_mask
@@ -2864,13 +2864,13 @@ class HandController:
                 break
             with self.state_lock:
                 state = self.current_state
-                online = int(getattr(state, "servo_online_bitmap", 0) or 0)
+                online = int(state.servo_online_bitmap)
                 unknown = int(
                     getattr(state, "multi_turn_unknown_bitmap", 0) or 0
                 ) & pending_mask
                 fresh = 0 <= time.monotonic() - state.received_at('servo_abs_last_rx_ts') <= 0.5
                 routable = (state.servo_route_controllable_bitmap & pending_mask) == pending_mask
-                servo_abs = list(getattr(state, "servo_angles", []) or [])
+                servo_abs = list(state.servo_angles or [])
             transient = ""
             if not fresh:
                 transient = "servo ABS feedback stale"

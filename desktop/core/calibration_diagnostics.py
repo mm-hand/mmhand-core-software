@@ -265,8 +265,8 @@ def format_calibration_diagnostic(diag) -> dict:
 def format_calibration_warning(state: object, warning_mask: int) -> dict:
     """Format calibration assembly warning bits for UI display."""
     mask = int(warning_mask) & ((1 << protocol.ENCODER_COUNT) - 1)
-    min_offsets = list(getattr(state, "calibration_auto_min_offset_counts", []) or [])
-    results = list(getattr(state, "joint_calib_results", []) or [])
+    min_offsets = list(state.calibration_auto_min_offset_counts or [])
+    results = list(state.joint_calib_results or [])
     sections = []
     event_items = []
     for joint in range(protocol.ENCODER_COUNT):

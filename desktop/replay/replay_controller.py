@@ -213,7 +213,7 @@ class ReplayController:
         system_state = int(getattr(state, "system_state", -1))
         if not replay_start_state_allowed(system_state):
             return "P4 must be in READY or RUN_FEEDBACK before Replay can start", None, []
-        current_active = int(getattr(state, "active_joint_mask", 0) or 0) & ALL_JOINTS_MASK
+        current_active = int(state.active_joint_mask) & ALL_JOINTS_MASK
         if current_active == 0:
             return "The current active joint scope is empty", None, []
         source_mask = int(trace.active_joint_mask) & ALL_JOINTS_MASK
@@ -305,7 +305,7 @@ class ReplayController:
         if effective_mask == 0:
             return "CSV and current P4 state have no calibrated joints in common", None, []
 
-        baseline = list(getattr(state, "angles", []) or [])
+        baseline = list(state.angles or [])
         if len(baseline) != ENCODER_COUNT:
             baseline = [0.0] * ENCODER_COUNT
         baseline = [
@@ -461,7 +461,7 @@ class ReplayController:
             return f"P4 left READY/RUN_FEEDBACK, state={system_state}"
         # 碰撞 HOLD 只冻结对应关节的舵机 ABS，不是遥操/Replay暂停条件。
         # 必须继续发送后续目标，P4才能在目标反向回撤至少1°时解除 HOLD。
-        current_active = int(getattr(state, "active_joint_mask", 0) or 0)
+        current_active = int(state.active_joint_mask)
         if active_mask & ~current_active:
             return "Active scope changed during Replay"
         return ""
@@ -662,8 +662,8 @@ class ReplayController:
         """普通Stop冻结当前关节角；E-STOP由更高层直接切断控制，不在此补发。"""
         try:
             state = self.backend.get_state_snapshot()
-            angles = list(getattr(state, "angles", []) or [])
-            joint_mask = int(getattr(state, "active_joint_mask", 0) or 0)
+            angles = list(state.angles or [])
+            joint_mask = int(state.active_joint_mask)
             if len(angles) != ENCODER_COUNT or joint_mask == 0:
                 return
             self.backend.send_joint_targets(

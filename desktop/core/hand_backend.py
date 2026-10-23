@@ -349,7 +349,7 @@ class HandBackend(ApplicationActions):
         valid_mask = (1 << ENCODER_COUNT) - 1
         if self._requested_active_joint_mask is not None:
             return int(self._requested_active_joint_mask) & valid_mask
-        return int(getattr(state, "active_joint_mask", 0) or 0) & valid_mask
+        return int(state.active_joint_mask) & valid_mask
 
     def _apply_joint_workspace_guard(
         self,
@@ -601,9 +601,9 @@ class HandBackend(ApplicationActions):
     def _state_active_scope(state: Optional[HandModel]) -> Tuple[int, int, bool]:
         """读取 P4 已确认的 active scope，供 ROS2 授权绑定与逐帧核验。"""
         return (
-            int(getattr(state, "active_motor_mask", 0) or 0),
-            int(getattr(state, "active_joint_mask", 0) or 0),
-            bool(getattr(state, "require_can_feedback", False)),
+            int(state.active_motor_mask),
+            int(state.active_joint_mask),
+            bool(state.require_can_feedback),
         )
 
     def _set_ros2_output_armed_locked(self, armed: bool, *, reason: str) -> Tuple[bool, str]:
@@ -626,7 +626,7 @@ class HandBackend(ApplicationActions):
             return False, "ROS2 enable blocked: P4 serial is not connected"
 
         state = self.get_current_state()
-        if not bool(getattr(state, "protocol_compatible", False)):
+        if not bool(state.protocol_compatible):
             return False, "ROS2 enable blocked: protocol/model handshake unconfirmed"
         scope = self._requested_active_scope or self._state_active_scope(state)
         if int(scope[1]) == 0:
