@@ -7,7 +7,8 @@
     234,
     239,
     245,
-    247
+    247,
+    250
   ],
   "description": "MMHand Desktop 与 ESP32-P4 当前唯一上位串口协议契约",
   "maintenance_note": "只修改本文件，再运行 tools/generate_upper_protocol.py；payload_bytes 不包含命令字和帧尾",
@@ -333,16 +334,10 @@
       "description": "按位请求静态状态、标定快照、路由和产品指纹"
     },
     {
-      "name": "CMD_TASK_DIAG_SUBSCRIBE",
+      "name": "CMD_DIAGNOSTICS_SUBSCRIBE",
       "value": 238,
-      "payload_bytes": 1,
-      "description": "打开或关闭 RTOS 任务诊断按需上报"
-    },
-    {
-      "name": "CMD_CONTROL_DIAGNOSTICS",
-      "value": 250,
       "payload_bytes": 2,
-      "description": "控制诊断订阅：启用字节和1至100控制周期采样分频"
+      "description": "诊断订阅：bit0 任务诊断、bit1 控制 trace；1 字节分频"
     },
     {
       "name": "CMD_SERVO_REBASE_ZERO",

@@ -1237,16 +1237,14 @@ def build_state_sync_request_cmd(sync_mask: int = STATE_SYNC_ALL) -> bytes:
     return _build_command_frame(CMD_STATE_SYNC_REQUEST, struct.pack(">I", mask))
 
 
-def build_task_diag_subscribe_cmd(enabled: bool) -> bytes:
-    """按窗口生命周期开启或关闭 P4 Task Runtime 诊断流。"""
-    return _build_command_frame(CMD_TASK_DIAG_SUBSCRIBE, bytes([1 if enabled else 0]))
-
-
-def build_control_trace_subscribe_cmd(enabled: bool, divisor: int = 5) -> bytes:
-    """仅在数据记录期间开启同一 P4 时钟的控制跟踪流。"""
+def build_diagnostics_subscribe_cmd(flags: int, divisor: int = 5) -> bytes:
+    """Subscribe diagnostics: bit0 task runtime, bit1 control trace."""
+    flags = int(flags)
     if isinstance(divisor, bool) or int(divisor) != divisor or not 1 <= divisor <= 100:
-        raise ValueError("Control trace divisor must be 1..100")
-    return _build_command_frame(CMD_CONTROL_DIAGNOSTICS, bytes([1 if enabled else 0, divisor]))
+        raise ValueError("Diagnostics divisor must be 1..100")
+    if not 0 <= flags <= 3:
+        raise ValueError("Diagnostics flags must be 0..3")
+    return _build_command_frame(CMD_DIAGNOSTICS_SUBSCRIBE, bytes([flags, divisor]))
 
 
 def build_manual_encoder_single_cmd(joint: int, min_raw: int, max_raw: int) -> bytes:

@@ -71,8 +71,7 @@ inline constexpr uint8_t CMD_ROPE_INIT = 0xE9; ///< 按 21 位关节掩码启动
 inline constexpr uint8_t CMD_CLEAR_CALIBRATION_SCOPE = 0xEB; ///< 按电机位图清除关联关节 Auto/LUT
 inline constexpr uint8_t CMD_SERVO_RESET_ZERO = 0xEC; ///< 标定前归零所选舵机硬件圈数并清除对应多圈锚点
 inline constexpr uint8_t CMD_STATE_SYNC_REQUEST = 0xED; ///< 按位请求静态状态、标定快照、路由和产品指纹
-inline constexpr uint8_t CMD_TASK_DIAG_SUBSCRIBE = 0xEE; ///< 打开或关闭 RTOS 任务诊断按需上报
-inline constexpr uint8_t CMD_CONTROL_DIAGNOSTICS = 0xFA; ///< 控制诊断订阅：启用字节和1至100控制周期采样分频
+inline constexpr uint8_t CMD_DIAGNOSTICS_SUBSCRIBE = 0xEE; ///< 诊断订阅：bit0 任务诊断、bit1 控制 trace；1 字节分频
 inline constexpr uint8_t CMD_SERVO_REBASE_ZERO = 0xF0; ///< 按电机位图用0x0B校正舵机实际ABS为0，读回确认后P4 ABS同步为0
 inline constexpr uint8_t CMD_MOTOR_ABS_ZERO = 0xF1; ///< Direct电机页按非空电机位图将当前位置设为ABS零点；复用硬件0x0B归零事务及0x19最终结果
 inline constexpr uint8_t CMD_MOTOR_DIRECT_RELEASE = 0xF2; ///< 结束当前普通直控并保留扭矩和故障；非零token匹配已执行事务，零匹配当前直控代际
@@ -118,8 +117,7 @@ inline constexpr size_t kServoResetZeroPayloadBytes = 4;
 inline constexpr size_t kServoRebaseZeroPayloadBytes = 4;
 inline constexpr size_t kMotorDirectReleasePayloadBytes = 4;
 inline constexpr size_t kStateSyncRequestPayloadBytes = 4;
-inline constexpr size_t kTaskDiagSubscribePayloadBytes = 1;
-inline constexpr size_t kControlDiagnosticsPayloadBytes = 2;
+inline constexpr size_t kDiagnosticsSubscribePayloadBytes = 2;
 inline constexpr size_t kSerialRxBufferSize = 1024;
 inline constexpr int32_t kEncoderModulo = 16384;
 
@@ -148,8 +146,7 @@ inline constexpr size_t generatedCommandPayloadLength(uint8_t command)
         case CMD_CLEAR_CALIBRATION_SCOPE: return kClearCalibrationScopePayloadBytes;
         case CMD_SERVO_RESET_ZERO: return kServoResetZeroPayloadBytes;
         case CMD_STATE_SYNC_REQUEST: return kStateSyncRequestPayloadBytes;
-        case CMD_TASK_DIAG_SUBSCRIBE: return kTaskDiagSubscribePayloadBytes;
-        case CMD_CONTROL_DIAGNOSTICS: return kControlDiagnosticsPayloadBytes;
+        case CMD_DIAGNOSTICS_SUBSCRIBE: return kDiagnosticsSubscribePayloadBytes;
         case CMD_SERVO_REBASE_ZERO: return kServoRebaseZeroPayloadBytes;
         case CMD_MOTOR_ABS_ZERO: return 4;
         case CMD_MOTOR_DIRECT_RELEASE: return kMotorDirectReleasePayloadBytes;

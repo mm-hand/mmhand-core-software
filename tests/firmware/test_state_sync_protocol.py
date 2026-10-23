@@ -3,16 +3,16 @@
 import pytest
 
 from desktop.core.generated_upper_protocol import (
+    CMD_DIAGNOSTICS_SUBSCRIBE,
     CMD_STATE_SYNC_REQUEST,
-    CMD_TASK_DIAG_SUBSCRIBE,
     COMMAND_PAYLOAD_LENGTHS,
     STATE_SYNC_ALL,
     STATE_SYNC_JOINT_CALIBRATION,
     STATE_SYNC_PRODUCT_FINGERPRINT,
 )
 from desktop.core.protocol import (
+    build_diagnostics_subscribe_cmd,
     build_state_sync_request_cmd,
-    build_task_diag_subscribe_cmd,
 )
 
 
@@ -30,10 +30,10 @@ def test_state_sync_request_rejects_unknown_bits() -> None:
 
 
 def test_task_diag_subscription_has_explicit_on_off_payload() -> None:
-    assert COMMAND_PAYLOAD_LENGTHS[CMD_TASK_DIAG_SUBSCRIBE] == 1
-    assert build_task_diag_subscribe_cmd(True) == bytes(
-        [0xFE, 0x03, CMD_TASK_DIAG_SUBSCRIBE, 0x01, 0xFF]
+    assert COMMAND_PAYLOAD_LENGTHS[CMD_DIAGNOSTICS_SUBSCRIBE] == 2
+    assert build_diagnostics_subscribe_cmd(1) == bytes(
+        [0xFE, 0x04, CMD_DIAGNOSTICS_SUBSCRIBE, 0x01, 0x05, 0xFF]
     )
-    assert build_task_diag_subscribe_cmd(False) == bytes(
-        [0xFE, 0x03, CMD_TASK_DIAG_SUBSCRIBE, 0x00, 0xFF]
+    assert build_diagnostics_subscribe_cmd(0) == bytes(
+        [0xFE, 0x04, CMD_DIAGNOSTICS_SUBSCRIBE, 0x00, 0x05, 0xFF]
     )

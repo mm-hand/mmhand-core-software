@@ -237,7 +237,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
     if (cmd == CMD_STOP) cancelServoMaintenance();
     if (servoMaintenanceBlocksCommands() && cmd != CMD_STOP && cmd != CMD_HOST_HEARTBEAT &&
         cmd != CMD_STATE_SYNC_REQUEST && cmd != CMD_MANUAL_ENCODER_QUERY &&
-        cmd != CMD_TASK_DIAG_SUBSCRIBE && cmd != CMD_CONTROL_DIAGNOSTICS) {
+        cmd != CMD_DIAGNOSTICS_SUBSCRIBE) {
         sendProtoAckPacket(cmd, sharedData->system_state, PROTO_ACK_STATUS_UNSUPPORTED_MODE);
         return;
     }
@@ -285,31 +285,18 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         }
         return;
     }
-    if (cmd == CMD_TASK_DIAG_SUBSCRIBE)
+    if (cmd == CMD_DIAGNOSTICS_SUBSCRIBE)
     {
-        const uint8_t enabled = frame[1];
-        if (enabled > 1) {
-            sendProtoAckPacket(CMD_TASK_DIAG_SUBSCRIBE,
+        const uint8_t flags = frameLen >= 3 ? frame[1] : 0xFF;
+        const uint8_t divisor = frameLen >= 3 ? frame[2] : 0;
+        if (flags > 3 || divisor == 0 || divisor > 100) {
+            sendProtoAckPacket(CMD_DIAGNOSTICS_SUBSCRIBE,
                                sharedData->system_state,
                                PROTO_ACK_STATUS_INVALID_DATA);
         } else {
-            setHostTaskDiagSubscribed(enabled != 0, nowMs);
-            sendProtoAckPacket(CMD_TASK_DIAG_SUBSCRIBE,
-                               sharedData->system_state,
-                               PROTO_ACK_STATUS_OK);
-        }
-        return;
-    }
-    if (cmd == CMD_CONTROL_DIAGNOSTICS)
-    {
-        const uint8_t enabled = frame[1];
-        if (enabled > 1 || frame[2] == 0 || frame[2] > 100) {
-            sendProtoAckPacket(CMD_CONTROL_DIAGNOSTICS,
-                               sharedData->system_state,
-                               PROTO_ACK_STATUS_INVALID_DATA);
-        } else {
-            setHostControlTraceSubscribed(enabled != 0, frame[2]);
-            sendProtoAckPacket(CMD_CONTROL_DIAGNOSTICS,
+            setHostTaskDiagSubscribed((flags & 1) != 0, nowMs);
+            setHostControlTraceSubscribed((flags & 2) != 0, divisor);
+            sendProtoAckPacket(CMD_DIAGNOSTICS_SUBSCRIBE,
                                sharedData->system_state,
                                PROTO_ACK_STATUS_OK);
         }

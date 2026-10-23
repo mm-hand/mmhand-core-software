@@ -175,6 +175,9 @@ class HandController:
         self._last_coordinate_bookkeeping_error = ""
 
         self._control_mode = ControlMode.JOINT_ANGLE
+        self._task_diag_subscribed = False
+        self._control_trace_subscribed = False
+        self._control_trace_divisor = 5
         self._started = False
         self._update_thread: Optional[threading.Thread] = None
         self._persistence_queue = queue.Queue(maxsize=1)
@@ -482,17 +485,26 @@ class HandController:
             self._state_sync_last_request_at = time.monotonic()
         return sent
 
+    def _send_diagnostics_subscription(self) -> bool:
+        flags = (1 if self._task_diag_subscribed else 0) | (
+            2 if self._control_trace_subscribed else 0)
+        return bool(self.comm.send_command(
+            ("diagnostics_subscribe", flags, self._control_trace_divisor)))
+
     def set_task_diag_subscription(self, enabled: bool) -> bool:
         """仅在 Task Runtime 窗口打开期间订阅高频任务诊断。"""
         if not self.comm:
             return False
-        return bool(self.comm.send_command(("task_diag_subscribe", bool(enabled))))
+        self._task_diag_subscribed = bool(enabled)
+        return self._send_diagnostics_subscription()
 
     def set_control_trace_subscription(self, enabled: bool, divisor: int = 5) -> bool:
         """数据记录期间订阅 P4 同周期目标/反馈快照。"""
         if not self.comm:
             return False
-        return bool(self.comm.send_command(("control_trace_subscribe", bool(enabled), int(divisor))))
+        self._control_trace_subscribed = bool(enabled)
+        self._control_trace_divisor = int(divisor)
+        return self._send_diagnostics_subscription()
 
     def set_recording_packet_sink(self, sink) -> None:
         self._recording_packet_sink = sink

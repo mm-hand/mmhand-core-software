@@ -69,8 +69,7 @@ CMD_ROPE_INIT = 0xE9  # 按 21 位关节掩码启动 P4 Rope Init
 CMD_CLEAR_CALIBRATION_SCOPE = 0xEB  # 按电机位图清除关联关节 Auto/LUT
 CMD_SERVO_RESET_ZERO = 0xEC  # 标定前归零所选舵机硬件圈数并清除对应多圈锚点
 CMD_STATE_SYNC_REQUEST = 0xED  # 按位请求静态状态、标定快照、路由和产品指纹
-CMD_TASK_DIAG_SUBSCRIBE = 0xEE  # 打开或关闭 RTOS 任务诊断按需上报
-CMD_CONTROL_DIAGNOSTICS = 0xFA  # 控制诊断订阅：启用字节和1至100控制周期采样分频
+CMD_DIAGNOSTICS_SUBSCRIBE = 0xEE  # 诊断订阅：bit0 任务诊断、bit1 控制 trace；1 字节分频
 CMD_SERVO_REBASE_ZERO = 0xF0  # 按电机位图用0x0B校正舵机实际ABS为0，读回确认后P4 ABS同步为0
 CMD_MOTOR_ABS_ZERO = 0xF1  # Direct电机页按非空电机位图将当前位置设为ABS零点；复用硬件0x0B归零事务及0x19最终结果
 CMD_MOTOR_DIRECT_RELEASE = 0xF2  # 结束当前普通直控并保留扭矩和故障；非零token匹配已执行事务，零匹配当前直控代际
@@ -152,8 +151,7 @@ COMMAND_PAYLOAD_LENGTHS = {
     CMD_CLEAR_CALIBRATION_SCOPE: 4,
     CMD_SERVO_RESET_ZERO: 4,
     CMD_STATE_SYNC_REQUEST: 4,
-    CMD_TASK_DIAG_SUBSCRIBE: 1,
-    CMD_CONTROL_DIAGNOSTICS: 2,
+    CMD_DIAGNOSTICS_SUBSCRIBE: 2,
     CMD_SERVO_REBASE_ZERO: 4,
     CMD_MOTOR_ABS_ZERO: 4,
     CMD_MOTOR_DIRECT_RELEASE: 4,

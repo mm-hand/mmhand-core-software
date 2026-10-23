@@ -8,13 +8,13 @@ from desktop.core.communication.ack_tracker import AckTracker
 from desktop.core.communication.packet_router import P4PacketRouter
 from desktop.core.communication.state_reducer import StateReducer
 from desktop.core.generated_upper_protocol import (
-    CMD_CONTROL_DIAGNOSTICS,
+    CMD_DIAGNOSTICS_SUBSCRIBE,
     PACKET_TYPE_CONTROL_TRACE,
     PACKET_TYPE_CONTROL_COMPONENTS,
     PACKET_TYPE_SERVO_ANGLE,
 )
 from desktop.core.protocol import (
-    build_control_trace_subscribe_cmd,
+    build_diagnostics_subscribe_cmd,
     parse_control_trace_packet,
 )
 
@@ -41,11 +41,11 @@ def _business_payload() -> bytes:
 
 
 def test_control_trace_subscription_has_explicit_on_off_payload() -> None:
-    assert build_control_trace_subscribe_cmd(True) == bytes(
-        [0xFE, 0x04, CMD_CONTROL_DIAGNOSTICS, 0x01, 0x05, 0xFF]
+    assert build_diagnostics_subscribe_cmd(2) == bytes(
+        [0xFE, 0x04, CMD_DIAGNOSTICS_SUBSCRIBE, 0x02, 0x05, 0xFF]
     )
-    assert build_control_trace_subscribe_cmd(False) == bytes(
-        [0xFE, 0x04, CMD_CONTROL_DIAGNOSTICS, 0x00, 0x05, 0xFF]
+    assert build_diagnostics_subscribe_cmd(0) == bytes(
+        [0xFE, 0x04, CMD_DIAGNOSTICS_SUBSCRIBE, 0x00, 0x05, 0xFF]
     )
 
 
