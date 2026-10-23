@@ -371,3 +371,26 @@ def test_unusable_host_snapshot_requests_aa_recalibration(centered_io, fault):
         snapshot['motor_abs_limit_valid_bitmap'] = '0x0'
     assert usable_snapshot_aa_result(snapshot, 0, state, io.urdf_config_crc()) is None
     assert missing_aa_joint_mask(1 << 1, snapshot, state, io.urdf_config_crc()) == 1
+
+
+def test_midpoint_may_start_outside_the_trusted_window_and_move_inward(centered_io):
+    # 拟合直线的端部外推与实际 ABS 有偏差：起点在窗口外 120 counts 时，
+    # 向窗口内运动必须允许，否则第一次目标下发就中止。
+    io = centered_io
+    state = io.controller.current_state
+    primary, secondary = joint_motors(0)
+    state.servo_angles[primary], state.servo_angles[secondary] = -120, 120
+    state.motor_abs_limit_min[primary], state.motor_abs_limit_max[primary] = -60, 400
+    state.motor_abs_limit_min[secondary], state.motor_abs_limit_max[secondary] = -400, 60
+    assert io.prepare_finger_aa(1) == (True, '')
+
+
+def test_midpoint_still_aborts_when_the_next_target_moves_further_outside(centered_io):
+    io = centered_io
+    state = io.controller.current_state
+    primary, secondary = joint_motors(0)
+    state.servo_angles[primary], state.servo_angles[secondary] = 120, -120
+    state.motor_abs_limit_min[primary], state.motor_abs_limit_max[primary] = -400, 60
+    state.motor_abs_limit_min[secondary], state.motor_abs_limit_max[secondary] = -60, 400
+    ok, message = io.prepare_finger_aa(1)
+    assert not ok and 'trusted motor limits' in message

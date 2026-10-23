@@ -562,7 +562,12 @@ class HostCalibrationIO:
                             # Never accumulate a target far ahead of actual feedback.
                             actual = state.servo_angles[motor]
                             targets[motor] = max(actual - 40, min(actual + 40, command))
-                    if any(not limits[m][0] <= value <= limits[m][1] for m, value in targets.items()):
+                    # Trusted-window overshoot at the biased ends is expected; only
+                    # forbid moving further outside than the current actual position.
+                    if any(max(limits[m][0] - value, value - limits[m][1], 0)
+                           > max(limits[m][0] - state.servo_angles[m],
+                                 state.servo_angles[m] - limits[m][1], 0)
+                           for m, value in targets.items()):
                         raise ValueError('AA midpoint movement exceeded trusted motor limits')
                     if not self.publish(targets, speed, params.servoAcc):
                         raise ValueError(self.motion_publish_error or 'AA midpoint target publish failed')
