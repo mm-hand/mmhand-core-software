@@ -89,6 +89,11 @@ class CalibrationWorkflowService:
         with self._lock:
             return self._import_worker_active
 
+    def last_diagnostic(self):
+        """本轮标定最近一次失败记录；没有则 None。"""
+        io = getattr(self._controller, "_host_calibration_io", None)
+        return getattr(io, "_last_diag", None)
+
     def register_callback(
         self, callback: Callable[[CalibrationWorkflowEvent], None]
     ) -> None:

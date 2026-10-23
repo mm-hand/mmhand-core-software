@@ -1602,8 +1602,10 @@ class ApplicationActions(IdResetActions):
                 'curves': deepcopy(list(self._curve_history)) if include_curves else [],
                 'control_components': deepcopy(list(self._component_history)) if include_curves else [],
                 'replay': asdict(self._replay_service.status()) if self._replay_service else {},
+                # ponytail: 'results' 目前无界面读取；确认没有外部使用者后再整键删除。
                 'calibration': {'status': state.calib_status, 'results': deepcopy(state.joint_calib_results),
-                                'warning': warning, 'diagnostic': format_calibration_diagnostic(state)},
+                                'warning': warning,
+                                'diagnostic': format_calibration_diagnostic(self._calibration_workflow.last_diagnostic())},
                 'diagnostics': {'state': state.system_state, 'owner': state.servo_target_owner, 'faults': state.system_fault_bitmap,
                                 'receive_age_ms': int((now - p4_received_at) * 1000) if p4_received_at and now >= p4_received_at else None,
                                 'status_age_ms': int((now - state.system_status_last_rx_ts) * 1000) if state.system_status_last_rx_ts else None,

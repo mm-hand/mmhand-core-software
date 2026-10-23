@@ -101,12 +101,6 @@
       "description": "全量触觉阵列"
     },
     {
-      "name": "PACKET_TYPE_CALIB_DIAG",
-      "value": 16,
-      "timestamp": false,
-      "description": "结构化标定诊断"
-    },
-    {
       "name": "PACKET_TYPE_TASK_DIAG",
       "value": 17,
       "timestamp": false,

@@ -142,7 +142,6 @@ def test_zero_interval_disables_throttle(clock, monkeypatch):
         "system_status",
         "direct_target_result",
         "joint_calibration_snapshot",
-        "calibration_diagnostic",
         "manual_reference",
         "servo_rebase_zero_result",
         "multiturn_restore_result",

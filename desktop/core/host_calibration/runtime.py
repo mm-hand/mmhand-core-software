@@ -1035,18 +1035,13 @@ class HostCalibrationIO:
         if self.motion_publish_error:
             return self.motion_publish_error
         if isinstance(reason, int):
-            from ..calibration_diagnostics import format_calibration_diagnostic
-            diagnostic = format_calibration_diagnostic(self._state())
-            return diagnostic.get('title') or f'calibration failed (reason={reason})'
+            from ..calibration_diagnostics import CALIBRATION_DIAGNOSTICS
+            spec = CALIBRATION_DIAGNOSTICS.get(int(reason))
+            return (spec.title if spec else '') or f'calibration failed (reason={reason})'
         return str(reason)
 
     def diag(self, reason, phase, joint, motor=255, a=0, b=0, c=0, bitmap=0):
         self._last_diag = (reason, phase, joint, motor, a, b, c, bitmap)
-        self._overlay(calib_diag_valid=True, calib_diag_reason=int(reason),
-                      calib_diag_phase=int(phase), calib_diag_joint=int(joint),
-                      calib_diag_motor=int(motor), calib_diag_value_a=int(a),
-                      calib_diag_value_b=int(b), calib_diag_value_c=int(c),
-                      calib_diag_bitmap=int(bitmap), calib_diag_timestamp_ms=self.now_ms())
 
     def diag_if_empty(self, *args):
         if self._last_diag is None:
@@ -1056,18 +1051,11 @@ class HostCalibrationIO:
         log_session('HOST_CALIB', f'J{joint:02d} M{motor:02d} {state} {details}')
 
     def session_state(self, status, progress=0, joint=255, completed=0, failed=0, **details):
-        fields = {'calib_status': status, 'calib_diag_completed_joint_mask': completed,
-                  'calib_diag_failed_joint_mask': failed}
         if status == 'PENDING':
+            # 新一轮标定开始时清空上一轮的诊断与错误信息。
             self._last_diag = None
             self.motion_publish_error = ''
-            # P4 原任务的旧诊断可能跨 RESET 保留；本轮诊断只由 host 管理。
-            fields.update(calib_diag_valid=False, calib_diag_reason=CALIB_DIAG_REASON_NONE,
-                          calib_diag_phase=CALIB_DIAG_PHASE_NONE, calib_diag_joint=255,
-                          calib_diag_motor=255, calib_diag_value_a=0, calib_diag_value_b=0,
-                          calib_diag_value_c=0, calib_diag_bitmap=0,
-                          calib_diag_timestamp_ms=0, calib_diag_sequence=0)
-        self._overlay(**fields)
+        self._overlay(calib_status=status)
         log_session('HOST_CALIB', f'{status} J{joint:02d} {progress}% '
                     f'completed=0x{completed:X} failed=0x{failed:X}')
 

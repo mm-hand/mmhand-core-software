@@ -21,6 +21,11 @@ from desktop.core.protocol import (
 )
 
 
+def diag_reason(io):
+    """本轮标定最近一次失败原因（diag 元组第 0 项）；没有失败记录返回 None。"""
+    return None if io._last_diag is None else io._last_diag[0]
+
+
 @pytest.fixture
 def io(monkeypatch):
     controller = HandController()
@@ -271,7 +276,7 @@ def test_recovery_keeps_trust_online_route_and_range_gates(io, monkeypatch, fiel
     io._initial_prepared = True
     _recovery_clock(io, monkeypatch)
     assert not io.wait_servo_recovery(4)
-    assert state.calib_diag_reason == runtime.CALIB_DIAG_REASON_SERVO_RECOVERY_TIMEOUT
+    assert diag_reason(io) == runtime.CALIB_DIAG_REASON_SERVO_RECOVERY_TIMEOUT
 
 
 def test_entry_resets_once_before_rebase_without_cancelling_host_session(io, monkeypatch):
@@ -348,7 +353,7 @@ def test_queue_ack_without_execution_confirmation_does_not_advance_machine(io, m
     monkeypatch.setattr(io, '_ensure_motion', lambda: True)
     monkeypatch.setattr(io, '_wait', lambda *_args: False)
     assert not io.publish({2: 200}, 400, 20)
-    assert io.controller.current_state.calib_diag_reason == runtime.CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT
+    assert diag_reason(io) == runtime.CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT
 
 
 def test_remote_execution_and_owner_can_arrive_after_original_100ms(io, monkeypatch):
@@ -387,7 +392,7 @@ def test_queued_ack_without_final_result_fails_with_transport_diagnostic(io, mon
     _recovery_clock(io, monkeypatch)
     io.controller.comm.wait_for_ack.return_value = (runtime.CMD_MOTOR_POS_ABS, 1, 2)
     assert not io.publish({2: 200}, 400, 20)
-    assert io.controller.current_state.calib_diag_value_c == runtime.kHostTargetResultTimeoutMs
+    assert io._last_diag[6] == runtime.kHostTargetResultTimeoutMs
     assert 'execution result timeout' in io.failure_message(16)
     assert io.controller.comm.send_command.call_count == 2  # D3 + 超时后的只读同步查询。
 
@@ -496,21 +501,19 @@ def test_new_session_diagnostics_stay_clear_when_old_p4_failure_arrives(io):
 
     io.diag(runtime.CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
             runtime.CALIB_DIAG_PHASE_SEQUENCE, 0, 1, 2, 3, 4, 3)
-    assert format_calibration_diagnostic(io._state())['active']
+    assert format_calibration_diagnostic(io._last_diag)['active']
     controller = io.controller
     retry = controller.create_host_calibration_io(
         lambda: False, 2, 4, snapshot_store=io.snapshot_store)
     retry.session_state('PENDING')
-    assert not format_calibration_diagnostic(retry._state())['active']
+    assert not format_calibration_diagnostic(retry._last_diag)['active']
     # 原 P4 Auto 任务的旧失败包会跨 RESET 保留；它不拥有 host 本轮诊断。
-    controller.current_state.calib_diag_valid = True
-    controller.current_state.calib_diag_reason = runtime.CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED
     controller._apply_host_calibration_overlay()
-    assert not format_calibration_diagnostic(retry._state())['active']
+    assert not format_calibration_diagnostic(retry._last_diag)['active']
     retry.diag(runtime.CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT,
                runtime.CALIB_DIAG_PHASE_SEQUENCE, 1)
-    assert retry._state().calib_diag_reason == runtime.CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT
-    assert format_calibration_diagnostic(retry._state())['active']
+    assert diag_reason(retry) == runtime.CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT
+    assert format_calibration_diagnostic(retry._last_diag)['active']
 
 
 def test_normal_direct_done_allows_next_step_but_stop_and_foreign_token_do_not(io):
@@ -648,7 +651,7 @@ def test_overloaded_hold_motor_rejects_entire_batch_before_transmission(io, monk
     monkeypatch.setattr(io, 'servo_load', lambda _motor: -800)
     assert not io.publish({2: 200}, 400, 20)
     io.controller.comm.send_command.assert_not_called()
-    assert io.controller.current_state.calib_diag_reason == runtime.CALIB_DIAG_REASON_OVERLOAD
+    assert diag_reason(io) == runtime.CALIB_DIAG_REASON_OVERLOAD
 
 
 def test_rebased_scope_cannot_reappear_through_host_overlay(io):

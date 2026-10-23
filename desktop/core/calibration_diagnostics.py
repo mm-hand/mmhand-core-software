@@ -224,22 +224,17 @@ PHASE_NAMES = {
 }
 
 
-def format_calibration_diagnostic(state: object) -> dict:
-    valid = bool(getattr(state, "calib_diag_valid", False))
-    reason = int(getattr(state, "calib_diag_reason", 0) or 0)
-    phase = int(getattr(state, "calib_diag_phase", 0) or 0)
-    joint = int(getattr(state, "calib_diag_joint", 0xFF) or 0)
-    motor = int(getattr(state, "calib_diag_motor", 0xFF) or 0)
-    values = tuple(
-        int(getattr(state, f"calib_diag_value_{suffix}", 0) or 0)
-        for suffix in ("a", "b", "c")
-    )
-    bitmap = int(getattr(state, "calib_diag_bitmap", 0) or 0)
-    timestamp_ms = int(getattr(state, "calib_diag_timestamp_ms", 0) or 0)
-    sequence = int(getattr(state, "calib_diag_sequence", 0) or 0)
-    completed = int(getattr(state, "calib_diag_completed_joint_mask", 0) or 0)
-    failed = int(getattr(state, "calib_diag_failed_joint_mask", 0) or 0)
-    active = valid and reason != protocol.CALIB_DIAG_REASON_NONE
+def format_calibration_diagnostic(diag) -> dict:
+    """把本轮标定失败记录 (reason, phase, joint, motor, a, b, c, bitmap) 变成可读提示。
+
+    ``diag`` 为 None 表示本轮没有失败记录（未开始或已成功）。
+    """
+    if diag is None:
+        reason, phase, joint, motor, values, bitmap = 0, 0, 0, 0, (0, 0, 0), 0
+    else:
+        reason, phase, joint, motor, a, b, c, bitmap = diag
+        values = (a, b, c)
+    active = diag is not None and reason != protocol.CALIB_DIAG_REASON_NONE
     spec = CALIBRATION_DIAGNOSTICS.get(reason)
     title = spec.title if active and spec else (f"Unknown calibration reason: {reason}" if active else "")
     lines = []
@@ -249,8 +244,6 @@ def format_calibration_diagnostic(state: object) -> dict:
         joint_text = f"J{joint:02d}" if 0 <= joint < protocol.ENCODER_COUNT else "J?"
         motor_text = f"M{motor:02d}" if 0 <= motor < protocol.MOTOR_COUNT else "M?"
         lines.extend((f"Cause: {title}", f"Phase: {phase_text}", f"Affected: {joint_text}, {motor_text}"))
-        if completed or failed:
-            lines.append(f"Result: completed={_hex(completed)}, failed={_hex(failed)}")
         if spec:
             lines.append(f"Raw data: {_format_from_spec(spec, values, bitmap)}")
             suggestions.append(spec.suggestion)
@@ -265,7 +258,7 @@ def format_calibration_diagnostic(state: object) -> dict:
         "title": title,
         "lines": lines,
         "suggestions": suggestions,
-        "key": f"{sequence}:{reason}:{phase}:{joint}:{motor}:{values[0]}:{values[1]}:{values[2]}:{bitmap:08X}:{timestamp_ms}",
+        "key": f"{reason}:{phase}:{joint}:{motor}:{values[0]}:{values[1]}:{values[2]}:{bitmap:08X}",
     }
 
 

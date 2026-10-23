@@ -78,7 +78,6 @@ STATE_SNAPSHOT_CRITICAL_PACKET_KINDS = frozenset({
     "system_status",            # 系统状态/连接性/标定状态权威来源
     "direct_target_result",     # 直接目标执行最终结果
     "joint_calibration_snapshot",   # 关节标定快照
-    "calibration_diagnostic",   # 标定诊断进度
     "manual_reference",         # Manual 参考表回读
     "servo_rebase_zero_result",     # 当前位置设零最终结果
     "multiturn_restore_result",     # 多圈恢复最终结果
@@ -112,7 +111,6 @@ class StateReducer:
         "servo_logical_range": lambda self, owner, model, payload, time_ms, rx_at: self._apply_servo_logical_range(owner, model, payload, time_ms, rx_at),
         "manual_reference": lambda self, owner, model, payload, time_ms, rx_at: self._apply_manual_reference(owner, model, payload, time_ms, rx_at),
         "joint_calibration_snapshot": lambda self, owner, model, payload, time_ms, rx_at: self._apply_joint_calibration_snapshot(owner, model, payload, time_ms, rx_at),
-        "calibration_diagnostic": lambda self, owner, model, payload, time_ms, rx_at: self._apply_calibration_diagnostic(owner, model, payload, time_ms, rx_at),
         "adaptive_kp": lambda self, owner, model, payload, time_ms, rx_at: self._apply_adaptive_kp(owner, model, payload, time_ms, rx_at),
         "control_trace": lambda self, owner, model, payload, time_ms, rx_at: self._apply_control_trace(owner, model, payload, time_ms, rx_at),
         "task_diagnostic": lambda self, owner, model, payload, time_ms, rx_at: self._apply_task_diagnostic(owner, model, payload, time_ms, rx_at),
@@ -807,34 +805,6 @@ class StateReducer:
                 new_result = dict(parsed)
                 model.joint_calib_results[joint_idx] = new_result
                 emitted = True
-        return emitted
-
-    def _apply_calibration_diagnostic(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
-        """Apply one calibration_diagnostic packet within the RX batch boundary."""
-        emitted = False
-        parsed = owner._parse_protocol_payload("parse_calib_diag_packet", payload)
-        if parsed is not None:
-            owner._log_auto_calib_diag(parsed)
-            model.calib_diag_valid = bool(parsed.get("valid", False))
-            model.calib_diag_reason = int(parsed.get("reason", 0) or 0)
-            model.calib_diag_phase = int(parsed.get("phase", 0) or 0)
-            model.calib_diag_joint = int(parsed.get("joint", 0xFF) or 0)
-            model.calib_diag_motor = int(parsed.get("motor", 0xFF) or 0)
-            model.calib_diag_value_a = int(parsed.get("valueA", 0) or 0)
-            model.calib_diag_value_b = int(parsed.get("valueB", 0) or 0)
-            model.calib_diag_value_c = int(parsed.get("valueC", 0) or 0)
-            model.calib_diag_bitmap = int(parsed.get("bitmap", 0) or 0)
-            model.calib_diag_timestamp_ms = int(parsed.get("timestamp_ms", 0) or 0)
-            model.calib_diag_sequence = int(parsed.get("sequence", 0) or 0)
-            model.calib_diag_completed_joint_mask = int(
-                parsed.get("completed_joint_mask", 0) or 0
-            )
-            model.calib_diag_failed_joint_mask = int(
-                parsed.get("failed_joint_mask", 0) or 0
-            )
-            model.p4_time_ms = model.calib_diag_timestamp_ms
-            model.has_p4_time = True
-            emitted = True
         return emitted
 
     def _apply_adaptive_kp(self, owner, model, payload, packet_p4_time_ms, _host_received_at):

@@ -480,19 +480,6 @@ class HandModel:
     servo_logical_range_min: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     servo_logical_range_max: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     joint_calib_results: List[Optional[dict]] = field(default_factory=lambda: [None] * ENCODER_COUNT)
-    calib_diag_valid: bool = False
-    calib_diag_reason: int = 0
-    calib_diag_phase: int = 0
-    calib_diag_joint: int = 0xFF
-    calib_diag_motor: int = 0xFF
-    calib_diag_value_a: int = 0
-    calib_diag_value_b: int = 0
-    calib_diag_value_c: int = 0
-    calib_diag_bitmap: int = 0
-    calib_diag_timestamp_ms: int = 0
-    calib_diag_sequence: int = 0
-    calib_diag_completed_joint_mask: int = 0
-    calib_diag_failed_joint_mask: int = 0
     task_runtime: dict = field(default_factory=dict)
     task_runtime_last_rx_ts: float = 0.0
     # Task Runtime 七包窗口完整性诊断；完整快照和正在接收的分包必须分开记录。
