@@ -1675,20 +1675,10 @@ class HandController:
             list(manual_min_raw),
             list(manual_max_raw),
         ))
-        ack = self.comm.wait_for_ack(
-            CMD_MANUAL_ENCODER_REFERENCE,
-            MANUAL_REFERENCE_ACK_TIMEOUT_S,
-            received_after_monotonic=sent_at,
-        )
-        if ack is None or int(ack[2]) not in (
-            PROTO_ACK_STATUS_OK,
-            PROTO_ACK_STATUS_QUEUED,
-        ):
+        status = self._ack_status(CMD_MANUAL_ENCODER_REFERENCE, MANUAL_REFERENCE_ACK_TIMEOUT_S, sent_at)
+        if status not in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED):
             return False
-        if (
-            int(ack[2]) == PROTO_ACK_STATUS_QUEUED
-            and not self._wait_for_manual_reference_commit_result(sent_at)
-        ):
+        if status == PROTO_ACK_STATUS_QUEUED and not self._wait_for_manual_reference_commit_result(sent_at):
             return False
         expected_mask = (1 << ENCODER_COUNT) - 1
         expected_crc = manual_encoder_reference_crc(
@@ -1723,17 +1713,21 @@ class HandController:
                 )
         return verified
 
+    def _ack_status(self, command_id: int, timeout_s: float, sent_at: float):
+        """等一条已发出命令的 ACK 并返回其状态码；超时返回 None。
+
+        发命令仍是调用方的事（send_command）。``sent_at`` 取发命令前的
+        monotonic，保证不会读到发送之前的旧 ACK。
+        """
+        ack = self.comm.wait_for_ack(command_id, timeout_s, received_after_monotonic=sent_at)
+        return None if ack is None else int(ack[2])
+
     def query_manual_encoder_references(self, timeout_s: float = 2.0) -> bool:
         if not self.comm:
             return False
         sent_at = time.monotonic()
         self.comm.send_command(("state_sync", STATE_SYNC_MANUAL_REFERENCE))
-        ack = self.comm.wait_for_ack(
-            CMD_STATE_SYNC_REQUEST,
-            timeout_s,
-            received_after_monotonic=sent_at,
-        )
-        if ack is None or int(ack[2]) != 0:
+        if self._ack_status(CMD_STATE_SYNC_REQUEST, timeout_s, sent_at) != PROTO_ACK_STATUS_OK:
             return False
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
@@ -1993,8 +1987,7 @@ class HandController:
             joint_mask,
             require_can,
         ))
-        ack = self.comm.wait_for_ack(CMD_ACTIVE_SCOPE, ACTIVE_SCOPE_ACK_TIMEOUT_S, received_after_monotonic=sent_at)
-        return bool(ack is not None and int(ack[2]) == 0)
+        return self._ack_status(CMD_ACTIVE_SCOPE, ACTIVE_SCOPE_ACK_TIMEOUT_S, sent_at) == PROTO_ACK_STATUS_OK
 
     def invalidate_runtime_calibration_scope(
         self, motor_mask: int, joint_mask: int, *, reason: str = "",
@@ -2538,6 +2531,7 @@ class HandController:
             reset_ack = comm.wait_for_ack(
                 CMD_RESET, CALIBRATION_TURN_RESET_ACK_TIMEOUT_S, received_after_monotonic=reset_sent_at,
             )
+            # 这里还校验 ack[0] 回显命令号，故不能用 _ack_status（它只返回状态码）。
             if (changed() or reset_ack is None or int(reset_ack[0]) != CMD_RESET
                     or int(reset_ack[2]) not in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED)):
                 return failure("maintenance RESET timeout/reject or cancelled")
@@ -3023,20 +3017,10 @@ class HandController:
                 snapshot_min[joint_idx],
                 snapshot_max[joint_idx],
             ))
-            ack = self.comm.wait_for_ack(
-                CMD_MANUAL_ENCODER_SINGLE,
-                MANUAL_REFERENCE_ACK_TIMEOUT_S,
-                received_after_monotonic=sent_at,
-            )
-            if ack is None or int(ack[2]) not in (
-                PROTO_ACK_STATUS_OK,
-                PROTO_ACK_STATUS_QUEUED,
-            ):
+            status = self._ack_status(CMD_MANUAL_ENCODER_SINGLE, MANUAL_REFERENCE_ACK_TIMEOUT_S, sent_at)
+            if status not in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED):
                 return False, f"J{joint_idx:02d} Manual RAM restore rejected"
-            if (
-                int(ack[2]) == PROTO_ACK_STATUS_QUEUED
-                and not self._wait_for_manual_reference_commit_result(sent_at)
-            ):
+            if status == PROTO_ACK_STATUS_QUEUED and not self._wait_for_manual_reference_commit_result(sent_at):
                 return False, f"J{joint_idx:02d} Manual commit timed out"
             wrote_any = True
 
@@ -3183,12 +3167,7 @@ class HandController:
             self.comm.send_command(
                 ("calib_load_limits", motor_update_mask, valid_bitmap, mins, maxs)
             )
-            ack = self.comm.wait_for_ack(
-                CMD_CALIB_LOAD_LIMITS,
-                CALIB_LOAD_ACK_TIMEOUT_S,
-                received_after_monotonic=limits_sent_at,
-            )
-            if not ack or int(ack[2]) != 0:
+            if self._ack_status(CMD_CALIB_LOAD_LIMITS, CALIB_LOAD_ACK_TIMEOUT_S, limits_sent_at) != PROTO_ACK_STATUS_OK:
                 return False, "motor ABS limit load ACK timeout/reject"
 
         loaded = 0
@@ -3201,12 +3180,7 @@ class HandController:
             payload["joint"] = joint_idx
             joint_sent_at = time.monotonic()
             self.comm.send_command(("calib_load_joint", payload))
-            ack = self.comm.wait_for_ack(
-                CMD_CALIB_LOAD_JOINT,
-                CALIB_LOAD_ACK_TIMEOUT_S,
-                received_after_monotonic=joint_sent_at,
-            )
-            if not ack or int(ack[2]) != 0:
+            if self._ack_status(CMD_CALIB_LOAD_JOINT, CALIB_LOAD_ACK_TIMEOUT_S, joint_sent_at) != PROTO_ACK_STATUS_OK:
                 return False, f"J{joint_idx:02d} load ACK timeout/reject"
             loaded += 1
         if loaded == 0 and active_joint_mask != 0:
