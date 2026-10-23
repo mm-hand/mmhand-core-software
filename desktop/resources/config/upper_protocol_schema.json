@@ -9,7 +9,8 @@
     239,
     245,
     247,
-    250
+    250,
+    252
   ],
   "description": "MMHand Desktop 与 ESP32-P4 当前唯一上位串口协议契约",
   "maintenance_note": "只修改本文件，再运行 tools/generate_upper_protocol.py；payload_bytes 不包含命令字和帧尾",
@@ -167,19 +168,13 @@
       "name": "PACKET_TYPE_CONTROL_PARAMETERS",
       "value": 28,
       "timestamp": false,
-      "description": "控制参数整组应用结果及实际修订和CRC读回"
+      "description": "参数应用/查询结果：block、状态、修订、CRC"
     },
     {
       "name": "PACKET_TYPE_CONTROL_COMPONENTS",
       "value": 29,
       "timestamp": true,
       "description": "同周期PI、换向和慢反馈分量及采样分频"
-    },
-    {
-      "name": "PACKET_TYPE_CONTROL_RAMP_PARAMETERS",
-      "value": 30,
-      "timestamp": false,
-      "description": "渐进快速换向参数应用结果及实际修订和CRC读回"
     },
     {
       "name": "PACKET_TYPE_ADAPTIVE_KP",
@@ -368,11 +363,11 @@
       "description": "原子设置61个控制与输入滤波参数，版本7、修订、浮点数组、CRC32"
     },
     {
-      "name": "CMD_CONTROL_PARAMETERS_QUERY",
+      "name": "CMD_PARAMETERS_QUERY",
       "value": 249,
-      "payload_bytes": 0,
+      "payload_bytes": 1,
       "requires_handshake": true,
-      "description": "读回P4当前控制参数修订、CRC和已配置状态"
+      "description": "按 block 读回参数修订/CRC（0=主参数，1=ramp）"
     },
     {
       "name": "CMD_CONTROL_RAMP_PARAMETERS_SET",
@@ -380,13 +375,6 @@
       "payload_bytes": 73,
       "requires_handshake": true,
       "description": "原子设置16个渐进快速换向参数（B0/vB/负载阈值/超时），版本1、修订、浮点数组、CRC32"
-    },
-    {
-      "name": "CMD_CONTROL_RAMP_PARAMETERS_QUERY",
-      "value": 252,
-      "payload_bytes": 0,
-      "requires_handshake": true,
-      "description": "读回P4当前渐进快速换向参数修订、CRC和已配置状态"
     }
   ],
   "proto_ack_status": {

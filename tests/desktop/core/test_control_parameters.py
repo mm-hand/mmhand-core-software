@@ -9,9 +9,8 @@ from desktop.core.control_parameters import (
 )
 from desktop.core.comm_layer import LowerComputerComm
 from desktop.core.generated_upper_protocol import (
-    CMD_CONTROL_PARAMETERS_QUERY, CMD_CONTROL_PARAMETERS_SET,
-    CMD_CONTROL_RAMP_PARAMETERS_QUERY, CMD_CONTROL_RAMP_PARAMETERS_SET,
-    PACKET_TYPE_CONTROL_PARAMETERS, PACKET_TYPE_CONTROL_RAMP_PARAMETERS,
+    CMD_CONTROL_PARAMETERS_SET, CMD_CONTROL_RAMP_PARAMETERS_SET,
+    CMD_PARAMETERS_QUERY, PACKET_TYPE_CONTROL_PARAMETERS,
 )
 
 
@@ -52,15 +51,26 @@ def test_parameter_apply_requires_separate_matching_ram_readback(monkeypatch):
     comm=LowerComputerComm('')
     monkeypatch.setattr(comm,'is_connected',lambda:True)
     commands=[]
+    def result(block, status, revision, crc):
+        return bytes((1, block, status)) + struct.pack('>II', revision, crc)
     def send(command):
-        cmd=command[1][2]
+        frame=command[1]
+        cmd=frame[2]
         commands.append(cmd)
-        if cmd in (CMD_CONTROL_PARAMETERS_SET, CMD_CONTROL_PARAMETERS_QUERY):
-            result=bytes((1,0))+struct.pack('>II',data['revision'],configuration_crc(data))
-            comm._process_packets([(PACKET_TYPE_CONTROL_PARAMETERS,result)])
-        elif cmd in (CMD_CONTROL_RAMP_PARAMETERS_SET, CMD_CONTROL_RAMP_PARAMETERS_QUERY):
-            result=bytes((1,0))+struct.pack('>II',data['ramp_revision'],ramp_configuration_crc(data))
-            comm._process_packets([(PACKET_TYPE_CONTROL_RAMP_PARAMETERS,result)])
+        if cmd == CMD_CONTROL_PARAMETERS_SET:
+            comm._process_packets([(PACKET_TYPE_CONTROL_PARAMETERS,
+                result(0,0,data['revision'],configuration_crc(data)))])
+        elif cmd == CMD_CONTROL_RAMP_PARAMETERS_SET:
+            comm._process_packets([(PACKET_TYPE_CONTROL_PARAMETERS,
+                result(1,0,data['ramp_revision'],ramp_configuration_crc(data)))])
+        elif cmd == CMD_PARAMETERS_QUERY:
+            block=frame[3]
+            if block == 0:
+                comm._process_packets([(PACKET_TYPE_CONTROL_PARAMETERS,
+                    result(0,0,data['revision'],configuration_crc(data)))])
+            else:
+                comm._process_packets([(PACKET_TYPE_CONTROL_PARAMETERS,
+                    result(1,0,data['ramp_revision'],ramp_configuration_crc(data)))])
         else:
             raise AssertionError(f'unexpected command {cmd}')
         return True
@@ -68,7 +78,7 @@ def test_parameter_apply_requires_separate_matching_ram_readback(monkeypatch):
     assert comm.apply_control_parameters(data)==(
         data['revision'],configuration_crc(data),
         data['ramp_revision'],ramp_configuration_crc(data))
-    assert commands[-1]==CMD_CONTROL_RAMP_PARAMETERS_QUERY
+    assert commands[-1]==CMD_PARAMETERS_QUERY
     from desktop.core.generated_upper_protocol import COMMAND_PAYLOAD_LENGTHS
     assert len(configuration_payload(data))==COMMAND_PAYLOAD_LENGTHS[CMD_CONTROL_PARAMETERS_SET]
     assert len(ramp_configuration_payload(data))==COMMAND_PAYLOAD_LENGTHS[CMD_CONTROL_RAMP_PARAMETERS_SET]
@@ -78,10 +88,17 @@ def test_parameter_readback_mismatch_cannot_authorize_controls(monkeypatch):
     data=json.loads(DEFAULT_PATH.read_text()); comm=LowerComputerComm('')
     monkeypatch.setattr(comm,'is_connected',lambda:True)
     def send(command):
-        cmd=command[1][2]
-        if cmd in (CMD_CONTROL_PARAMETERS_SET, CMD_CONTROL_PARAMETERS_QUERY):
-            crc=configuration_crc(data) ^ int(cmd==CMD_CONTROL_PARAMETERS_QUERY)
-            comm._process_packets([(PACKET_TYPE_CONTROL_PARAMETERS,bytes((1,0))+struct.pack('>II',data['revision'],crc))])
+        frame=command[1]
+        cmd=frame[2]
+        if cmd == CMD_CONTROL_PARAMETERS_SET:
+            crc=configuration_crc(data)
+            comm._process_packets([(PACKET_TYPE_CONTROL_PARAMETERS,
+                bytes((1,0,0))+struct.pack('>II',data['revision'],crc))])
+        elif cmd == CMD_PARAMETERS_QUERY:
+            block=frame[3]
+            crc=(configuration_crc(data) ^ (1 if block == 0 else 0))
+            comm._process_packets([(PACKET_TYPE_CONTROL_PARAMETERS,
+                bytes((1,block,0))+struct.pack('>II',data['revision'],crc))])
         return True
     monkeypatch.setattr(comm,'send_command',send)
     with pytest.raises(ValueError,match='readback differs'):

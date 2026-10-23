@@ -47,24 +47,23 @@ namespace p4::host {
 
 namespace {
 
-void sendControlParameterResult(uint8_t status)
+void sendControlParameterResult(uint8_t block, uint8_t status)
 {
-    const auto applied = mmhand::control::readParameters();
-    uint8_t packet[14] = {PROTOCOL_HEADER, 12, PACKET_TYPE_CONTROL_PARAMETERS, 1, status};
-    size_t offset = 5;
-    appendU32BigEndian(packet, &offset, applied.revision);
-    appendU32BigEndian(packet, &offset, applied.crc);
-    packet[offset++] = PROTOCOL_TAIL;
-    FW_SERIAL_WRITE(packet, offset);
-}
-
-void sendRampControlParameterResult(uint8_t status)
-{
-    const auto applied = mmhand::control::readRampParameters();
-    uint8_t packet[14] = {PROTOCOL_HEADER, 12, PACKET_TYPE_CONTROL_RAMP_PARAMETERS, 1, status};
-    size_t offset = 5;
-    appendU32BigEndian(packet, &offset, applied.revision);
-    appendU32BigEndian(packet, &offset, applied.crc);
+    uint32_t revision = 0;
+    uint32_t crc = 0;
+    if (block == 1) {
+        const auto applied = mmhand::control::readRampParameters();
+        revision = applied.revision;
+        crc = applied.crc;
+    } else {
+        const auto applied = mmhand::control::readParameters();
+        revision = applied.revision;
+        crc = applied.crc;
+    }
+    uint8_t packet[15] = {PROTOCOL_HEADER, 13, PACKET_TYPE_CONTROL_PARAMETERS, 1, block, status};
+    size_t offset = 6;
+    appendU32BigEndian(packet, &offset, revision);
+    appendU32BigEndian(packet, &offset, crc);
     packet[offset++] = PROTOCOL_TAIL;
     FW_SERIAL_WRITE(packet, offset);
 }
@@ -184,8 +183,15 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         return;
     }
 
-    if (cmd == CMD_CONTROL_PARAMETERS_QUERY) {
-        sendControlParameterResult(mmhand::control::parametersConfigured() ? 0 : 3);
+    if (cmd == CMD_PARAMETERS_QUERY) {
+        const uint8_t block = frameLen >= 2 ? frame[1] : 0xFF;
+        if (block == 0) {
+            sendControlParameterResult(0, mmhand::control::parametersConfigured() ? 0 : 3);
+        } else if (block == 1) {
+            sendControlParameterResult(1, mmhand::control::rampParametersConfigured() ? 0 : 3);
+        } else {
+            sendProtoAckPacket(cmd, sharedData->system_state, PROTO_ACK_STATUS_INVALID_DATA);
+        }
         return;
     }
     if (cmd == CMD_CONTROL_PARAMETERS_SET) {
@@ -197,13 +203,9 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
              sharedData->system_state == SYSTEM_STATE_RECOVERY_REQUIRED);
         const uint8_t result = !idle || servoMaintenanceBlocksCommands() ? 2 :
             mmhand::control::applyParameterPayload(frame + 1, frameLen - 1) ? 0 : 1;
-        sendControlParameterResult(result);
+        sendControlParameterResult(0, result);
         sendProtoAckPacket(cmd, sharedData->system_state, result == 0 ?
             PROTO_ACK_STATUS_OK : result == 2 ? PROTO_ACK_STATUS_UNSUPPORTED_MODE : PROTO_ACK_STATUS_INVALID_DATA);
-        return;
-    }
-    if (cmd == CMD_CONTROL_RAMP_PARAMETERS_QUERY) {
-        sendRampControlParameterResult(mmhand::control::rampParametersConfigured() ? 0 : 3);
         return;
     }
     if (cmd == CMD_CONTROL_RAMP_PARAMETERS_SET) {
@@ -215,7 +217,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
              sharedData->system_state == SYSTEM_STATE_RECOVERY_REQUIRED);
         const uint8_t result = !idle || servoMaintenanceBlocksCommands() ? 2 :
             mmhand::control::applyRampParameterPayload(frame + 1, frameLen - 1) ? 0 : 1;
-        sendRampControlParameterResult(result);
+        sendControlParameterResult(1, result);
         sendProtoAckPacket(cmd, sharedData->system_state, result == 0 ?
             PROTO_ACK_STATUS_OK : result == 2 ? PROTO_ACK_STATUS_UNSUPPORTED_MODE : PROTO_ACK_STATUS_INVALID_DATA);
         return;

@@ -337,7 +337,7 @@ def direct_zero_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path,
     dispatcher = (P4_SRC / "tasks/host_comm/HostCommandDispatcher.cpp").read_text(encoding="utf-8")
     service = (P4_SRC / "tasks/servo_bus/ServoBusService.cpp").read_text(encoding="utf-8")
     gates_start = dispatcher.index("    if (generatedCommandRequiresHandshake(cmd)")
-    handshake_end = dispatcher.index("    if (cmd == CMD_CONTROL_PARAMETERS_QUERY)", gates_start)
+    handshake_end = dispatcher.index("    if (cmd == CMD_PARAMETERS_QUERY)", gates_start)
     pending_start = dispatcher.index("    if (servoRebaseZeroPending(sharedData)", handshake_end)
     pending_end = dispatcher.index("    if (cmd == CMD_HOST_HEARTBEAT)", pending_start)
     contexts = "\n".join(_braced(service, "struct " + name + " {") + ";"

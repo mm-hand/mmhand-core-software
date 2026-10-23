@@ -14,26 +14,24 @@ from desktop.core.control_parameters import (
     ramp_configuration_crc,
 )
 from desktop.core.generated_upper_protocol import (
-    CMD_CONTROL_PARAMETERS_QUERY,
     CMD_CONTROL_PARAMETERS_SET,
-    CMD_CONTROL_RAMP_PARAMETERS_QUERY,
     CMD_CONTROL_RAMP_PARAMETERS_SET,
+    CMD_PARAMETERS_QUERY,
     PACKET_TYPE_CONTROL_PARAMETERS,
-    PACKET_TYPE_CONTROL_RAMP_PARAMETERS,
 )
 
 
-def _applied_packet(data, status=0):
+def _applied_packet(data, status=0, block=0):
     return (
         PACKET_TYPE_CONTROL_PARAMETERS,
-        bytes((1, status)) + struct.pack('>II', data['revision'], configuration_crc(data)),
+        bytes((1, block, status)) + struct.pack('>II', data['revision'], configuration_crc(data)),
     )
 
 
 def _ramp_applied_packet(data, status=0):
     return (
-        PACKET_TYPE_CONTROL_RAMP_PARAMETERS,
-        bytes((1, status)) + struct.pack('>II', data['ramp_revision'], ramp_configuration_crc(data)),
+        PACKET_TYPE_CONTROL_PARAMETERS,
+        bytes((1, 1, status)) + struct.pack('>II', data['ramp_revision'], ramp_configuration_crc(data)),
     )
 
 
@@ -51,11 +49,12 @@ def _fake_comm(monkeypatch, data, results):
             status = pending.pop(0) if pending else 0
             if status is not None:
                 comm._process_packets([_applied_packet(data, status)])
-        elif frame[2] == CMD_CONTROL_PARAMETERS_QUERY:
-            comm._process_packets([_applied_packet(data, 0)])
+        elif frame[2] == CMD_PARAMETERS_QUERY:
+            if frame[3] == 0:
+                comm._process_packets([_applied_packet(data, 0)])
+            else:
+                comm._process_packets([_ramp_applied_packet(data, 0)])
         elif frame[2] == CMD_CONTROL_RAMP_PARAMETERS_SET:
-            comm._process_packets([_ramp_applied_packet(data, 0)])
-        elif frame[2] == CMD_CONTROL_RAMP_PARAMETERS_QUERY:
             comm._process_packets([_ramp_applied_packet(data, 0)])
         return True
 
@@ -68,7 +67,7 @@ def test_contract_mismatch_is_retried_then_succeeds(monkeypatch):
     comm, sends = _fake_comm(monkeypatch, data, [8, 0])
     assert comm.apply_control_parameters(data) == (data['revision'], configuration_crc(data), data['ramp_revision'], ramp_configuration_crc(data))
     assert sends.count(CMD_CONTROL_PARAMETERS_SET) == 2
-    assert sends.count(CMD_CONTROL_PARAMETERS_QUERY) == 1
+    assert sends.count(CMD_PARAMETERS_QUERY) == 2
 
 
 def test_persistent_contract_mismatch_raises_after_three_attempts(monkeypatch):
@@ -78,7 +77,7 @@ def test_persistent_contract_mismatch_raises_after_three_attempts(monkeypatch):
         comm.apply_control_parameters(data)
     assert 'status=8' in str(excinfo.value)
     assert sends.count(CMD_CONTROL_PARAMETERS_SET) == 3
-    assert sends.count(CMD_CONTROL_PARAMETERS_QUERY) == 0
+    assert sends.count(CMD_PARAMETERS_QUERY) == 0
 
 
 def test_no_reply_retries_then_times_out(monkeypatch):

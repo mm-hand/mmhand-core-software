@@ -1453,14 +1453,14 @@ class LowerComputerComm:
             if kind == protocol_codec.PACKET_TYPE_SERVO_MAINTENANCE:
                 self._maintenance.feed(payload)
             elif kind == protocol_codec.PACKET_TYPE_CONTROL_PARAMETERS:
-                if len(payload) == 10 and payload[0] == 1:
+                if len(payload) == 11 and payload[0] == 1:
+                    block, status = payload[1], payload[2]
+                    revision, crc = struct.unpack('>II', payload[3:11])
                     with self._control_parameter_condition:
-                        self._control_parameter_result = (payload[1], *struct.unpack('>II', payload[2:]))
-                        self._control_parameter_condition.notify_all()
-            elif kind == protocol_codec.PACKET_TYPE_CONTROL_RAMP_PARAMETERS:
-                if len(payload) == 10 and payload[0] == 1:
-                    with self._control_parameter_condition:
-                        self._control_ramp_parameter_result = (payload[1], *struct.unpack('>II', payload[2:]))
+                        if block == 0:
+                            self._control_parameter_result = (status, revision, crc)
+                        elif block == 1:
+                            self._control_ramp_parameter_result = (status, revision, crc)
                         self._control_parameter_condition.notify_all()
             else:
                 normal.append((kind, payload))
@@ -1512,7 +1512,7 @@ class LowerComputerComm:
         # Query separately so a queued ACK can never stand in for RAM readback.
         with self._control_parameter_condition:
             self._control_parameter_result = None
-        query = bytes((254, 2, protocol_codec.CMD_CONTROL_PARAMETERS_QUERY, 255))
+        query = bytes((254, 3, protocol_codec.CMD_PARAMETERS_QUERY, 0, 255))
         if not self.send_command(('maintenance_frame', query)):
             raise ConnectionError('P4 parameter readback could not be queued')
         deadline = time.monotonic() + timeout
@@ -1559,7 +1559,7 @@ class LowerComputerComm:
             raise last_error
         with self._control_parameter_condition:
             self._control_ramp_parameter_result = None
-        query = bytes((254, 2, protocol_codec.CMD_CONTROL_RAMP_PARAMETERS_QUERY, 255))
+        query = bytes((254, 3, protocol_codec.CMD_PARAMETERS_QUERY, 1, 255))
         if not self.send_command(('maintenance_frame', query)):
             raise ConnectionError('P4 ramp parameter readback could not be queued')
         deadline = time.monotonic() + timeout
