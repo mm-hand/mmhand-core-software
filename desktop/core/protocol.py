@@ -1211,10 +1211,6 @@ def build_clear_manual_encoder_reference_cmd() -> bytes:
     return _build_command_frame(CMD_MANUAL_ENCODER_REFERENCE, payload)
 
 
-def build_manual_encoder_query_cmd() -> bytes:
-    return _build_command_frame(CMD_MANUAL_ENCODER_QUERY, b"")
-
-
 def build_state_sync_request_cmd(sync_mask: int = STATE_SYNC_ALL) -> bytes:
     """请求 P4 发送指定静态状态；用于连接握手和用户显式刷新。"""
     mask = int(sync_mask)

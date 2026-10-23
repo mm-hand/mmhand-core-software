@@ -237,8 +237,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
     }
     if (cmd == CMD_STOP) cancelServoMaintenance();
     if (servoMaintenanceBlocksCommands() && cmd != CMD_STOP && cmd != CMD_HOST_HEARTBEAT &&
-        cmd != CMD_STATE_SYNC_REQUEST && cmd != CMD_MANUAL_ENCODER_QUERY &&
-        cmd != CMD_DIAGNOSTICS_SUBSCRIBE) {
+        cmd != CMD_STATE_SYNC_REQUEST && cmd != CMD_DIAGNOSTICS_SUBSCRIBE) {
         sendProtoAckPacket(cmd, sharedData->system_state, PROTO_ACK_STATUS_UNSUPPORTED_MODE);
         return;
     }
@@ -260,15 +259,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
 
     if (cmd == CMD_HOST_HEARTBEAT)
     {
-        return;
-    }
-    if (cmd == CMD_MANUAL_ENCODER_QUERY)
-    {
-        const bool sent = sendManualEncoderReferencePacket(sharedData);
-        sendProtoAckPacket(CMD_MANUAL_ENCODER_QUERY,
-                           sharedData->system_state,
-                           sent ? PROTO_ACK_STATUS_OK
-                                : PROTO_ACK_STATUS_UNSUPPORTED_MODE);
         return;
     }
     if (cmd == CMD_STATE_SYNC_REQUEST)

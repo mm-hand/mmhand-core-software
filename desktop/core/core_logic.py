@@ -50,8 +50,8 @@ from .protocol import (
     CMD_CALIB_LOAD_JOINT,
     CMD_CALIB_LOAD_LIMITS,
     CMD_MANUAL_ENCODER_REFERENCE,
-    CMD_MANUAL_ENCODER_QUERY,
     CMD_MANUAL_ENCODER_SINGLE,
+    CMD_STATE_SYNC_REQUEST,
     CMD_ROPE_INIT,
     CMD_RESET,
     CMD_RESTORE_MULTITURN,
@@ -76,6 +76,7 @@ from .protocol import (
     SYSTEM_STATE_ROPE_INIT_RUNNING,
     SYSTEM_STATE_UNCONTROLLABLE,
     STATE_SYNC_ALL,
+    STATE_SYNC_MANUAL_REFERENCE,
     STATE_SYNC_MULTITURN_STATE,
     manual_encoder_reference_crc,
     manual_encoder_reference_entry_crc,
@@ -1742,9 +1743,9 @@ class HandController:
         if not self.comm:
             return False
         sent_at = time.monotonic()
-        self.comm.send_command("query_manual_encoder_reference")
+        self.comm.send_command(("state_sync", STATE_SYNC_MANUAL_REFERENCE))
         ack = self.comm.wait_for_ack(
-            CMD_MANUAL_ENCODER_QUERY,
+            CMD_STATE_SYNC_REQUEST,
             timeout_s,
             received_after_monotonic=sent_at,
         )

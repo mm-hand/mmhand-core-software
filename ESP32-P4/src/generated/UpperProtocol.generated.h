@@ -62,7 +62,6 @@ inline constexpr uint8_t CMD_CALIB_LOAD_JOINT = 0xDF; ///< 恢复单关节唯一
 inline constexpr uint8_t CMD_CALIB_LOAD_LIMITS = 0xE0; ///< 批量恢复 27 路 ABS 标定范围与有效位图
 inline constexpr uint8_t CMD_CLEAR_CALIBRATION = 0xE5; ///< 清除全部 Auto/LUT 标定结果，保留 Manual
 inline constexpr uint8_t CMD_MANUAL_ENCODER_REFERENCE = 0xE6; ///< 写入或清除 21 组 Manual Min/Max 原始磁编值
-inline constexpr uint8_t CMD_MANUAL_ENCODER_QUERY = 0xE7; ///< 请求 P4 立即回传 Manual 标定表
 inline constexpr uint8_t CMD_MANUAL_ENCODER_SINGLE = 0xE8; ///< 写入单个 Jxx 的 Manual Min/Max
 inline constexpr uint8_t CMD_ROPE_INIT = 0xE9; ///< 按 21 位关节掩码启动 P4 Rope Init
 inline constexpr uint8_t CMD_CLEAR_CALIBRATION_SCOPE = 0xEB; ///< 按电机位图清除关联关节 Auto/LUT
@@ -134,7 +133,6 @@ inline constexpr size_t generatedCommandPayloadLength(uint8_t command)
         case CMD_CALIB_LOAD_LIMITS: return kCalibLoadLimitsPayloadBytes;
         case CMD_CLEAR_CALIBRATION: return 0;
         case CMD_MANUAL_ENCODER_REFERENCE: return kManualEncoderReferencePayloadBytes;
-        case CMD_MANUAL_ENCODER_QUERY: return 0;
         case CMD_MANUAL_ENCODER_SINGLE: return kManualEncoderSinglePayloadBytes;
         case CMD_ROPE_INIT: return kRopeInitPayloadBytes;
         case CMD_CLEAR_CALIBRATION_SCOPE: return kClearCalibrationScopePayloadBytes;

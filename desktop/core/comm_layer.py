@@ -95,7 +95,6 @@ from .protocol import (
     build_motor_pos_abs_one_cmd,
     build_manual_encoder_reference_cmd,
     build_clear_manual_encoder_reference_cmd,
-    build_manual_encoder_query_cmd,
     build_manual_encoder_single_cmd,
     build_state_sync_request_cmd,
     build_diagnostics_subscribe_cmd,
@@ -1914,8 +1913,6 @@ class LowerComputerComm:
             return build_manual_encoder_reference_cmd(cmd[1], cmd[2])
         if cmd == "clear_manual_encoder_reference":
             return build_clear_manual_encoder_reference_cmd()
-        if cmd == "query_manual_encoder_reference":
-            return build_manual_encoder_query_cmd()
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "state_sync":
             return build_state_sync_request_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "diagnostics_subscribe":

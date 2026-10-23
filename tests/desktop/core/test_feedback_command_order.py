@@ -59,10 +59,10 @@ def test_invalidating_joint_commands_also_removes_feedback_request():
     comm = LowerComputerComm("")
     comm.tx_queue.put_nowait(("joint_target_run", [2.0] * 21))
     comm.tx_queue.put_nowait("run_feedback")
-    comm.tx_queue.put_nowait("query_manual_encoder_reference")
+    comm.tx_queue.put_nowait(("state_sync", 1))
 
     assert comm.invalidate_pending_joint_commands() == 2
-    assert list(comm.tx_queue.queue) == ["query_manual_encoder_reference"]
+    assert list(comm.tx_queue.queue) == [("state_sync", 1)]
 
 
 def test_target_stays_replaceable_while_waiting_for_next_motion_slot(monkeypatch):

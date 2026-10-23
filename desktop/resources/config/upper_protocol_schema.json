@@ -5,6 +5,7 @@
     202,
     217,
     222,
+    231,
     234,
     239,
     245,
@@ -276,12 +277,6 @@
       "value": 230,
       "payload_bytes": 85,
       "description": "写入或清除 21 组 Manual Min/Max 原始磁编值"
-    },
-    {
-      "name": "CMD_MANUAL_ENCODER_QUERY",
-      "value": 231,
-      "payload_bytes": 0,
-      "description": "请求 P4 立即回传 Manual 标定表"
     },
     {
       "name": "CMD_MANUAL_ENCODER_SINGLE",
