@@ -1166,11 +1166,8 @@ def build_servo_reset_zero_cmd(motor_mask: int) -> bytes:
 
 
 def build_servo_rebase_zero_cmd(motor_mask: int) -> bytes:
-    """所选 Mxx 的舵机实际 ABS 与 P4 ABS 一起设为零。"""
-    mask = int(motor_mask)
-    if mask <= 0 or mask & ~((1 << MOTOR_COUNT) - 1):
-        raise ValueError("servo ABS rebase requires a non-zero valid motor mask")
-    return _build_command_frame(CMD_SERVO_REBASE_ZERO, struct.pack(">I", mask))
+    """Calibration-page alias of the one motor ABS zero command."""
+    return build_motor_abs_zero_cmd(motor_mask)
 
 
 def build_motor_abs_zero_cmd(motor_mask: int) -> bytes:

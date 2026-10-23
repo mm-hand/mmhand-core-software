@@ -8,6 +8,7 @@
     231,
     234,
     239,
+    240,
     245,
     247,
     250,
@@ -318,18 +319,11 @@
       "description": "诊断订阅：bit0 任务诊断、bit1 控制 trace；1 字节分频"
     },
     {
-      "name": "CMD_SERVO_REBASE_ZERO",
-      "requires_handshake": true,
-      "value": 240,
-      "payload_bytes": 4,
-      "description": "按电机位图用0x0B校正舵机实际ABS为0，读回确认后P4 ABS同步为0"
-    },
-    {
       "name": "CMD_MOTOR_ABS_ZERO",
       "requires_handshake": true,
       "value": 241,
       "payload_bytes": 4,
-      "description": "Direct电机页按非空电机位图将当前位置设为ABS零点；复用硬件0x0B归零事务及0x19最终结果"
+      "description": "按非空电机位图用0x0B将当前位置设为ABS零点；标定页和Direct页共用"
     },
     {
       "name": "CMD_MOTOR_DIRECT_RELEASE",

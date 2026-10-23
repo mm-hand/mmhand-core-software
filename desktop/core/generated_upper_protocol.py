@@ -66,8 +66,7 @@ CMD_CLEAR_CALIBRATION_SCOPE = 0xEB  # 按电机位图清除关联关节 Auto/LUT
 CMD_SERVO_RESET_ZERO = 0xEC  # 标定前归零所选舵机硬件圈数并清除对应多圈锚点
 CMD_STATE_SYNC_REQUEST = 0xED  # 按位请求静态状态、标定快照、路由和产品指纹
 CMD_DIAGNOSTICS_SUBSCRIBE = 0xEE  # 诊断订阅：bit0 任务诊断、bit1 控制 trace；1 字节分频
-CMD_SERVO_REBASE_ZERO = 0xF0  # 按电机位图用0x0B校正舵机实际ABS为0，读回确认后P4 ABS同步为0
-CMD_MOTOR_ABS_ZERO = 0xF1  # Direct电机页按非空电机位图将当前位置设为ABS零点；复用硬件0x0B归零事务及0x19最终结果
+CMD_MOTOR_ABS_ZERO = 0xF1  # 按非空电机位图用0x0B将当前位置设为ABS零点；标定页和Direct页共用
 CMD_MOTOR_DIRECT_RELEASE = 0xF2  # 结束当前普通直控并保留扭矩和故障；非零token匹配已执行事务，零匹配当前直控代际
 CMD_PROTOCOL_HELLO = 0xF3  # 双向版本及控制模型与反馈拓扑契约握手，不授权运动
 CMD_CONTROL_RELEASE = 0xF6  # 释放普通控制权，不锁存急停，不恢复旧目标
@@ -144,7 +143,6 @@ COMMAND_PAYLOAD_LENGTHS = {
     CMD_SERVO_RESET_ZERO: 4,
     CMD_STATE_SYNC_REQUEST: 4,
     CMD_DIAGNOSTICS_SUBSCRIBE: 2,
-    CMD_SERVO_REBASE_ZERO: 4,
     CMD_MOTOR_ABS_ZERO: 4,
     CMD_MOTOR_DIRECT_RELEASE: 4,
     CMD_PROTOCOL_HELLO: 9,
@@ -167,7 +165,6 @@ COMMANDS_REQUIRING_HANDSHAKE = frozenset({
     CMD_MANUAL_ENCODER_SINGLE,
     CMD_ROPE_INIT,
     CMD_SERVO_RESET_ZERO,
-    CMD_SERVO_REBASE_ZERO,
     CMD_MOTOR_ABS_ZERO,
     CMD_CONTROL_RELEASE,
     CMD_CONTROL_PARAMETERS_SET,

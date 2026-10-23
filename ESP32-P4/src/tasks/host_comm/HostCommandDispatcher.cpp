@@ -249,7 +249,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
     }
     if (sharedAtomicLoad(&sharedData->direct_target_request_generation) !=
             sharedAtomicLoad(&sharedData->direct_target_result_generation) &&
-        (cmd == CMD_SERVO_REBASE_ZERO || cmd == CMD_MOTOR_ABS_ZERO ||
+        (cmd == CMD_MOTOR_ABS_ZERO ||
          cmd == CMD_SERVO_RESET_ZERO ||
          cmd == CMD_RESTORE_MULTITURN || cmd == CMD_ACTIVE_SCOPE)) {
         sendProtoAckPacket(cmd, sharedData->system_state,
@@ -1021,11 +1021,11 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
 
     // Direct 显式置零与标定前 F0 共用同一坐标维护事务和最终 0x19 结果。
     // motor mask 原样提交；关联关节的标定失效不会扩大实际置零的电机范围。
-    if (cmd == CMD_SERVO_REBASE_ZERO || cmd == CMD_MOTOR_ABS_ZERO)
+    if (cmd == CMD_MOTOR_ABS_ZERO)
     {
         uint8_t status = PROTO_ACK_STATUS_QUEUED;
         const uint32_t requestedMask =
-            frameLen == 1 + kServoRebaseZeroPayloadBytes
+            frameLen == 1 + kMotorAbsZeroPayloadBytes
                 ? readU32BigEndian(frame + 1)
                 : 0;
         // 必须先取命令 mutex，不能在短跨核临界区内等待 RTOS mutex。

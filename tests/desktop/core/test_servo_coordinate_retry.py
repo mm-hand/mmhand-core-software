@@ -12,7 +12,7 @@ from desktop.core.core_logic import HandController
 from desktop.core.calibration_snapshot import atomic_write_snapshot, read_snapshot
 from desktop.core.device_state_store import MultiTurnRuntimeStore
 from desktop.core.protocol import (
-    CMD_RESET, CMD_SERVO_REBASE_ZERO, CMD_MOTOR_ABS_ZERO, CMD_SERVO_RESET_ZERO,
+    CMD_RESET, CMD_MOTOR_ABS_ZERO, CMD_SERVO_RESET_ZERO,
     HOST_PROTOCOL_VERSION, PROTO_ACK_STATUS_QUEUED, STATE_SYNC_MULTITURN_STATE,
     SYSTEM_STATE_IDLE,
 )
@@ -133,7 +133,7 @@ def test_unknown_result_queries_three_times_and_never_rewrites(controller, ack_k
     def ack(cmd, _timeout, received_after_monotonic):
         if ack_kind in ("lost", "old_timestamp"):  # Tracker filters pre-send ACKs.
             return None
-        return (CMD_MOTOR_ABS_ZERO if ack_kind == "wrong_command" else cmd,
+        return (CMD_SERVO_RESET_ZERO if ack_kind == "wrong_command" else cmd,
                 SYSTEM_STATE_IDLE, 1, received_after_monotonic - 1 if ack_kind == "old_timestamp" else received_after_monotonic)
 
     controller.comm.wait_for_ack.side_effect = ack

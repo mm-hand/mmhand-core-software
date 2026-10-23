@@ -12,7 +12,7 @@ from desktop.core.data_models import HandModel
 from desktop.core.protocol import (
     CMD_MOTOR_POS_ABS,
     CMD_MOTOR_DIRECT_RELEASE,
-    CMD_SERVO_REBASE_ZERO,
+    CMD_MOTOR_ABS_ZERO,
     MOTOR_COUNT,
     PACKET_TYPE_ENCODER_RAW,
     PACKET_TYPE_DIRECT_TARGET_RESULT,
@@ -169,7 +169,7 @@ def test_final_result_routes_independently_from_ack_and_rebase_result():
     assert model.servo_rebase_zero_result_token == 0
     after_ack = comm._process_packets([(
         PACKET_TYPE_PROTO_ACK,
-        bytes((CMD_SERVO_REBASE_ZERO, 1, 2)) + struct.pack(">I", 501),
+        bytes((CMD_MOTOR_ABS_ZERO, 1, 2)) + struct.pack(">I", 501),
     )])
     assert after_ack.direct_target_token == 12
     assert after_ack.direct_target_status == 2

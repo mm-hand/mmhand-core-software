@@ -236,7 +236,7 @@ static void run(const std::string& name) {
         f.verifyUntouched();
         return;
     }
-    const auto cmd = name == "f0_compatible" ? CMD_SERVO_REBASE_ZERO : f1;
+    const auto cmd = f1;
     uint32_t mask = 1UL << 7;
     if (name == "partial_failure") mask |= 1UL << 26;
     if (name == "token_wrap") {
@@ -352,7 +352,7 @@ def direct_zero_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path,
         .replace("/* PRODUCTION_DISPATCH_GATES */", dispatcher[gates_start:handshake_end] +
                  dispatcher[pending_start:pending_end])
         .replace("/* PRODUCTION_ZERO_BRANCH */",
-                 _braced(dispatcher, "if (cmd == CMD_SERVO_REBASE_ZERO || cmd == CMD_MOTOR_ABS_ZERO)"))
+                 _braced(dispatcher, "if (cmd == CMD_MOTOR_ABS_ZERO)"))
         .replace("/* PRODUCTION_ZERO_CONTEXT */",
                  _braced(service, "struct ServoRebaseZeroContext {") + ";")
         .replace("/* PRODUCTION_HOTPLUG_CONTEXT */", contexts)

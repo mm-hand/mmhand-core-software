@@ -14,7 +14,6 @@ from desktop.core.calibration_snapshot import atomic_write_snapshot, read_snapsh
 from desktop.core.data_models import HandModel
 from desktop.core.device_state_store import MultiTurnRuntimeStore
 from desktop.core.protocol import (
-    CMD_SERVO_REBASE_ZERO,
     CMD_MOTOR_ABS_ZERO,
     HOST_PROTOCOL_VERSION,
     MOTOR_COUNT,
@@ -38,7 +37,7 @@ def _result_payload(token=8, success=3, failed=0):
 def test_command_encodes_selected_channels_with_fixed_big_endian_mask():
     mask = (1 << 0) | (1 << 26)
     assert build_servo_rebase_zero_cmd(mask) == (
-        bytes((0xFE, 6, CMD_SERVO_REBASE_ZERO)) + struct.pack(">I", mask) + b"\xFF"
+        bytes((0xFE, 6, CMD_MOTOR_ABS_ZERO)) + struct.pack(">I", mask) + b"\xFF"
     )
     comm = LowerComputerComm("")
     assert comm._encode_command(("servo_rebase_zero", mask)) == build_servo_rebase_zero_cmd(mask)
@@ -50,7 +49,7 @@ def test_direct_zero_encodes_a_distinct_command_with_only_selected_motors():
     assert CMD_MOTOR_ABS_ZERO == 0xF1
     assert build_motor_abs_zero_cmd(mask) == expected
     assert LowerComputerComm("")._encode_command(("motor_abs_zero", mask)) == expected
-    assert expected != build_servo_rebase_zero_cmd(mask)
+    assert expected == build_servo_rebase_zero_cmd(mask)
 
 
 @pytest.mark.parametrize("mask", [0, -1, 1 << 27, (1 << 31) | 1])
@@ -112,11 +111,11 @@ def test_queued_ack_leaves_result_and_coordinate_trust_unchanged():
     comm._state_reducer.last_model = previous
     updated = comm._process_packets([(
         PACKET_TYPE_PROTO_ACK,
-        bytes((CMD_SERVO_REBASE_ZERO, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED))
+        bytes((CMD_MOTOR_ABS_ZERO, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED))
         + struct.pack(">I", 1000),
     )])
     assert updated is not None
-    assert updated.proto_ack_cmd == CMD_SERVO_REBASE_ZERO
+    assert updated.proto_ack_cmd == CMD_MOTOR_ABS_ZERO
     assert updated.servo_rebase_zero_result_token == 7
     assert updated.servo_rebase_zero_success_mask == 0
     assert updated.multi_turn_unknown_bitmap == 3
@@ -410,7 +409,7 @@ def test_timeout_queries_existing_transaction_and_blocks_blind_reexecution(monke
     controller = _controller(monkeypatch)
     monkeypatch.setattr(core_logic, "SERVO_REBASE_ZERO_RESULT_TIMEOUT_S", 0)
     controller.comm.wait_for_ack.return_value = (
-        CMD_SERVO_REBASE_ZERO, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, 1.0,
+        CMD_MOTOR_ABS_ZERO, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, 1.0,
     )
     result = controller.rebase_servo_abs_zero(3)
     assert not result.ok

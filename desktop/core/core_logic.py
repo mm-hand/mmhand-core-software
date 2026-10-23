@@ -56,7 +56,6 @@ from .protocol import (
     CMD_RESET,
     CMD_RESTORE_MULTITURN,
     CMD_SERVO_RESET_ZERO,
-    CMD_SERVO_REBASE_ZERO,
     CMD_MOTOR_ABS_ZERO,
     ENCODER_COUNT,
     MOTOR_COUNT,
@@ -2312,7 +2311,7 @@ class HandController:
         已成功电机不重复写入，未知结果仅查询原事务，不发维护 RESET。
         """
         return self._set_servo_abs_zero(
-            motor_mask, CMD_SERVO_REBASE_ZERO, "servo_rebase_zero",
+            motor_mask, CMD_MOTOR_ABS_ZERO, "servo_rebase_zero",
             cancelled=cancelled, send_gate=send_gate,
         )
 
