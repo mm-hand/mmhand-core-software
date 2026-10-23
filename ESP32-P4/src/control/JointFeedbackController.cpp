@@ -137,9 +137,7 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
         // The LUT working window (calibrated span widened by the configurable
         // release/tight margins) is the only command boundary; nothing widens it.
         int32_t lo, hi;
-        const bool bounded = count == 1 ? singleTendonCalibrationMotorAbsRange(lut, i, motor,
-            p[OutputLutReleaseMarginCounts], p[OutputLutTightMarginCounts], &lo, &hi) :
-            tendonCalibrationMotorAbsRangeWithMargins(lut, i, motor,
+        const bool bounded = tendonCalibrationMotorAbsRangeWithMargins(lut, i, motor,
             p[OutputLutReleaseMarginCounts], p[OutputLutTightMarginCounts], &lo, &hi);
         if (!bounded) return out;
         out.motors[i] = motor;

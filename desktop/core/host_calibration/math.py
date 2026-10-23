@@ -265,18 +265,86 @@ def _interpolate_abs(target: float, samples: list[tuple[float, int, int]], actua
     return round_to_int32(value)
 
 
-def linearize_lut(result: dict, actuator_count: int) -> None:
-    """Replace the whole LUT with a straight line through its two endpoints."""
+def fit_middle_line(io, joint: int, result: dict, actuator_count: int) -> bool:
+    """Fit one straight line through the middle of the 5-degree LUT.
+
+    The physical LUT is accurate in the middle and distorted near both ends by
+    tendon take-up/slack.  Endpoint-to-endpoint fitting therefore imports the
+    worst error.  Fit a least-squares line over the middle half of the samples,
+    then evaluate that line at the URDF limits and keep only its two endpoints.
+    """
     count = int(result.get("tendonLutCount", 0) or 0)
     rows = result.get("tendonLutMotorAbs", [])
-    if count < 2 or actuator_count < 1 or not isinstance(rows, list):
-        return
-    for actuator in range(min(actuator_count, len(rows))):
-        row = rows[actuator]
-        first = int(row[0])
-        last = int(row[count - 1])
-        for i in range(count):
-            row[i] = round_to_int32(first + (last - first) * i / (count - 1))
+    step = f32(result.get("tendonLutAngleStepDeg", 0.0))
+    angle_min = f32(result.get("angleMin", 0.0))
+    angle_max = f32(result.get("angleMax", 0.0))
+    if (count < 3 or actuator_count < 1 or not isinstance(rows, list)
+            or len(rows) < actuator_count or step <= 0.0
+            or not math.isfinite(angle_min) or not math.isfinite(angle_max)
+            or angle_max <= angle_min):
+        return False
+    start = max(0, count // 4)
+    end = min(count, count - count // 4)
+    if end - start < 3:
+        start, end = 0, count
+    if end - start < 3:
+        return False
+    angles = [
+        angle_max if index == count - 1 else f32(angle_min + f32(step * f32(index)))
+        for index in range(start, end)
+    ]
+    mean_angle = sum(angles) / len(angles)
+    var_angle = sum((value - mean_angle) ** 2 for value in angles)
+    if var_angle <= 0.0:
+        return False
+    line_rows = []
+    evidence_rows = []
+    for actuator in range(actuator_count):
+        values = [float(rows[actuator][index]) for index in range(start, end)]
+        evidence_rows.append([float(rows[actuator][index]) for index in range(count)])
+        mean_abs = sum(values) / len(values)
+        covariance = sum((a - mean_angle) * (v - mean_abs)
+                         for a, v in zip(angles, values))
+        slope = covariance / var_angle
+        first = round_to_int32(mean_abs + slope * (angle_min - mean_angle))
+        last = round_to_int32(mean_abs + slope * (angle_max - mean_angle))
+        line_rows.append([first, last])
+    while len(line_rows) < 2:
+        line_rows.append([0, 0])
+    # Keep the full 5-degree table in the calibration log as evidence; the
+    # durable/P4 control result only needs the fitted line endpoints.
+    if hasattr(io, "trace"):
+        io.trace("LUT_FULL", joint, int(result.get("tendonLutMotor", [255])[0]),
+                 count=count, step=step, rows=evidence_rows)
+    result["tendonLutMotorAbs"] = line_rows
+    result["tendonLutCount"] = 2
+    result["tendonLutAngleStartDeg"] = angle_min
+    result["tendonLutAngleStepDeg"] = f32(angle_max - angle_min)
+    result["tendonLutValid"] = True
+    return True
+
+
+def extend_motor_abs_limits(motor: int, lo: int, hi: int,
+                           release_margin: int, tight_margin: int) -> tuple[int, int] | None:
+    """Extend an ABS envelope outward by the two configured margins."""
+    from .config import shorten_sign, motor_apply_tendon_delta
+    sign = shorten_sign(motor)
+    if not sign or lo > hi:
+        return None
+    release_abs = lo if sign > 0 else hi
+    tight_abs = hi if sign > 0 else lo
+    release_with_margin = motor_apply_tendon_delta(motor, release_abs, -release_margin)
+    tight_with_margin = motor_apply_tendon_delta(motor, tight_abs, tight_margin)
+    return min(release_with_margin, tight_with_margin), max(release_with_margin, tight_with_margin)
+
+
+def tendon_motor_abs_limits(result: dict, actuator: int, motor: int,
+                            release_margin: int, tight_margin: int) -> tuple[int, int] | None:
+    """LUT endpoint + configurable extension; never trust a measured tight stop."""
+    envelope = tendon_motor_abs_range(result, actuator)
+    if envelope is None:
+        return None
+    return extend_motor_abs_limits(motor, *envelope, release_margin, tight_margin)
 
 
 def build_tendon_lut(io, joint: int, result: dict, primary: int,
@@ -329,14 +397,13 @@ def build_tendon_lut(io, joint: int, result: dict, primary: int,
             result["tendonLutMotorAbs"][actuator][index] = value
     result["tendonLutCount"] = count
     result["tendonLutValid"] = True
-    linearize_lut(result, actuator_count)
-    return True
+    return fit_middle_line(io, joint, result, actuator_count)
 
 
 def tendon_motor_abs_range(result: dict, actuator: int) -> tuple[int, int] | None:
     count = int(result.get("tendonLutCount", 0))
     if (not 0 <= actuator < 2 or not result.get("success") or not result.get("scaled")
-            or not result.get("tendonLutValid") or not 3 <= count <= TENDON_LUT_MAX_SAMPLES
+            or not result.get("tendonLutValid") or not 2 <= count <= TENDON_LUT_MAX_SAMPLES
             or not math.isfinite(result.get("tendonLutAngleStartDeg", math.nan))
             or not math.isfinite(result.get("tendonLutAngleStepDeg", math.nan))
             or result["tendonLutAngleStepDeg"] <= 0):

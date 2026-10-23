@@ -107,7 +107,7 @@ def joint_calib_result_has_valid_tendon_lut(item, joint_idx: int) -> bool:
         count = int(tendon_lut_field(item, "tendonLutCount", 0))
     except (TypeError, ValueError):
         return False
-    if count < 3 or count > TENDON_LUT_MAX_SAMPLES:
+    if count < 2 or count > TENDON_LUT_MAX_SAMPLES:
         return False
     expected_count = 2 if int(joint_idx) in DUAL_TENDON_JOINT_INDICES else 1
     expected_motors = [

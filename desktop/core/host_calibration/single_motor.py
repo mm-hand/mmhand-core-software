@@ -31,6 +31,7 @@ from .math import (
     forward_encoder_delta, wrap_encoder_count, encoder_for_positive_travel,
     signed_encoder_delta, round_to_int32, f32,
     build_calibration_result, build_tendon_lut, tendon_motor_abs_range,
+    tendon_motor_abs_limits,
 )
 from .time_alignment import TimeAlignmentError
 
@@ -169,18 +170,13 @@ def _inside_limit(ctx, io, targets, phase, text):
 
 
 def _single_lut_limit(result, motor):
-    envelope = tendon_motor_abs_range(result, 0)
-    sign = shorten_sign(motor)
-    if envelope is None or not sign:
-        return None
-    lo, hi = envelope
-    release_abs = lo if sign > 0 else hi
-    measured_tight_abs = result["tightServoAbs"]
-    if (measured_tight_abs - release_abs) * sign <= 0:
-        return None
-    release_with_margin = motor_apply_tendon_delta(motor, release_abs, -kMotorAbsReleaseMarginCounts)
-    tight_with_margin = motor_apply_tendon_delta(motor, measured_tight_abs, kMotorAbsTightMarginCounts)
-    return min(lo, release_with_margin, tight_with_margin), max(hi, release_with_margin, tight_with_margin)
+    # Workspace comes from the fitted LUT line plus the configurable extension.
+    # A measured "tight" position is deliberately not used: tube bending changes
+    # the tendon path, so that measurement is only valid at the calibration pose.
+    return tendon_motor_abs_limits(
+        result, 0, motor,
+        kMotorAbsReleaseMarginCounts, kMotorAbsTightMarginCounts,
+    )
 
 
 def _finish_release(ctx, io, params, targets, current_raw, encoder, actual,

@@ -12,7 +12,7 @@ from desktop.core.host_calibration.finish import finish_dual_zero
 def _result(joint, *, rows=None, start=-2.5, step=5.0, maximum=7.5):
     return {
         'success': True, 'scaled': True, 'mappingVersion': 4,
-        'tendonLutValid': True, 'tendonLutCount': 3,
+        'tendonLutValid': True, 'tendonLutCount': len(rows[0]) if rows else 3,
         'tendonLutMotor': list(joint_motors(joint)),
         'tendonLutAngleStartDeg': start, 'tendonLutAngleStepDeg': step,
         'angleMax': maximum,
@@ -100,6 +100,14 @@ def test_last_short_sample_uses_static_angle_max_for_interpolation():
     assert list(io.commands[0][0].values()) == [18, -18]
 
 
+def test_two_point_fitted_lut_finishes_zero():
+    io = _IO((0,))
+    io.state.joint_calib_results[0] = _result(
+        0, rows=[[100, 300], [-100, -300]], start=-2.5, step=5.0, maximum=2.5)
+    assert finish_dual_zero(io, io.selected_joint_mask)[0]
+    assert list(io.commands[0][0].values()) == [200, -200]
+
+
 def test_host_generated_result_is_used_without_waiting_for_p4_snapshot_echo():
     io = _IO((0,))
     host_result = _result(0, rows=[[100, 200, 300], [-100, -200, -300]])
@@ -127,7 +135,7 @@ def test_simple_fake_port_can_still_use_snapshot_only_interface():
 
 @pytest.mark.parametrize('changes', [
     {'success': False}, {'scaled': False}, {'mappingVersion': 3},
-    {'tendonLutValid': False}, {'tendonLutCount': 2},
+    {'tendonLutValid': False}, {'tendonLutCount': 1},
     {'tendonLutMotor': [1, 0]}, {'tendonLutMotorAbs': [[1], [2]]},
     {'tendonLutAngleStartDeg': 1.0}, {'tendonLutAngleStepDeg': float('nan')},
 ])

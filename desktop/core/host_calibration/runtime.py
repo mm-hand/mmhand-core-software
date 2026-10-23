@@ -1087,7 +1087,7 @@ class HostCalibrationIO:
             return False, 'device or model identity changed before calibration commit'
         if not result or not result.get('success'):
             return False, 'invalid host joint calibration result'
-        if not result.get('tendonLutValid') or int(result.get('tendonLutCount', 0)) < 3:
+        if not result.get('tendonLutValid') or int(result.get('tendonLutCount', 0)) < 2:
             # 原机械结果仍在 flow 的关节记录里；不能上传无效 LUT 或伪造设备成功。
             return False, 'mechanical result retained in host diagnostics; LUT build invalid, not uploaded'
         payload = deepcopy(result)

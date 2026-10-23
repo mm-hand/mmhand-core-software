@@ -94,9 +94,9 @@ bool commandConflictsWithServoRebaseZero(uint8_t command)
 }
 
 /**
- * Calib Load 的 ABS Limit 包可能来自较早的控制策略。单腱关节加载完
- * 完整结果后，必须以本次结果记录的机械紧端重新生成范围，避免旧快照
- * 中的 LUT 末点提前钳住紧绳方向。双腱范围仍沿用快照中的两电机结果。
+ * Calib Load 的 ABS Limit 包可能来自较早的控制策略。加载完整结果后，
+ * 以本次 LUT 拟合直线两端 + 可配置外延重建工作区；不再使用实测紧端，
+ * 因为它只在标定姿态成立。双腱范围仍沿用快照中的两电机结果。
  */
 bool refreshLoadedSingleTendonAbsLimit(SystemRuntimeContext* sharedData,
                                        uint8_t jointIndex,
@@ -114,7 +114,7 @@ bool refreshLoadedSingleTendonAbsLimit(SystemRuntimeContext* sharedData,
 
     int32_t limitMin = 0;
     int32_t limitMax = 0;
-    if (!singleTendonCalibrationMotorAbsRange(
+    if (!tendonCalibrationMotorAbsRangeWithMargins(
             result,
             0,
             (uint8_t)primaryMotor,
@@ -134,12 +134,11 @@ bool refreshLoadedSingleTendonAbsLimit(SystemRuntimeContext* sharedData,
     }
     FW_LOG_INFO_PRINTF(
         "[UPPER] CALIB_LOAD_SINGLE_LIMIT J%02u M%02d limit=[%ld,%ld] "
-        "measuredTight=%ld margins=[%ld,%ld]\r\n",
+        "margins=[%ld,%ld]\r\n",
         (unsigned)jointIndex,
         primaryMotor,
         (long)limitMin,
         (long)limitMax,
-        (long)result.tightServoAbs,
         (long)mmhand::config::calibration::kMotorAbsReleaseMarginCounts,
         (long)mmhand::config::calibration::kMotorAbsTightMarginCounts);
     return true;
@@ -793,7 +792,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                     status = PROTO_ACK_STATUS_INVALID_DATA;
                     FW_LOG_WARN_PRINTF(
                         "[UPPER] CALIB_LOAD reject J%02u: single tendon "
-                        "measured tight endpoint is invalid\r\n",
+                        "LUT envelope is invalid\r\n",
                         (unsigned)jointIndex);
                 } else {
                     publishJointCalibrationResult(jointIndex, result);

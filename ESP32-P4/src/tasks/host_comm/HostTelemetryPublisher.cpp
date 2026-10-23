@@ -53,7 +53,7 @@ bool calibrationTendonLutMatchesJoint(
     }
     if (jointIndex >= ENCODER_TOTAL_NUM ||
         result.tendonLutValid == 0 ||
-        result.tendonLutCount < 3 ||
+        result.tendonLutCount < 2 ||
         result.tendonLutCount > TENDON_LUT_MAX_SAMPLES ||
         !isfinite(result.tendonLutAngleStartDeg) ||
         !isfinite(result.tendonLutAngleStepDeg) ||

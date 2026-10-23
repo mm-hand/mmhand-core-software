@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from .. import protocol
 from . import config
 from .math import (
+    extend_motor_abs_limits,
+    tendon_motor_abs_limits,
     TendonRawFitBuffer,
     build_calibration_result,
     build_tendon_lut,
@@ -726,11 +728,29 @@ class _DualMachine:
             return None
         inside_ready = ready_map["outside_counts"] >= -config.kFeedbackReadyEnterOutsideToleranceCounts
         limits = {}
-        for motor, tight_value in ((primary, tight_abs), (secondary, s_limit)):
-            slack = self._delta(motor, tight_value, -config.kMotorAbsWindowCounts)
-            margin = self._delta(motor, tight_value, config.kMotorAbsTightMarginCounts)
-            limits[motor] = min(slack, margin), max(slack, margin)
-            self.io.set_limit(motor, *limits[motor])
+        # LUT 构建失败时结果不可提交，但机械分支仍要留下可用限位；此时没有
+        # 拟合直线，只能用本轮实测的两个 ABS 端点外延（ram-only，不入库）。
+        measured = ((start_primary_abs, end_primary_abs), (preload_abs, s_limit))
+        for actuator, motor in enumerate((primary, secondary)):
+            bounds = tendon_motor_abs_limits(
+                result, actuator, motor,
+                config.kMotorAbsReleaseMarginCounts,
+                config.kMotorAbsTightMarginCounts,
+            )
+            if bounds is None:
+                lo, hi = sorted(measured[actuator])
+                bounds = extend_motor_abs_limits(
+                    motor, lo, hi,
+                    config.kMotorAbsReleaseMarginCounts,
+                    config.kMotorAbsTightMarginCounts,
+                )
+            if bounds is None:
+                self._diag(protocol.CALIB_DIAG_REASON_RESULT_BUILD_FAILED,
+                           protocol.CALIB_DIAG_PHASE_DUAL_EXCHANGE, self.joint,
+                           motor, 0, 0, 0, (1 << primary) | (1 << secondary))
+                return None
+            limits[motor] = bounds
+            self.io.set_limit(motor, *bounds)
         if workspace:
             if inside_ready:
                 workspace.primary_motor, workspace.secondary_motor = motors

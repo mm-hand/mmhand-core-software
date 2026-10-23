@@ -17,7 +17,8 @@ bool calibrationHasUsableTendonLut(const JointCalibrationResult& calibration,
     return actuatorIndex < TENDON_LUT_ACTUATOR_COUNT &&
         calibration.success && calibration.scaled &&
         calibration.tendonLutValid != 0 &&
-        calibration.tendonLutCount >= 3 &&
+        // 2 点即主机拟合直线的首末端点；P4 直接做线性插值，不再展开 24 点。
+        calibration.tendonLutCount >= 2 &&
         calibration.tendonLutCount <= TENDON_LUT_MAX_SAMPLES &&
         isfinite(calibration.tendonLutAngleStartDeg) &&
         isfinite(calibration.tendonLutAngleStepDeg) &&
@@ -113,53 +114,6 @@ bool tendonCalibrationMotorAbsRangeWithMargins(
         ? releaseWithMargin : tightWithMargin;
     *outMaxAbs = releaseWithMargin > tightWithMargin
         ? releaseWithMargin : tightWithMargin;
-    return true;
-}
-
-bool singleTendonCalibrationMotorAbsRange(
-    const JointCalibrationResult& calibration,
-    uint8_t actuatorIndex,
-    uint8_t motorChannel,
-    int32_t releaseMarginCounts,
-    int32_t tightMarginCounts,
-    int32_t* outMinAbs,
-    int32_t* outMaxAbs)
-{
-    int32_t lutMinAbs = 0;
-    int32_t lutMaxAbs = 0;
-    if (!outMinAbs || !outMaxAbs || releaseMarginCounts < 0 ||
-        tightMarginCounts < 0 ||
-        !tendonCalibrationMotorAbsRange(calibration,
-                                        actuatorIndex,
-                                        &lutMinAbs,
-                                        &lutMaxAbs)) {
-        return false;
-    }
-
-    const int8_t shortenSign = getMotorTendonShortenAbsSign(motorChannel);
-    if (shortenSign == 0) {
-        return false;
-    }
-    const int32_t releaseAbs = shortenSign > 0 ? lutMinAbs : lutMaxAbs;
-    const int32_t measuredTightAbs = calibration.tightServoAbs;
-    // 实测紧端必须位于 release -> tighten 的正确方向；不可信时拒绝建边界。
-    if ((int64_t)(measuredTightAbs - releaseAbs) * shortenSign <= 0) {
-        return false;
-    }
-    const int32_t releaseWithMargin =
-        motorApplyTendonDelta(motorChannel, releaseAbs, -releaseMarginCounts);
-    const int32_t tightWithMargin = motorApplyTendonDelta(
-        motorChannel, measuredTightAbs, tightMarginCounts);
-    // 范围必须覆盖整条 LUT；实测紧端负责修正回程迟滞造成的末点偏小，
-    // LUT min/max 则兜住少量采样噪声或非严格单调段。
-    int32_t minAbs = lutMinAbs;
-    int32_t maxAbs = lutMaxAbs;
-    if (releaseWithMargin < minAbs) minAbs = releaseWithMargin;
-    if (releaseWithMargin > maxAbs) maxAbs = releaseWithMargin;
-    if (tightWithMargin < minAbs) minAbs = tightWithMargin;
-    if (tightWithMargin > maxAbs) maxAbs = tightWithMargin;
-    *outMinAbs = minAbs;
-    *outMaxAbs = maxAbs;
     return true;
 }
 

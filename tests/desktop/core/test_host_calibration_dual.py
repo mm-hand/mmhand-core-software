@@ -5,7 +5,8 @@ import pytest
 from desktop.core import protocol
 from desktop.core.host_calibration import config, dual_motor as dual
 from desktop.core.host_calibration.math import (
-    TendonRawFitBuffer, manual_entry_crc, wrap_encoder_delta,
+    TendonRawFitBuffer, manual_entry_crc, tendon_motor_abs_limits,
+    wrap_encoder_delta,
 )
 from desktop.core.host_calibration.time_alignment import TimeAlignmentError
 
@@ -491,7 +492,13 @@ def test_complete_thumb_dual_trace_releases_then_searches_preloads_exchanges_and
     assert outcome["result"]["encoderSpan"] >= 546
     assert io.values[20] < 152  # No extra primary tightening after exchange.
     assert set(outcome["limits"]) == {20, 21}
-    assert outcome["limits"][20] == (152 - 20480, 152 + 900)
+    # 限位来自 LUT 拟合直线两端 + 可配置外延，不再依赖实测 tight 停点。
+    result = outcome["result"]
+    for actuator, motor in enumerate(config.joint_motors(16)):
+        assert outcome["limits"][motor] == tendon_motor_abs_limits(
+            result, actuator, motor,
+            config.kMotorAbsReleaseMarginCounts,
+            config.kMotorAbsTightMarginCounts)
     assert io.limits == outcome["limits"]
 
 
@@ -598,8 +605,11 @@ def test_dual_orders_result_endpoints_without_flipping_manual_or_lut_samples(
     assert result["tendonLutMotor"] == [primary, secondary]
     assert result["startServoAbs"] == (120 if signed_travel > 0 else -60)
     assert result["tightServoAbs"] == (-60 if signed_travel > 0 else 120)
-    assert outcome["limits"][primary] == (120 - 20480, 120 + 900)
-    assert outcome["limits"][secondary] == (80 - 20480, 80 + 900)
+    for actuator, motor in enumerate((primary, secondary)):
+        assert outcome["limits"][motor] == tendon_motor_abs_limits(
+            result, actuator, motor,
+            config.kMotorAbsReleaseMarginCounts,
+            config.kMotorAbsTightMarginCounts)
     assert protocol.build_calib_load_joint_cmd(result)
 
 
