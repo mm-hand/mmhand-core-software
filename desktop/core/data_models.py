@@ -321,7 +321,7 @@ class HandModel:
     # 当前状态最近一次有效 P4 数据包的 millis() 时间。0 表示尚未收到 P4 时间。
     p4_time_ms: int = 0
     has_p4_time: bool = False
-    # 最近一帧 PACKET_TYPE_SERVO_ANGLE 自带的 P4 时间戳；记录舵机 ABS 时
+    # 最近一帧 PACKET_TYPE_SERVO_POSITION 自带的 P4 时间戳；记录舵机 ABS 时
     # 必须使用该值，不能借用随后到达的其他状态包时间。
     servo_feedback_p4_time_ms: int = 0
     servo_raw_p4_time_ms: int = 0
@@ -512,7 +512,7 @@ class HandModel:
     safety_event_last_rx_ts: float = 0.0
     has_safety_event: bool = False
 
-    # 伺服绝对角度来自 SERVO_ANGLE；在线状态统一来自 SYSTEM_STATUS 位图。
+    # 伺服绝对角度来自 SERVO_POSITION；在线状态统一来自 SYSTEM_STATUS 位图。
     servo_angles: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     servo_online: List[bool] = field(default_factory=lambda: [False] * MOTOR_COUNT)
     # 当前单圈 raw 来自 100 Hz 流；Flash raw 来自保存结果触发的独立快照。

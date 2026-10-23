@@ -22,11 +22,10 @@ static_assert(SERVO_TOTAL_NUM == 27, "Protocol motor count drift");
 // P4 -> Desktop 包类型。
 inline constexpr uint8_t PACKET_TYPE_SERVO_MAINTENANCE = 0x1B; ///< 舵机维护事务结果
 inline constexpr uint8_t PACKET_TYPE_SENSOR = 0x01; ///< 21 关节映射角
-inline constexpr uint8_t PACKET_TYPE_SERVO_ANGLE = 0x03; ///< 27 路 logical ABS
+inline constexpr uint8_t PACKET_TYPE_SERVO_POSITION = 0x03; ///< 27 路单圈 raw + 27 路 logical ABS，同一时间戳
 inline constexpr uint8_t PACKET_TYPE_SERVO_TELEM = 0x05; ///< 舵机遥测
 inline constexpr uint8_t PACKET_TYPE_PROTO_ACK = 0x06; ///< 命令 ACK
 inline constexpr uint8_t PACKET_TYPE_FAULT_STATUS = 0x07; ///< 故障与在线位图
-inline constexpr uint8_t PACKET_TYPE_SERVO_RAW = 0x09; ///< 27 路单圈 raw
 inline constexpr uint8_t PACKET_TYPE_TACTILE = 0x0A; ///< 五指触觉摘要
 inline constexpr uint8_t PACKET_TYPE_ENCODER_RAW = 0x0B; ///< 21 路磁编 raw
 inline constexpr uint8_t PACKET_TYPE_SYSTEM_STATUS = 0x0C; ///< 状态机与 owner

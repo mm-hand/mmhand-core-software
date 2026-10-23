@@ -682,12 +682,11 @@ bool sendControlTracePacket(const ControlTraceData_t& trace)
     return FW_SERIAL_WRITE(buffer, idx) == idx;
 }
 
-/** 同快照 RAW/ABS 同节奏发送；一次串口写避免日志插入两帧之间。 */
+/** 同一快照 RAW/ABS 合并为一帧，保证两边时间戳严格一致。 */
 bool sendServoPositionPackets(const ServoAngleData_t& position)
 {
-    uint8_t buffer[3U + SERVO_TOTAL_NUM * 2U + 4U + 1U +
-                   3U + SERVO_TOTAL_NUM * 4U + 4U + 1U];
-    const size_t length = encodeServoPositionPackets(buffer, sizeof(buffer), position);
+    uint8_t buffer[3U + SERVO_TOTAL_NUM * 2U + SERVO_TOTAL_NUM * 4U + 4U + 1U];
+    const size_t length = encodeServoPositionPacket(buffer, sizeof(buffer), position);
     return length != 0U && FW_SERIAL_WRITE(buffer, length) == length;
 }
 

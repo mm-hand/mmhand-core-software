@@ -761,21 +761,6 @@ def parse_safety_event_packet(payload: bytes) -> Optional[dict]:
     }
 
 
-def parse_servo_angle_packet(payload: bytes) -> Optional[List[int]]:
-    """解析 27 路 logical ABS；在线状态统一来自 SYSTEM_STATUS。"""
-    if len(payload) != MOTOR_COUNT * 4:
-        return None
-
-    channel_count = MOTOR_COUNT
-
-    angles: List[int] = []
-    for i in range(channel_count):
-        start = i * 4
-        angles.append(struct.unpack(">i", payload[start:start + 4])[0])
-
-    return angles
-
-
 def parse_servo_telem_packet(
     payload: bytes,
 ) -> Optional[
@@ -803,19 +788,20 @@ def parse_servo_telem_packet(
     return speeds, loads, currents, volts, temps
 
 
-def parse_servo_raw_packet(payload: bytes) -> Optional[List[int]]:
-    """解析当前单圈 RawNow；FlashRaw 改由保存结果事件上报。"""
-    if len(payload) != MOTOR_COUNT * 2:
+def parse_servo_position_packet(payload: bytes) -> Optional[Tuple[List[int], List[int]]]:
+    """Parse one merged packet: 27 raw int16 first, then 27 logical ABS int32."""
+    if len(payload) != MOTOR_COUNT * 6:
         return None
-
-    channel_count = MOTOR_COUNT
-
-    raw_positions: List[int] = []
-    for i in range(channel_count):
-        start = i * 2
-        raw_positions.append(struct.unpack(">h", payload[start:start + 2])[0])
-
-    return raw_positions
+    raw_positions = [
+        struct.unpack(">h", payload[2 * i:2 * i + 2])[0]
+        for i in range(MOTOR_COUNT)
+    ]
+    base = MOTOR_COUNT * 2
+    angles = [
+        struct.unpack(">i", payload[base + 4 * i:base + 4 * i + 4])[0]
+        for i in range(MOTOR_COUNT)
+    ]
+    return raw_positions, angles
 
 
 def parse_multiturn_restore_result_packet(payload: bytes) -> Optional[Tuple[int, int, int]]:

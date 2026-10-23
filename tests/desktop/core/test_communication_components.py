@@ -33,7 +33,7 @@ from desktop.core.protocol import (
     ENCODER_COUNT,
     MOTOR_COUNT,
     PACKET_TYPE_ENCODER_RAW,
-    PACKET_TYPE_SERVO_ANGLE,
+    PACKET_TYPE_SERVO_POSITION,
     PACKET_TYPE_SERVO_REBASE_ZERO_RESULT,
     PACKET_TYPE_SERVO_TELEM,
     PACKET_TYPE_SYSTEM_STATUS,
@@ -290,9 +290,9 @@ def _encoder_packet(timestamp_ms: int, first: int, error_index: int = -1) -> tup
 
 def _abs_packet(timestamp_ms: int, first: int) -> tuple:
     values = [first + index for index in range(MOTOR_COUNT)]
-    return _timestamped_packet(
-        PACKET_TYPE_SERVO_ANGLE, struct.pack(f">{MOTOR_COUNT}i", *values), timestamp_ms
-    )
+    payload = struct.pack(f">{MOTOR_COUNT}h", *values)
+    payload += struct.pack(f">{MOTOR_COUNT}i", *values)
+    return _timestamped_packet(PACKET_TYPE_SERVO_POSITION, payload, timestamp_ms)
 
 
 def _connectivity_packet(

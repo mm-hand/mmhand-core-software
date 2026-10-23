@@ -47,23 +47,20 @@ int main()
     position.servoAngles[26] = INT_MAX;
     unsigned char buffer[180];
     std::memset(buffer, 0xA5, sizeof(buffer));
-    assert(p4::host::encodeServoPositionPackets(buffer, 177, position) == 0);
+    assert(p4::host::encodeServoPositionPacket(buffer, 169, position) == 0);
     for (auto value : buffer) assert(value == 0xA5);
-    assert(p4::host::encodeServoPositionPackets(nullptr, sizeof(buffer), position) == 0);
-    assert(p4::host::encodeServoPositionPackets(buffer, sizeof(buffer), position) == 178);
-    // Original independent frames: FE/length/09/raw/time/FF, FE/length/03/ABS/time/FF.
-    assert(buffer[0] == 0xFE && buffer[1] == 60 && buffer[2] == 0x09);
-    assert(buffer[61] == 0xFF);
-    assert(buffer[62] == 0xFE && buffer[63] == 114 && buffer[64] == 0x03);
-    assert(buffer[177] == 0xFF && buffer[178] == 0xA5 && buffer[179] == 0xA5);
+    assert(p4::host::encodeServoPositionPacket(nullptr, sizeof(buffer), position) == 0);
+    assert(p4::host::encodeServoPositionPacket(buffer, sizeof(buffer), position) == 170);
+    // One frame: FE/length/03/27 raw/time/27 ABS/time/FF.
+    assert(buffer[0] == 0xFE && buffer[1] == 168 && buffer[2] == 0x03);
+    assert(buffer[169] == 0xFF && buffer[170] == 0xA5 && buffer[171] == 0xA5);
     for (unsigned i = 0; i < 27; ++i) {
         const unsigned char* raw = buffer + 3 + i * 2;
         const unsigned rawBits = (unsigned(raw[0]) << 8) | raw[1];
         assert(rawBits == static_cast<unsigned short>(position.servoRawPositions[i]));
-        assert(read32(buffer + 65 + i * 4) == static_cast<unsigned>(position.servoAngles[i]));
+        assert(read32(buffer + 57 + i * 4) == static_cast<unsigned>(position.servoAngles[i]));
     }
-    assert(read32(buffer + 57) == position.timestamp);
-    assert(read32(buffer + 173) == position.timestamp);
+    assert(read32(buffer + 165) == position.timestamp);
     return 0;
 }
 ''', encoding="utf-8",

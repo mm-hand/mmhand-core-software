@@ -11,7 +11,7 @@ from desktop.core.generated_upper_protocol import (
     CMD_DIAGNOSTICS_SUBSCRIBE,
     PACKET_TYPE_CONTROL_TRACE,
     PACKET_TYPE_CONTROL_COMPONENTS,
-    PACKET_TYPE_SERVO_ANGLE,
+    PACKET_TYPE_SERVO_POSITION,
 )
 from desktop.core.protocol import (
     build_diagnostics_subscribe_cmd,
@@ -100,22 +100,22 @@ def test_servo_abs_reducer_keeps_its_own_p4_timestamp() -> None:
 
         @staticmethod
         def _parse_protocol_payload(name: str, _payload: bytes):
-            assert name == "parse_servo_angle_packet"
-            return [1000 + index for index in range(27)]
+            assert name == "parse_servo_position_packet"
+            return [0] * 27, [1000 + index for index in range(27)]
 
         @staticmethod
         def _apply_connectivity_visibility(_model) -> None:
             pass
 
     router = P4PacketRouter(
-        {PACKET_TYPE_SERVO_ANGLE: "servo_abs"},
+        {PACKET_TYPE_SERVO_POSITION: "servo_position"},
         lambda _packet_type, payload: (payload[:-4], struct.unpack(">I", payload[-4:])[0]),
     )
     reducer = StateReducer(router, AckTracker())
     model = reducer.process_packets(
         Owner(),
         [
-            (PACKET_TYPE_SERVO_ANGLE, b"servo" + struct.pack(">I", 1000)),
+            (PACKET_TYPE_SERVO_POSITION, b"servo" + struct.pack(">I", 1000)),
             (0xEE, b"other" + struct.pack(">I", 1015)),
         ],
     )

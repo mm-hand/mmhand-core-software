@@ -8,7 +8,7 @@ import desktop.core.communication.state_reducer as state_reducer_module
 from desktop.core.comm_layer import LowerComputerComm
 from desktop.core.communication.ack_tracker import AckTracker
 from desktop.core.host_calibration.runtime import HostCalibrationIO
-from desktop.core.protocol import PACKET_TYPE_SERVO_ANGLE
+from desktop.core.protocol import PACKET_TYPE_SERVO_POSITION
 from test_host_calibration_runtime import io
 
 
@@ -34,10 +34,10 @@ def test_rx_keeps_wall_dates_and_monotonic_freshness_separate(monkeypatch, jump)
     monkeypatch.setattr(state_reducer_module, "STATE_SNAPSHOT_MIN_INTERVAL_S", 0.0)
     comm = LowerComputerComm('')
     wall = time.time()
-    payload = struct.pack('>27iI', *([12] * 27), 100)
-    first = comm._process_packets([(PACKET_TYPE_SERVO_ANGLE, payload)])
+    payload = struct.pack('>27h', *([12] * 27)) + struct.pack('>27i', *([12] * 27)) + struct.pack('>I', 100)
+    first = comm._process_packets([(PACKET_TYPE_SERVO_POSITION, payload)])
     monkeypatch.setattr(time, 'time', lambda: wall + jump)
-    second = comm._process_packets([(PACKET_TYPE_SERVO_ANGLE, payload)])
+    second = comm._process_packets([(PACKET_TYPE_SERVO_POSITION, payload)])
     assert second.servo_abs_last_rx_ts == wall + jump
     assert abs(HostCalibrationIO._age(second, 100, second.received_at('servo_abs_last_rx_ts'))) < 100
     assert second.received_at('servo_abs_last_rx_ts') >= first.received_at('servo_abs_last_rx_ts')

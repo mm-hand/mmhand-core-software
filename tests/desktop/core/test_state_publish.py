@@ -15,7 +15,7 @@ from desktop.core.protocol import (
     PACKET_TYPE_ENCODER_RAW,
     PACKET_TYPE_PROTO_ACK,
     PACKET_TYPE_DIRECT_TARGET_RESULT,
-    PACKET_TYPE_SERVO_ANGLE,
+    PACKET_TYPE_SERVO_POSITION,
     PACKET_TYPE_SYSTEM_STATUS,
 )
 
@@ -51,8 +51,8 @@ def _comm() -> LowerComputerComm:
 def _abs_packet(first: int, timestamp_ms: int) -> tuple:
     values = [first] * 27
     return (
-        PACKET_TYPE_SERVO_ANGLE,
-        struct.pack(">27i", *values) + struct.pack(">I", timestamp_ms),
+        PACKET_TYPE_SERVO_POSITION,
+        struct.pack(">27h", *values) + struct.pack(">27i", *values) + struct.pack(">I", timestamp_ms),
     )
 
 

@@ -17,8 +17,7 @@ from desktop.core.protocol import (
     PACKET_TYPE_ENCODER_RAW,
     PACKET_TYPE_DIRECT_TARGET_RESULT,
     PACKET_TYPE_PROTO_ACK,
-    PACKET_TYPE_SERVO_ANGLE,
-    PACKET_TYPE_SERVO_RAW,
+    PACKET_TYPE_SERVO_POSITION,
     PACKET_TYPE_SERVO_TELEM,
     PACKET_TYPE_SERVO_LOGICAL_RANGE,
     build_motor_pos_abs_cmd,
@@ -208,7 +207,8 @@ def test_each_feedback_source_keeps_its_own_timestamp_and_copy():
     comm = LowerComputerComm("")
     model = comm._process_packets([
         (PACKET_TYPE_ENCODER_RAW, struct.pack(">21HI", *range(21), 90)),
-        (PACKET_TYPE_SERVO_ANGLE, struct.pack(">27iI", *range(27), 91)),
+        (PACKET_TYPE_SERVO_POSITION,
+         struct.pack(">27h", *range(27)) + struct.pack(">27i", *range(27)) + struct.pack(">I", 91)),
         (PACKET_TYPE_SERVO_TELEM,
          b"".join(struct.pack(">hhhBB", 1, -2, 3, 12, 24) for _ in range(27))
          + struct.pack(">I", 92)),
@@ -237,23 +237,13 @@ def test_each_feedback_source_keeps_its_own_timestamp_and_copy():
     assert copied.servo_logical_range_last_rx_ts == model.servo_logical_range_last_rx_ts
 
 
-def test_paired_position_packets_can_arrive_in_separate_rx_batches_without_losing_pair(
-    monkeypatch,
-):
-    # 每批都要拿到快照：关闭发布节流（默认 20 ms 只约束高频遥测，不改变配对语义）。
+def test_merged_position_packet_has_one_timestamp(monkeypatch):
+    # 每批都要拿到快照：关闭发布节流（默认 20 ms 只约束高频遥测）。
     monkeypatch.setattr(state_reducer_module, "STATE_SNAPSHOT_MIN_INTERVAL_S", 0.0)
     comm = LowerComputerComm('')
-    previous = comm._process_packets([
-        (PACKET_TYPE_SERVO_RAW, struct.pack('>27hI', *([100] * 27), 1000)),
-        (PACKET_TYPE_SERVO_ANGLE, struct.pack('>27iI', *([0] * 27), 1000)),
-    ])
-    assert previous.servo_feedback_p4_time_ms == previous.servo_raw_p4_time_ms == 1000
-    raw = comm._process_packets([
-        (PACKET_TYPE_SERVO_RAW, struct.pack('>27hI', *([101] * 27), 1020)),
-    ])
-    assert raw.servo_raw_p4_time_ms == 1020 and raw.servo_feedback_p4_time_ms == 1000
     paired = comm._process_packets([
-        (PACKET_TYPE_SERVO_ANGLE, struct.pack('>27iI', *([1] * 27), 1020)),
+        (PACKET_TYPE_SERVO_POSITION,
+         struct.pack('>27h', *([101] * 27)) + struct.pack('>27i', *([1] * 27)) + struct.pack('>I', 1020)),
     ])
     copied = HandModel()
     copied.copy_state_from(paired)

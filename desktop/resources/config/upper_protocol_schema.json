@@ -38,10 +38,10 @@
       "description": "21 关节映射角"
     },
     {
-      "name": "PACKET_TYPE_SERVO_ANGLE",
+      "name": "PACKET_TYPE_SERVO_POSITION",
       "value": 3,
       "timestamp": true,
-      "description": "27 路 logical ABS"
+      "description": "27 路单圈 raw + 27 路 logical ABS，同一时间戳"
     },
     {
       "name": "PACKET_TYPE_SERVO_TELEM",
@@ -60,12 +60,6 @@
       "value": 7,
       "timestamp": true,
       "description": "故障与在线位图"
-    },
-    {
-      "name": "PACKET_TYPE_SERVO_RAW",
-      "value": 9,
-      "timestamp": true,
-      "description": "27 路单圈 raw"
     },
     {
       "name": "PACKET_TYPE_TACTILE",

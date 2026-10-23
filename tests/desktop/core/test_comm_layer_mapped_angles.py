@@ -13,8 +13,7 @@ from desktop.core.protocol import (
     PACKET_TYPE_MULTITURN_RESTORE_RESULT,
     PACKET_TYPE_SENSOR,
     parse_multiturn_restore_result_packet,
-    parse_servo_angle_packet,
-    parse_servo_raw_packet,
+    parse_servo_position_packet,
     parse_servo_telem_packet,
 )
 
@@ -61,25 +60,13 @@ def test_servo_telemetry_packet_includes_signed_current_without_online_array() -
     )
 
 
-def test_servo_raw_packet_contains_only_current_raw() -> None:
-    values = [12, 4090] + [0] * 25
-    payload = b"".join(struct.pack(">h", value) for value in values)
-
-    parsed = parse_servo_raw_packet(payload)
-
-    assert parsed == values
-
-
-def test_servo_raw_packet_rejects_removed_legacy_layouts() -> None:
-    assert parse_servo_raw_packet(bytes(2 * 3)) is None
-    assert parse_servo_raw_packet(bytes(2 * 7)) is None
-
-
-def test_servo_angle_packet_no_longer_contains_online_array() -> None:
-    values = list(range(MOTOR_COUNT))
-    payload = b"".join(struct.pack(">i", value) for value in values)
-    assert parse_servo_angle_packet(payload) == values
-    assert parse_servo_angle_packet(payload + bytes(MOTOR_COUNT)) is None
+def test_servo_position_packet_contains_raw_and_abs_in_one_frame() -> None:
+    raw = [12, 4090] + [0] * 25
+    angles = list(range(MOTOR_COUNT))
+    payload = b"".join(struct.pack(">h", value) for value in raw)
+    payload += b"".join(struct.pack(">i", value) for value in angles)
+    assert parse_servo_position_packet(payload) == (raw, angles)
+    assert parse_servo_position_packet(payload[:-1]) is None
 
 
 def test_multiturn_restore_result_packet() -> None:

@@ -218,10 +218,8 @@ class StateReducer:
                 emitted = self._apply_sensor(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
             elif packet_kind == "encoder_raw":
                 emitted = self._apply_encoder_raw(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
-            elif packet_kind == "servo_abs":
-                emitted = self._apply_servo_abs(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
-            elif packet_kind == "servo_raw":
-                emitted = self._apply_servo_raw(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
+            elif packet_kind == "servo_position":
+                emitted = self._apply_servo_position(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
             elif packet_kind == "multiturn_restore_result":
                 emitted = self._apply_multiturn_restore_result(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
             elif packet_kind == "servo_rebase_zero_result":
@@ -349,49 +347,38 @@ class StateReducer:
             emitted = True
         return emitted
 
-    def _apply_servo_abs(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
-        """Apply one servo_abs packet within the RX batch boundary."""
-        emitted = False
-        parsed = owner._parse_protocol_payload("parse_servo_angle_packet", payload)
-        if parsed is not None:
-            for i in range(min(MOTOR_COUNT, len(parsed))):
-                model.servo_angles[i] = int(parsed[i])
-            # 舵机 ABS 包与固件反馈快照共用该 P4 时间戳。单独保存后，
-            # CSV 不会误用同批次中随后到达的 SYSTEM_STATUS 等包时间。
-            if packet_p4_time_ms is not None:
-                model.servo_feedback_p4_time_ms = int(packet_p4_time_ms)
-            model.servo_abs_last_rx_ts = time.time()
-            model.monotonic_received['servo_abs_last_rx_ts'] = time.monotonic()
-            model.has_servo_angle_data = True
-            # ABS 包没有单路有效位。尚无权威在线状态时，不能把
-            # 默认 multi_turn_unknown=0 和占位 ABS 误当成可信反馈。
-            valid_mask = (
-                int(model.servo_online_bitmap)
-                & ~int(model.multi_turn_unknown_bitmap)
-                & ((1 << min(MOTOR_COUNT, len(parsed))) - 1)
-                if model.has_connectivity_status else 0
+    def _apply_servo_position(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
+        """Apply one merged raw+ABS servo position packet."""
+        parsed = owner._parse_protocol_payload("parse_servo_position_packet", payload)
+        if parsed is None:
+            return False
+        raw_positions, angles = parsed
+        for i in range(min(MOTOR_COUNT, len(raw_positions))):
+            model.servo_raw_positions[i] = int(raw_positions[i])
+        for i in range(min(MOTOR_COUNT, len(angles))):
+            model.servo_angles[i] = int(angles[i])
+        # 两个数组共享同一个 P4 时间戳；CSV 不会误用同批次的 SYSTEM_STATUS。
+        if packet_p4_time_ms is not None:
+            model.servo_feedback_p4_time_ms = int(packet_p4_time_ms)
+            model.servo_raw_p4_time_ms = int(packet_p4_time_ms)
+        model.servo_abs_last_rx_ts = time.time()
+        model.monotonic_received['servo_abs_last_rx_ts'] = time.monotonic()
+        model.has_servo_angle_data = True
+        model.has_servo_raw_data = True
+        # ABS 没有单路有效位。尚无权威在线状态时，不能把占位 ABS 当成可信反馈。
+        valid_mask = (
+            int(model.servo_online_bitmap)
+            & ~int(model.multi_turn_unknown_bitmap)
+            & ((1 << min(MOTOR_COUNT, len(angles))) - 1)
+            if model.has_connectivity_status else 0
+        )
+        if packet_p4_time_ms is not None:
+            self.feedback_history.record(
+                "servo_abs", int(packet_p4_time_ms),
+                tuple(int(value) for value in angles),
+                valid_mask, model.servo_abs_last_rx_ts,
             )
-            if packet_p4_time_ms is not None:
-                self.feedback_history.record(
-                    "servo_abs", int(packet_p4_time_ms),
-                    tuple(int(value) for value in parsed),
-                    valid_mask, model.servo_abs_last_rx_ts,
-                )
-            emitted = True
-        return emitted
-
-    def _apply_servo_raw(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
-        """Apply one servo_raw packet within the RX batch boundary."""
-        emitted = False
-        parsed = owner._parse_protocol_payload("parse_servo_raw_packet", payload)
-        if parsed is not None:
-            for i in range(min(MOTOR_COUNT, len(parsed))):
-                model.servo_raw_positions[i] = int(parsed[i])
-            if packet_p4_time_ms is not None:
-                model.servo_raw_p4_time_ms = int(packet_p4_time_ms)
-            model.has_servo_raw_data = True
-            emitted = True
-        return emitted
+        return True
 
     def _apply_multiturn_restore_result(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one multiturn_restore_result packet within the RX batch boundary."""
