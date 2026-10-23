@@ -17,6 +17,7 @@ from functools import lru_cache
 import queue
 import threading
 import time
+from collections import namedtuple
 from typing import List, NamedTuple, Optional, Tuple
 
 from .angle_mapping import urdf_manual_scaled_mapping_metadata
@@ -123,6 +124,121 @@ def _active_urdf_repo_path() -> str:
         return str((source.get("source") or {}).get("source_urdf_path", ""))
     except (OSError, ValueError):
         return ""
+
+
+_CoordinatePlan = namedtuple("_CoordinatePlan", [
+    "label", "command_id", "has_result_field", "baseline_token_field", "success_field", "token_field",
+    "matches", "record", "clear", "service_result", "invalidate_on_timeout",
+    "success_message", "timeout_message", "final_message", "rejected_message", "unsafe_state_message",
+    "requires_sync", "await_capture", "precheck", "invalidation_reason",
+])
+
+def _turn_zero_precheck(self, state, mask, plan, changed, rejected, motion_gate):
+    """标定前归零的前置条件：先消化迟到结果，再确认真实处于可归零状态。"""
+    self._service_servo_turn_zero_result(state)
+    pending = (self._servo_turn_zero_unresolved_mask or self._servo_rebase_zero_unresolved_mask
+               or self._servo_rebase_zero_capture_mask or self._multiturn_pending_restore_mask)
+    if pending:
+        return rejected("previous servo coordinate transaction is awaiting its result/new feedback")
+    if not state.has_servo_reset_zero_status:
+        return rejected("P4 firmware does not report calibration turn-reset status")
+    if not self._coordinate_safe_state(state, mask):
+        return rejected("calibration turn-reset requires fresh stopped status and online selected motors")
+    if int(state.servo_reset_zero_status) == 1:
+        return rejected("another calibration turn-reset is running")
+    if changed():
+        return rejected("calibration turn-reset cancelled")
+
+    # 先发一次维护 RESET 并等它落定，然后才开始逐电机归零。
+    reset_sent_at = time.monotonic()
+
+    def reset_once():
+        with self._coordinate_command_lock:
+            if changed():
+                return False
+            return self.reset()
+
+    if not motion_gate(reset_once):
+        return rejected("calibration turn-reset cancelled before maintenance RESET")
+    reset_ack = self.comm.wait_for_ack(
+        CMD_RESET, CALIBRATION_TURN_RESET_ACK_TIMEOUT_S, received_after_monotonic=reset_sent_at,
+    )
+    if (changed() or reset_ack is None or int(reset_ack[0]) != CMD_RESET
+            or int(reset_ack[2]) not in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED)):
+        return rejected("maintenance RESET timeout/reject or cancelled")
+    deadline = time.monotonic() + CALIBRATION_TURN_RESET_SETTLE_S
+    while time.monotonic() < deadline:
+        if changed():
+            return rejected("calibration turn-reset cancelled after maintenance RESET")
+        time.sleep(min(0.02, max(0.0, deadline - time.monotonic())))
+    return None
+
+
+_ABS_ZERO_PLAN = _CoordinatePlan(
+    label="servo ABS rebase",
+    command_id=CMD_MOTOR_ABS_ZERO,
+    has_result_field="has_servo_rebase_zero_result",
+    baseline_token_field="servo_rebase_zero_result_token",
+    success_field="servo_rebase_zero_success_mask",
+    token_field="servo_rebase_zero_result_token",
+    matches=lambda s, token, sent_at, mask: HandController._servo_abs_zero_result_matches(s, token, sent_at, mask),
+    record=lambda self, pending, token, sent_at, device_id, connection, comm: (
+        setattr(self, "_servo_rebase_zero_unresolved_mask", pending),
+        setattr(self, "_servo_rebase_zero_baseline_token", token),
+        setattr(self, "_servo_rebase_zero_sent_at", sent_at),
+        setattr(self, "_servo_rebase_zero_device_id", device_id),
+        setattr(self, "_servo_rebase_zero_request_connection", connection),
+    ),
+    clear=lambda self, success: (
+        setattr(self, "_servo_rebase_zero_unresolved_mask", 0),
+        setattr(self, "_servo_rebase_zero_device_id", self._servo_rebase_zero_device_id if success else ""),
+    ),
+    service_result=lambda self, state: self._service_servo_rebase_zero_capture(state),
+    invalidate_on_timeout=lambda self, pending, plan, state: self._invalidate_servo_rebase_zero_anchors(pending),
+    success_message="servo ABS rebased; new feedback anchor capture pending",
+    timeout_message="servo ABS rebase result timed out or cancelled; original transaction remains unresolved",
+    final_message="servo ABS rebase failed",
+    rejected_message=lambda status: f"servo ABS rebase rejected after 3 attempts (status={status}); hardware write not accepted",
+    unsafe_state_message="servo ABS zero requires fresh stopped status and online, unambiguous selected motors",
+    requires_sync=True,
+    await_capture=True,
+    precheck=None,
+    invalidation_reason="servo_abs_rebase_zero",
+)
+
+# 归零的锚点失效原因固定为 calibration_turn_zero：调用方传入的 invalidation_reason
+# 只用于日志，不改变安全语义。
+_TURN_ZERO_PLAN = _CoordinatePlan(
+    label="calibration turn-reset",
+    command_id=CMD_SERVO_RESET_ZERO,
+    has_result_field="has_servo_reset_zero_status",
+    baseline_token_field="servo_reset_zero_result_token",
+    success_field="servo_reset_zero_success_mask",
+    token_field="servo_reset_zero_request_token",
+    matches=lambda s, token, sent_at, mask: HandController._servo_turn_zero_result_matches(s, token, sent_at, mask),
+    record=lambda self, pending, token, sent_at, device_id, connection, comm: (
+        setattr(self, "_servo_turn_zero_unresolved_mask", pending),
+        setattr(self, "_servo_turn_zero_baseline_token", token),
+        setattr(self, "_servo_turn_zero_sent_at", sent_at),
+        setattr(self, "_servo_turn_zero_device_id", device_id),
+        setattr(self, "_servo_turn_zero_connection", connection),
+        setattr(self, "_servo_turn_zero_comm", comm),
+        setattr(self, "_servo_turn_zero_reason", _TURN_ZERO_PLAN.invalidation_reason),
+    ),
+    clear=lambda self, success: setattr(self, "_servo_turn_zero_unresolved_mask", 0),
+    service_result=lambda self, state: self._service_servo_turn_zero_result(state),
+    invalidate_on_timeout=lambda self, pending, plan, state: self._invalidate_coordinate_anchors(
+        pending, _TURN_ZERO_PLAN.invalidation_reason, self._coordinate_state()),
+    success_message="calibration turn-reset complete",
+    timeout_message="calibration turn-reset result timed out or cancelled; original transaction unresolved",
+    final_message="calibration turn-reset failed",
+    rejected_message=lambda status: f"calibration turn-reset rejected after 3 attempts (status={status}); hardware write not accepted",
+    unsafe_state_message="calibration turn-reset requires fresh stopped status and online selected motors",
+    requires_sync=False,
+    await_capture=False,
+    precheck=_turn_zero_precheck,
+    invalidation_reason="calibration_turn_zero",
+)
 
 
 class ManualPrepareResult(NamedTuple):
@@ -2334,136 +2450,11 @@ class HandController:
         mask = int(motor_mask)
         if mask <= 0 or mask & ~((1 << MOTOR_COUNT) - 1):
             raise ValueError("servo ABS rebase requires a non-zero valid motor mask")
-        success = 0
-        result_token = 0
-
-        def rejected(message):
-            return ServoRebaseZeroResult(False, message, result_token, success, mask & ~success)
-
-        if not self.comm:
-            return rejected("serial not connected")
-        if cancelled():
-            return rejected("servo ABS zero cancelled before submission")
-        if not self._servo_rebase_zero_call_lock.acquire(blocking=False):
-            return rejected("another servo ABS rebase request is waiting")
-        try:
-            state = self._coordinate_state()
-            device_id = self.servo_abs_zero_device_id(state)
-            if not device_id:
-                return rejected("valid P4 device identity unavailable for servo ABS zero")
-            if not state.has_servo_rebase_zero_result:
-                self.request_state_sync(STATE_SYNC_MULTITURN_STATE)
-                return rejected("waiting for P4 servo ABS rebase capability/result")
-            comm = self.comm
-            connection = self._servo_abs_zero_connection_generation
-            cancel_generation = self._coordinate_cancel_generation
-
-            def same_session():
-                return (self.comm is comm
-                        and self._servo_abs_zero_connection_generation == connection
-                        and self.servo_abs_zero_device_id(self._coordinate_state()) == device_id)
-
-            def changed():
-                return (cancelled() or self._coordinate_cancel_generation != cancel_generation
-                        or not same_session())
-
-            for attempt in range(1, SERVO_COORDINATE_MAX_ATTEMPTS + 1):
-                pending = mask & ~success
-                state = self._coordinate_state()
-                if changed():
-                    return rejected("servo ABS zero cancelled or device connection changed")
-                if not self._coordinate_safe_state(state, pending):
-                    return rejected("servo ABS zero requires fresh stopped status and online, unambiguous selected motors")
-                with self._multiturn_io_lock:
-                    if (self._servo_rebase_zero_unresolved_mask or self._servo_rebase_zero_capture_mask
-                            or self._servo_turn_zero_unresolved_mask):
-                        self.request_state_sync(STATE_SYNC_MULTITURN_STATE)
-                        return rejected("previous servo ABS rebase is awaiting its result/new feedback")
-                    if self._multiturn_pending_restore_mask:
-                        return rejected("a desktop multi-turn restore transaction is pending")
-                    with self._multiturn_anchor_capture_lock:
-                        previous_blocked = self._multiturn_anchor_capture_blocked_mask
-                        previous_capture = self._multiturn_anchor_capture_pending_mask
-                    self._block_multiturn_anchor_capture(pending)
-                    sent_at = time.monotonic()
-                    baseline_token = state.servo_rebase_zero_result_token
-                    self._servo_rebase_zero_unresolved_mask = pending
-                    self._servo_rebase_zero_baseline_token = baseline_token
-                    self._servo_rebase_zero_sent_at = sent_at
-                    self._servo_rebase_zero_device_id = device_id
-                    self._servo_rebase_zero_request_connection = connection
-
-                def send():
-                    # 外部应用/运动 gate 在此锁之前取得，STOP 无需等待 ACK/文件。
-                    with self._coordinate_command_lock:
-                        if changed() or not self._coordinate_safe_state(self._coordinate_state(), pending):
-                            return False
-                        return comm.send_command((command_name, pending))
-
-                sent = send_gate(send) if send_gate is not None else send()
-                def restore_unaccepted():
-                    with self._multiturn_io_lock, self._multiturn_anchor_capture_lock:
-                        self._servo_rebase_zero_unresolved_mask = 0
-                        self._servo_rebase_zero_device_id = device_id if success else ""
-                        self._multiturn_anchor_capture_blocked_mask = (
-                            self._multiturn_anchor_capture_blocked_mask & ~pending
-                        ) | (previous_blocked & pending)
-                        self._multiturn_anchor_capture_pending_mask |= previous_capture & pending
-
-                if not sent:
-                    restore_unaccepted()
-                    return rejected("servo ABS zero cancelled or command queue rejected")
-                log_session("MULTITURN", f"{command_name} attempt={attempt}/3 mask=0x{pending:08X}")
-                ack = comm.wait_for_ack(command_id, SERVO_REBASE_ZERO_ACK_TIMEOUT_S, received_after_monotonic=sent_at)
-                matches = lambda s: (same_session()
-                    and self._servo_abs_zero_result_matches(s, baseline_token, sent_at, pending))
-                status = self._coordinate_ack_status(ack, command_id, sent_at)
-                if (same_session() and not matches(self._coordinate_state())
-                        and status is not None and status not in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED)):
-                    restore_unaccepted()
-                    if changed():
-                        return rejected("servo ABS zero cancelled; hardware write was not accepted")
-                    if attempt == SERVO_COORDINATE_MAX_ATTEMPTS:
-                        return rejected(f"servo ABS rebase rejected after 3 attempts (status={status}); hardware write not accepted")
-                    continue
-                state = self._wait_coordinate_result(
-                    matches, changed, SERVO_REBASE_ZERO_RESULT_TIMEOUT_S, query_first=status is None,
-                    label="servo_rebase_zero",
-                )
-                if state is None:
-                    if same_session():
-                        self._invalidate_servo_rebase_zero_anchors(pending)
-                    return rejected("servo ABS rebase result timed out or cancelled; original transaction remains unresolved")
-                success |= state.servo_rebase_zero_success_mask & pending
-                result_token = state.servo_rebase_zero_result_token
-                self._service_servo_rebase_zero_capture(state)
-                remaining = mask & ~success
-                if changed():
-                    return rejected("servo ABS zero cancelled after submission; completed motor coordinates retained")
-                if not remaining:
-                    return ServoRebaseZeroResult(
-                        True, "servo ABS rebased; new feedback anchor capture pending",
-                        result_token, success, 0,
-                    )
-                if attempt == SERVO_COORDINATE_MAX_ATTEMPTS:
-                    return rejected(f"servo ABS rebase failed after 3 attempts: {self._format_motor_mask(remaining)}")
-                # 首轮成功坐标必须先保存，再打开下一轮，不能覆盖全局 capture 事务。
-                if state.servo_rebase_zero_success_mask & pending:
-                    deadline = time.monotonic() + MULTITURN_ANCHOR_CAPTURE_TIMEOUT_S
-                    while True:
-                        if changed():
-                            return rejected("servo ABS zero cancelled while saving completed motor coordinates")
-                        self._service_servo_rebase_zero_capture(self._coordinate_state())
-                        if not self._servo_rebase_zero_capture_mask:
-                            break
-                        if time.monotonic() >= deadline:
-                            return rejected("servo ABS zero partly completed; new trusted feedback/JSON save unconfirmed")
-                        time.sleep(0.02)
-            return rejected("servo ABS rebase failed")
-        except (OSError, DeviceStateStoreError, CalibrationSnapshotError) as exc:
-            return rejected(f"servo ABS rebase anchor invalidation failed: {exc}")
-        finally:
-            self._servo_rebase_zero_call_lock.release()
+        ok, message, success, failed, token = self._coordinate_transaction(
+            mask, _ABS_ZERO_PLAN, command_name, cancelled, send_gate, SERVO_REBASE_ZERO_ACK_TIMEOUT_S,
+            SERVO_REBASE_ZERO_RESULT_TIMEOUT_S,
+        )
+        return ServoRebaseZeroResult(ok, message, token, success, failed)
 
     def prepare_calibration_turn_zero(
         self, motor_mask: int, *,
@@ -2474,20 +2465,37 @@ class HandController:
         mask = int(motor_mask)
         if mask <= 0 or mask & ~((1 << MOTOR_COUNT) - 1):
             return False, "calibration motor mask is empty or invalid", 0, 0
-        success = 0
+        plan = _TURN_ZERO_PLAN._replace(invalidation_reason=invalidation_reason)
+        ok, message, success, failed, _token = self._coordinate_transaction(
+            mask, plan, "servo_reset_zero", cancelled, motion_gate, SERVO_RESET_ZERO_ACK_TIMEOUT_S,
+            SERVO_RESET_ZERO_RESULT_TIMEOUT_S,
+        )
+        return ok, message, success, failed
 
-        def failure(message):
-            return False, message, success, mask & ~success
+    def _coordinate_transaction(self, mask, plan, command_name, cancelled, send_gate,
+                                ack_timeout_s, result_timeout_s):
+        """设零类事务的唯一骨架：校验 → 发送 → 等 ACK → 等结果 → 只重试失败电机（最多 3 轮）。
+
+        ``plan`` 决定用哪套结果字段；返回 (成功, 消息, 成功位图, 失败位图, 结果token)。
+        """
+        success = 0
+        result_token = 0
+
+        def rejected(message):
+            return False, message, success, mask & ~success, result_token
 
         if not self.comm or cancelled():
-            return failure("serial not connected or calibration turn-reset cancelled")
+            return rejected("serial not connected or cancelled")
         if not self._servo_rebase_zero_call_lock.acquire(blocking=False):
-            return failure("another servo coordinate transaction is waiting")
+            return rejected("another servo coordinate transaction is waiting")
         try:
             state = self._coordinate_state()
             device_id = self.servo_abs_zero_device_id(state)
             if not device_id:
-                return failure("valid P4 device identity unavailable for calibration turn-reset")
+                return rejected(f"valid P4 device identity unavailable for {plan.label}")
+            if plan.requires_sync and not getattr(state, plan.has_result_field):
+                self.request_state_sync(STATE_SYNC_MULTITURN_STATE)
+                return rejected(f"waiting for P4 {plan.label} capability/result")
             comm = self.comm
             connection = self._servo_abs_zero_connection_generation
             cancel_generation = self._coordinate_cancel_generation
@@ -2501,131 +2509,104 @@ class HandController:
                 return (cancelled() or self._coordinate_cancel_generation != cancel_generation
                         or not same_session())
 
-            self._service_servo_turn_zero_result(state)
-            if (self._servo_turn_zero_unresolved_mask or self._servo_rebase_zero_unresolved_mask
-                    or self._servo_rebase_zero_capture_mask or self._multiturn_pending_restore_mask):
-                log_session("MULTITURN", (
-                    f"turn-zero blocked by pending transaction "
-                    f"turn_zero=0x{self._servo_turn_zero_unresolved_mask:08X} "
-                    f"rebase=0x{self._servo_rebase_zero_unresolved_mask:08X} "
-                    f"rebase_capture=0x{self._servo_rebase_zero_capture_mask:08X} "
-                    f"restore=0x{int(self._multiturn_pending_restore_mask):08X}"))
-                return failure("previous servo coordinate transaction is awaiting its result/new feedback")
-            if not state.has_servo_reset_zero_status:
-                return failure("P4 firmware does not report calibration turn-reset status")
-            if not self._coordinate_safe_state(state, mask):
-                return failure("calibration turn-reset requires fresh stopped status and online selected motors")
-            if state.servo_reset_zero_status == 1:
-                return failure("another calibration turn-reset is running")
-
-            reset_sent_at = time.monotonic()
-
-            def reset_once():
-                with self._coordinate_command_lock:
-                    if changed():
-                        return False
-                    return self.reset()
-
-            if not motion_gate(reset_once):
-                return failure("calibration turn-reset cancelled before maintenance RESET")
-            reset_ack = comm.wait_for_ack(
-                CMD_RESET, CALIBRATION_TURN_RESET_ACK_TIMEOUT_S, received_after_monotonic=reset_sent_at,
-            )
-            # 这里还校验 ack[0] 回显命令号，故不能用 _ack_status（它只返回状态码）。
-            if (changed() or reset_ack is None or int(reset_ack[0]) != CMD_RESET
-                    or int(reset_ack[2]) not in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED)):
-                return failure("maintenance RESET timeout/reject or cancelled")
-            deadline = time.monotonic() + CALIBRATION_TURN_RESET_SETTLE_S
-            while time.monotonic() < deadline:
-                if changed():
-                    return failure("calibration turn-reset cancelled after maintenance RESET")
-                time.sleep(min(0.02, max(0.0, deadline - time.monotonic())))
+            if plan.precheck is None:
+                pass
+            else:
+                early = plan.precheck(self, state, mask, plan, changed, rejected, send_gate or (lambda action: action()))
+                if early is not None:
+                    return early
 
             for attempt in range(1, SERVO_COORDINATE_MAX_ATTEMPTS + 1):
                 pending = mask & ~success
                 state = self._coordinate_state()
-                if changed() or not self._coordinate_safe_state(state, pending):
-                    return failure("calibration turn-reset cancelled or stopped status/selected routes changed")
-                sent_at = time.monotonic()
-                baseline_token = state.servo_reset_zero_result_token
-
-                def send():
-                    with self._coordinate_command_lock:
-                        if changed() or not self._coordinate_safe_state(self._coordinate_state(), pending):
-                            return False
-                        return comm.send_command(("servo_reset_zero", pending))
-
+                if changed():
+                    return rejected(f"{plan.label} cancelled or device connection changed")
+                if not self._coordinate_safe_state(state, pending):
+                    return rejected(plan.unsafe_state_message)
                 with self._multiturn_io_lock:
+                    blocked = (self._servo_rebase_zero_unresolved_mask or self._servo_rebase_zero_capture_mask
+                               or self._servo_turn_zero_unresolved_mask)
+                    if blocked:
+                        self.request_state_sync(STATE_SYNC_MULTITURN_STATE)
+                        return rejected(f"previous servo coordinate transaction is awaiting its result/new feedback (0x{blocked:08X})")
+                    if self._multiturn_pending_restore_mask:
+                        return rejected("a desktop multi-turn restore transaction is pending")
                     with self._multiturn_anchor_capture_lock:
                         previous_blocked = self._multiturn_anchor_capture_blocked_mask
                         previous_capture = self._multiturn_anchor_capture_pending_mask
                     self._block_multiturn_anchor_capture(pending)
-                    self._servo_turn_zero_unresolved_mask = pending
-                    self._servo_turn_zero_baseline_token = baseline_token
-                    self._servo_turn_zero_sent_at = sent_at
-                    self._servo_turn_zero_device_id = device_id
-                    self._servo_turn_zero_connection = connection
-                    self._servo_turn_zero_comm = comm
-                    self._servo_turn_zero_reason = invalidation_reason
+                    sent_at = time.monotonic()
+                    baseline_token = int(getattr(state, plan.baseline_token_field))
+                    plan.record(self, pending, baseline_token, sent_at, device_id, connection, comm)
+
+                def send():
+                    # 外部应用/运动 gate 在此锁之前取得，STOP 无需等待 ACK/文件。
+                    with self._coordinate_command_lock:
+                        if changed() or not self._coordinate_safe_state(self._coordinate_state(), pending):
+                            return False
+                        return comm.send_command((command_name, pending))
+
+                sent = send_gate(send) if send_gate is not None else send()
 
                 def restore_unaccepted():
                     with self._multiturn_io_lock, self._multiturn_anchor_capture_lock:
-                        self._servo_turn_zero_unresolved_mask = 0
+                        plan.clear(self, success)
                         self._multiturn_anchor_capture_blocked_mask = (
                             self._multiturn_anchor_capture_blocked_mask & ~pending
                         ) | (previous_blocked & pending)
                         self._multiturn_anchor_capture_pending_mask |= previous_capture & pending
 
-                if not motion_gate(send):
+                if not sent:
                     restore_unaccepted()
-                    return failure("calibration turn-reset cancelled or command queue rejected")
-                log_session("MULTITURN", (
-                    f"servo_reset_zero attempt={attempt}/3 mask=0x{pending:08X} "
-                    f"baseline_token={int(baseline_token)} "
-                    f"expect_token={(int(baseline_token) + 1) & 0xffffffff}"))
-                ack = comm.wait_for_ack(
-                    CMD_SERVO_RESET_ZERO, SERVO_RESET_ZERO_ACK_TIMEOUT_S, received_after_monotonic=sent_at,
-                )
-                matches = lambda s: (same_session()
-                    and self._servo_turn_zero_result_matches(s, baseline_token, sent_at, pending))
-                status = self._coordinate_ack_status(ack, CMD_SERVO_RESET_ZERO, sent_at)
+                    return rejected(f"{plan.label} cancelled or command queue rejected")
+                log_session("MULTITURN", f"{command_name} attempt={attempt}/3 mask=0x{pending:08X}")
+                ack = comm.wait_for_ack(plan.command_id, ack_timeout_s, received_after_monotonic=sent_at)
+                matches = lambda s: same_session() and plan.matches(s, baseline_token, sent_at, pending)
+                status = self._coordinate_ack_status(ack, plan.command_id, sent_at)
                 if (same_session() and not matches(self._coordinate_state())
                         and status is not None and status not in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED)):
                     restore_unaccepted()
                     if changed():
-                        return failure("calibration turn-reset cancelled; hardware write was not accepted")
+                        return rejected(f"{plan.label} cancelled; hardware write was not accepted")
                     if attempt == SERVO_COORDINATE_MAX_ATTEMPTS:
-                        return failure(f"calibration turn-reset rejected after 3 attempts (status={status}); hardware write not accepted")
+                        return rejected(plan.rejected_message(status))
                     continue
                 result = self._wait_coordinate_result(
-                    matches, changed, SERVO_RESET_ZERO_RESULT_TIMEOUT_S, query_first=status is None,
-                    label="servo_reset_zero",
+                    matches, changed, result_timeout_s, query_first=status is None, label=command_name,
                 )
                 if result is None:
                     if same_session():
-                        self._invalidate_coordinate_anchors(
-                            pending, invalidation_reason, self._coordinate_state(),
-                        )
-                    return failure("calibration turn-reset result timed out or cancelled; original transaction unresolved")
-                success |= result.servo_reset_zero_success_mask & pending
-                self._service_servo_turn_zero_result(result)
+                        plan.invalidate_on_timeout(self, pending, plan, state)
+                    return rejected(plan.timeout_message)
+                success |= int(getattr(result, plan.success_field)) & pending
+                result_token = int(getattr(result, plan.token_field))
+                plan.service_result(self, result)
                 if changed():
-                    return failure("calibration turn-reset cancelled; completed motor coordinates retained")
-                if success == mask:
-                    return True, f"reset {success.bit_count()} selected motor turn counter(s)", success, 0
-            return failure(f"calibration turn-reset failed after 3 attempts: {self._format_motor_mask(mask & ~success)}")
+                    return rejected(f"{plan.label} cancelled after submission; completed motor coordinates retained")
+                remaining = mask & ~success
+                if not remaining:
+                    return True, plan.success_message, success, 0, result_token
+                if attempt == SERVO_COORDINATE_MAX_ATTEMPTS:
+                    return rejected(f"{plan.label} failed after 3 attempts: {self._format_motor_mask(remaining)}")
+                if plan.await_capture and int(getattr(result, plan.success_field)) & pending:
+                    deadline = time.monotonic() + MULTITURN_ANCHOR_CAPTURE_TIMEOUT_S
+                    while True:
+                        if changed():
+                            return rejected(f"{plan.label} cancelled while saving completed motor coordinates")
+                        plan.service_result(self, self._coordinate_state())
+                        if not self._servo_rebase_zero_capture_mask:
+                            break
+                        if time.monotonic() >= deadline:
+                            return rejected(f"{plan.label} partly completed; new trusted feedback/JSON save unconfirmed")
+                        time.sleep(0.02)
+            return rejected(plan.final_message)
         except (OSError, DeviceStateStoreError, CalibrationSnapshotError) as exc:
-            return failure(f"calibration turn-reset anchor invalidation failed: {exc}")
+            return rejected(f"{plan.label} anchor invalidation failed: {exc}")
         finally:
             self._servo_rebase_zero_call_lock.release()
 
     def manual_prepare_all_motors(self, *, motor_mask=None, cancelled=lambda: False, motion_gate=lambda action: action()) -> ManualPrepareResult:
-        """冻结指定的电机集合，归零并放绳 1500 counts。
-
-        该维护事务允许从 Turn Unknown 状态开始，但不会放宽普通直控门禁：
-        只有全部硬件 Reset Zero 成功、P4 已清除 Unknown 且反馈重新对齐后，
-        才会临时申请该集合直控并发送放绳目标。任何部分失败都停止后续运动。
-        """
+        """冻结指定的电机集合，归零并放绳 1500 counts。"""
         all_motors = (1 << MOTOR_COUNT) - 1
         if motor_mask is not None and (type(motor_mask) is not int or motor_mask <= 0 or motor_mask & ~all_motors):
             return ManualPrepareResult(False, 'Invalid selected tendon motor scope', 0, 0, 0, 0)
@@ -2635,19 +2616,68 @@ class HandController:
             return empty._replace(message='Release Rope cancelled')
         if not self.comm:
             return empty._replace(message="serial not connected")
-
         try:
             _ = self.calibration_data_identity
         except CalibrationSnapshotError as exc:
             return empty._replace(message=str(exc))
 
+        pending_mask, refusal = self._manual_prepare_scope(motor_mask, requested_mask, empty)
+        if refusal is not None:
+            return refusal
+        selected = [i for i in range(MOTOR_COUNT) if pending_mask & (1 << i)]
+        if pending_mask == 0:
+            return ManualPrepareResult(
+                True,
+                "selected motors already released on this device; no additional reset or calibration invalidation",
+                0, 0, 0, requested_mask,
+            )
+        log_session("RELEASE_ROPE", f"requested=0x{requested_mask:05X} pending=0x{pending_mask:05X}")
+
+        reset, failure = self._manual_prepare_reset(pending_mask, cancelled, motion_gate)
+        if failure is not None:
+            return failure
+        ok, reset_message, reset_mask, failed_mask, invalidated_joint_mask, snapshot_message = reset
+        if not ok:
+            return ManualPrepareResult(
+                False, reset_message, reset_mask,
+                failed_mask | (pending_mask & ~reset_mask), invalidated_joint_mask, 0,
+            )
+        if cancelled():
+            return empty._replace(message='Release Rope cancelled after reset; Auto/LUT invalidated',
+                                  reset_motor_mask=reset_mask, invalidated_joint_mask=invalidated_joint_mask)
+
+        baseline = self._wait_release_baseline(pending_mask, selected, cancelled)
+        if isinstance(baseline, str):
+            return ManualPrepareResult(
+                False, f"turn counters reset, but {baseline}", reset_mask, 0, invalidated_joint_mask, 0,
+            )
+
+        outcome = self._run_release_motion(
+            pending_mask, selected, baseline, reset_mask, invalidated_joint_mask, cancelled, motion_gate,
+        )
+        if isinstance(outcome, ManualPrepareResult):
+            return outcome
+        reached_mask = outcome
+        self._manual_prepare_done_motor_mask |= reset_mask
+        return ManualPrepareResult(
+            True,
+            (
+                f"{len(selected)} motor turn counters reset; released {MANUAL_PREPARE_RELEASE_COUNTS} "
+                f"counts; {snapshot_message}; automatic calibration is required"
+            ),
+            reset_mask,
+            0,
+            invalidated_joint_mask,
+            reached_mask,
+        )
+
+    def _manual_prepare_scope(self, motor_mask, requested_mask, empty):
+        """校验系统状态与在线/路由/ABS，返回 (待处理电机位图, 失败结果)。"""
         with self.state_lock:
             state = self.current_state
             system_state = int(state.system_state)
             online_mask = int(state.servo_online_bitmap)
-            route_mask = int(
-                getattr(state, "servo_route_controllable_bitmap", 0) or 0
-            )
+            route_mask = int(state.servo_route_controllable_bitmap)
             has_routes = bool(state.has_servo_route_status)
             has_abs = (bool(state.has_servo_angle_data)
                        and 0 <= time.monotonic() - state.received_at('servo_abs_last_rx_ts') <= 0.5
@@ -2661,51 +2691,39 @@ class HandController:
             SYSTEM_STATE_RECOVERY_REQUIRED,
         )
         if system_state not in allowed_states:
-            return empty._replace(
+            return 0, empty._replace(
                 message=f"Manual Prepare requires a stopped state; current={system_state}"
             )
-        if motor_mask is not None and requested_mask & ~(online_mask & route_mask):
-            missing = requested_mask & ~(online_mask & route_mask)
-            return empty._replace(message=f'Selected tendon motors are offline or unroutable: 0x{missing:08X}')
-        requested_mask &= online_mask & route_mask
-        selected = [i for i in range(MOTOR_COUNT) if requested_mask & (1 << i)]
-        if not selected or not has_routes or not has_abs:
-            return empty._replace(message="Release Rope requires online motors with unique routes and ABS")
+        routable = online_mask & route_mask
+        if motor_mask is not None and requested_mask & ~routable:
+            missing = requested_mask & ~routable
+            return 0, empty._replace(message=f'Selected tendon motors are offline or unroutable: 0x{missing:08X}')
+        requested_mask &= routable
+        if not requested_mask or not has_routes or not has_abs:
+            return 0, empty._replace(message="Release Rope requires online motors with unique routes and ABS")
 
+        # 同一设备只放绳一次；换了设备就清掉历史记录。
         if device_id:
-            if (self._manual_prepare_done_device_id
-                    and self._manual_prepare_done_device_id != device_id):
+            if self._manual_prepare_done_device_id and self._manual_prepare_done_device_id != device_id:
                 self._manual_prepare_done_motor_mask = 0
             self._manual_prepare_done_device_id = device_id
         done_mask = (self._manual_prepare_done_motor_mask
                      if device_id and self._manual_prepare_done_device_id == device_id else 0)
-        pending_mask = requested_mask & ~done_mask
-        if pending_mask == 0:
-            return ManualPrepareResult(
-                True,
-                "selected motors already released on this device; no additional reset or calibration invalidation",
-                0, 0, 0, requested_mask,
-            )
-        selected = [i for i in range(MOTOR_COUNT) if pending_mask & (1 << i)]
-        log_session("RELEASE_ROPE", f"requested=0x{requested_mask:05X} pending=0x{pending_mask:05X}")
+        return requested_mask & ~done_mask, None
 
-        ok, reset_message, reset_mask, failed_mask = (
-            self.prepare_calibration_turn_zero(
-                pending_mask,
-                invalidation_reason="manual_prepare",
-                cancelled=cancelled, motion_gate=motion_gate,
-            )
+    def _manual_prepare_reset(self, pending_mask, cancelled, motion_gate):
+        """归零硬件圈数并作废旧标定；返回 (结果元组, 失败结果)。"""
+        ok, reset_message, reset_mask, failed_mask = self.prepare_calibration_turn_zero(
+            pending_mask,
+            invalidation_reason="manual_prepare",
+            cancelled=cancelled, motion_gate=motion_gate,
         )
         invalidated_joint_mask = joint_mask_for_motor_mask(reset_mask)
         if reset_mask:
-            # The hardware turn zero changed before JSON invalidation; never let
-            # the UI keep the previous Auto/LUT view even if a later step fails.
+            # 硬件 turn0 已改变，UI 不能再显示旧 Auto/LUT；即使后续步骤失败也一样。
             self.invalidate_runtime_calibration_scope(
                 reset_mask, invalidated_joint_mask, reason="manual_prepare",
             )
-
-        # 硬件 turn0 已改变，必须先原子作废旧 Auto/LUT/ABS Limit；即使程序
-        # 在放绳途中退出，下次启动也不能重新加载旧舵机坐标。Manual 端点保留。
         try:
             snapshot_message = invalidate_calibration_snapshot_scope(
                 self.calibration_snapshot_path,
@@ -2714,7 +2732,7 @@ class HandController:
                 reason="manual_prepare",
             ) if reset_mask else "no motors reset"
         except (OSError, CalibrationSnapshotError, ValueError) as exc:
-            return ManualPrepareResult(
+            return None, ManualPrepareResult(
                 False,
                 f"turn counters reset, but calibration JSON invalidation failed: {exc}",
                 reset_mask,
@@ -2722,28 +2740,18 @@ class HandController:
                 invalidated_joint_mask,
                 0,
             )
+        return (ok, reset_message, reset_mask, failed_mask, invalidated_joint_mask, snapshot_message), None
 
-        if not ok or reset_mask != pending_mask:
-            return ManualPrepareResult(
-                False, reset_message, reset_mask,
-                failed_mask | (pending_mask & ~reset_mask), invalidated_joint_mask, 0,
-            )
-        if cancelled():
-            return empty._replace(message='Release Rope cancelled after reset; Auto/LUT invalidated', reset_motor_mask=reset_mask, invalidated_joint_mask=invalidated_joint_mask)
-
-        # Reset Zero 后 logical ABS 必须与新单圈 raw 对齐。等待这一条件而不是
-        # 固定猜测圈数，避免把复位前缓存作为 -1500 counts 的基准。
-        feedback_deadline = time.monotonic() + MANUAL_PREPARE_FEEDBACK_TIMEOUT_S
-        baseline: Optional[List[int]] = None
-        align_reason = "waiting for post-reset ABS/raw alignment"
-        while time.monotonic() < feedback_deadline:
+    def _wait_release_baseline(self, pending_mask, selected, cancelled):
+        """等待 Reset 后 ABS 与单圈 raw 重新对齐；成功返回 27 路基准，超时返回原因文本。"""
+        deadline = time.monotonic() + MANUAL_PREPARE_FEEDBACK_TIMEOUT_S
+        reason = "waiting for post-reset ABS/raw alignment"
+        while time.monotonic() < deadline:
             if cancelled():
                 break
             with self.state_lock:
                 state = self.current_state
-                unknown = int(
-                    getattr(state, "multi_turn_unknown_bitmap", 0) or 0
-                ) & pending_mask
+                unknown = int(state.multi_turn_unknown_bitmap) & pending_mask
                 online = int(state.servo_online_bitmap)
                 fresh = 0 <= time.monotonic() - state.received_at('servo_abs_last_rx_ts') <= 0.5
                 routable = (state.servo_route_controllable_bitmap & pending_mask) == pending_mask
@@ -2757,29 +2765,23 @@ class HandController:
                 and len(servo_raw) >= MOTOR_COUNT
                 and len(raw_online) >= MOTOR_COUNT
                 and all(bool(raw_online[i]) for i in selected)
-                and all(
-                    abs(int(servo_abs[i]) - self._raw_single_turn(servo_raw[i])) <= 2
-                    for i in selected
-                )
+                and all(abs(int(servo_abs[i]) - self._raw_single_turn(servo_raw[i])) <= 2 for i in selected)
             )
             if aligned:
-                baseline = [int(servo_abs[i]) for i in range(MOTOR_COUNT)]
-                break
-            align_reason = (
+                return [int(servo_abs[i]) for i in range(MOTOR_COUNT)]
+            reason = (
                 "post-reset ABS/raw feedback not aligned "
                 f"(fresh={fresh} routable={routable} unknown=0x{unknown:05X} "
                 f"online=0x{(online & pending_mask):05X})"
             )
             time.sleep(0.02)
-        if baseline is None:
-            return ManualPrepareResult(
-                False,
-                f"turn counters reset, but {align_reason}",
-                reset_mask,
-                0,
-                invalidated_joint_mask,
-                0,
-            )
+        return reason
+
+    def _run_release_motion(self, pending_mask, selected, baseline, reset_mask,
+                            invalidated_joint_mask, cancelled, motion_gate):
+        """申请直控、发送放绳目标并等待到位；返回 (到位位图, 快照消息) 或失败结果。"""
+        def failed(message):
+            return ManualPrepareResult(False, message, reset_mask, 0, invalidated_joint_mask, 0)
 
         targets = [
             self._clamp_motor_abs(
@@ -2788,38 +2790,22 @@ class HandController:
             for motor_idx in range(MOTOR_COUNT)
         ]
         if not self.set_active_scope(pending_mask, 0, False):
-            return ManualPrepareResult(
-                False,
-                "turn counters reset, but selected-motor direct scope was rejected",
-                reset_mask,
-                0,
-                invalidated_joint_mask,
-                0,
-            )
-
+            return failed("turn counters reset, but selected-motor direct scope was rejected")
         self.set_control_mode(ControlMode.DIRECT_MOTOR)
         if cancelled():
-            return empty._replace(message='Release Rope cancelled before movement', reset_motor_mask=reset_mask, invalidated_joint_mask=invalidated_joint_mask)
+            return failed('Release Rope cancelled before movement')
+
         def send_release():
             self.start()
             return self.comm.send_command(("motor_pos_abs", targets))
         if not motion_gate(send_release):
             self.reset()
-            return ManualPrepareResult(
-                False,
-                "turn counters reset, but the 1500-count release command was not queued",
-                reset_mask,
-                0,
-                invalidated_joint_mask,
-                0,
-            )
+            return failed("turn counters reset, but the 1500-count release command was not queued")
 
-        # P4 在 RESET/切直控后需要一拍才能给出 DIRECT_TARGET 结果。这里只做
-        # “就绪”等待，不把瞬时缺失当作失败；真正的到位判定交给运动循环。
-        ready_deadline = time.monotonic() + MANUAL_PREPARE_READY_TIMEOUT_S
+        # P4 在 RESET/切直控后需要一拍才给 DIRECT_TARGET 结果；这里只等“就绪”。
+        deadline = time.monotonic() + MANUAL_PREPARE_READY_TIMEOUT_S
         ready_reason = "waiting for P4 direct-target result"
-        ready_rejected_mask = 0
-        while time.monotonic() < ready_deadline and not cancelled():
+        while time.monotonic() < deadline and not cancelled():
             with self.state_lock:
                 state = self.current_state
                 d_status = int(state.direct_target_status)
@@ -2829,45 +2815,57 @@ class HandController:
                 run_state = int(state.system_state)
                 fresh = 0 <= time.monotonic() - state.received_at('servo_abs_last_rx_ts') <= 0.5
             if d_rejected & pending_mask:
-                ready_rejected_mask = d_rejected & pending_mask
-                break
+                self.reset()
+                return failed(f"turn counters reset, but P4 rejected the direct release target on 0x{d_rejected & pending_mask:05X}")
             if has_direct_result:
                 if d_status == 2 and (d_applied & pending_mask) == pending_mask:
                     ready_reason = "direct target applied"
                     break
                 if d_status == 3:
-                    ready_rejected_mask = d_rejected or pending_mask
-                    break
+                    self.reset()
+                    return failed(f"turn counters reset, but P4 rejected the direct release target on 0x{d_rejected or pending_mask:05X}")
             elif run_state == SYSTEM_STATE_RUN_DIRECT and fresh:
                 ready_reason = "P4 entered RUN_DIRECT"
                 break
             time.sleep(0.02)
-        if ready_rejected_mask:
-            self.reset()
+
+        reached_mask, motion_reason, cancelled_during_motion = self._wait_release_targets(
+            pending_mask, selected, targets, ready_reason, cancelled)
+        # 维护动作结束必须释放 owner，不能把 RUN_DIRECT 留在设备里。
+        self.reset()
+        if cancelled_during_motion:
             return ManualPrepareResult(
                 False,
-                f"turn counters reset, but P4 rejected the direct release target on 0x{ready_rejected_mask:05X}",
-                reset_mask,
-                0,
-                invalidated_joint_mask,
-                0,
+                "Release Rope cancelled during release motion; turn counters reset and old Auto/LUT invalidated",
+                reset_mask, 0, invalidated_joint_mask, reached_mask,
             )
+        if reached_mask != pending_mask:
+            return ManualPrepareResult(
+                False,
+                (
+                    "turn counters reset and old Auto/LUT invalidated, but release "
+                    f"did not settle; reached=0x{reached_mask:05X}/0x{pending_mask:05X}; "
+                    f"reason={motion_reason}; {self._release_diagnostic(selected, targets)}"
+                ),
+                reset_mask, 0, invalidated_joint_mask, reached_mask,
+            )
+        return reached_mask
 
+    def _wait_release_targets(self, pending_mask, selected, targets, ready_reason, cancelled):
+        """等待放绳到位；短暂无效反馈给一段宽限，超时才判失败。"""
         reached_mask = 0
-        motion_deadline = time.monotonic() + MANUAL_PREPARE_MOTION_TIMEOUT_S
+        deadline = time.monotonic() + MANUAL_PREPARE_MOTION_TIMEOUT_S
         invalid_since: Optional[float] = None
         motion_reason = ready_reason
         cancelled_during_motion = False
-        while time.monotonic() < motion_deadline:
+        while time.monotonic() < deadline:
             if cancelled():
                 cancelled_during_motion = True
                 break
             with self.state_lock:
                 state = self.current_state
                 online = int(state.servo_online_bitmap)
-                unknown = int(
-                    getattr(state, "multi_turn_unknown_bitmap", 0) or 0
-                ) & pending_mask
+                unknown = int(state.multi_turn_unknown_bitmap) & pending_mask
                 fresh = 0 <= time.monotonic() - state.received_at('servo_abs_last_rx_ts') <= 0.5
                 routable = (state.servo_route_controllable_bitmap & pending_mask) == pending_mask
                 servo_abs = list(state.servo_angles or [])
@@ -2891,68 +2889,27 @@ class HandController:
             else:
                 invalid_since = None
                 if len(servo_abs) >= MOTOR_COUNT:
-                    reached_now = 0
-                    for motor_idx in selected:
-                        if abs(int(servo_abs[motor_idx]) - targets[motor_idx]) <= (
-                            MANUAL_PREPARE_TARGET_TOLERANCE_COUNTS
-                        ):
-                            reached_now |= 1 << motor_idx
-                    reached_mask = reached_now
+                    reached_mask = sum(
+                        1 << motor_idx for motor_idx in selected
+                        if abs(int(servo_abs[motor_idx]) - targets[motor_idx]) <= MANUAL_PREPARE_TARGET_TOLERANCE_COUNTS
+                    )
                     if reached_mask == pending_mask:
                         motion_reason = "reached all selected motors"
                         break
             time.sleep(0.05)
+        return reached_mask, motion_reason, cancelled_during_motion
 
-        # Manual Prepare 是一次维护动作；完成或超时后均释放 owner，禁止在
-        # Device Check 页面遗留 RUN_DIRECT。舵机继续保持最后收到的位置目标。
-        self.reset()
-        if cancelled_during_motion:
-            return ManualPrepareResult(
-                False,
-                (
-                    "Release Rope cancelled during release motion; turn counters reset and old "
-                    "Auto/LUT invalidated"
-                ),
-                reset_mask,
-                0,
-                invalidated_joint_mask,
-                reached_mask,
+    def _release_diagnostic(self, selected, targets):
+        """失败时附上前 8 台电机的 当前->目标，方便现场排查。"""
+        try:
+            with self.state_lock:
+                actual = list(self.current_state.servo_angles or [])
+            return " ".join(
+                f"M{motor_idx:02d}:{actual[motor_idx] if motor_idx < len(actual) else '?'}->{targets[motor_idx]}"
+                for motor_idx in selected[:8]
             )
-        if reached_mask != pending_mask:
-            try:
-                with self.state_lock:
-                    actual = list(getattr(self.current_state, "servo_angles", []) or [])
-                detail = " ".join(
-                    f"M{motor_idx:02d}:{actual[motor_idx] if motor_idx < len(actual) else '?'}"
-                    f"->{targets[motor_idx]}"
-                    for motor_idx in selected[:8]
-                )
-            except Exception:
-                detail = "diagnostics unavailable"
-            return ManualPrepareResult(
-                False,
-                (
-                    "turn counters reset and old Auto/LUT invalidated, but release "
-                    f"did not settle; reached=0x{reached_mask:05X}/0x{pending_mask:05X}; "
-                    f"reason={motion_reason}; {detail}"
-                ),
-                reset_mask,
-                0,
-                invalidated_joint_mask,
-                reached_mask,
-            )
-        self._manual_prepare_done_motor_mask |= reset_mask
-        return ManualPrepareResult(
-            True,
-            (
-                f"{len(selected)} motor turn counters reset; released {MANUAL_PREPARE_RELEASE_COUNTS} "
-                f"counts; {snapshot_message}; automatic calibration is required"
-            ),
-            reset_mask,
-            0,
-            invalidated_joint_mask,
-            reached_mask,
-        )
+        except Exception:
+            return "diagnostics unavailable"
 
     def _restore_snapshot_manual_references(
         self, snapshot: dict
