@@ -265,63 +265,20 @@ def _interpolate_abs(target: float, samples: list[tuple[float, int, int]], actua
     return round_to_int32(value)
 
 
-def fit_middle_line(io, joint: int, result: dict, actuator_count: int) -> bool:
-    """Fit one straight line through the middle of the 5-degree LUT.
+def tendon_lut_sample_angle(result: dict, index: int) -> float:
+    """Return one LUT sample angle; the remainder point is the static URDF Max.
 
-    The physical LUT is accurate in the middle and distorted near both ends by
-    tendon take-up/slack.  Endpoint-to-endpoint fitting therefore imports the
-    worst error.  Fit a least-squares line over the middle half of the samples,
-    then evaluate that line at the URDF limits and keep only its two endpoints.
+    Mirrors the P4 ``tendonLutSampleAngleDeg`` rule so the host and firmware
+    never disagree about the end sample of the 5-degree table.
     """
-    count = int(result.get("tendonLutCount", 0) or 0)
-    rows = result.get("tendonLutMotorAbs", [])
+    first = f32(result.get("tendonLutAngleStartDeg", 0.0))
     step = f32(result.get("tendonLutAngleStepDeg", 0.0))
-    angle_min = f32(result.get("angleMin", 0.0))
-    angle_max = f32(result.get("angleMax", 0.0))
-    if (count < 3 or actuator_count < 1 or not isinstance(rows, list)
-            or len(rows) < actuator_count or step <= 0.0
-            or not math.isfinite(angle_min) or not math.isfinite(angle_max)
-            or angle_max <= angle_min):
-        return False
-    start = max(0, count // 4)
-    end = min(count, count - count // 4)
-    if end - start < 3:
-        start, end = 0, count
-    if end - start < 3:
-        return False
-    angles = [
-        angle_max if index == count - 1 else f32(angle_min + f32(step * f32(index)))
-        for index in range(start, end)
-    ]
-    mean_angle = sum(angles) / len(angles)
-    var_angle = sum((value - mean_angle) ** 2 for value in angles)
-    if var_angle <= 0.0:
-        return False
-    line_rows = []
-    evidence_rows = []
-    for actuator in range(actuator_count):
-        values = [float(rows[actuator][index]) for index in range(start, end)]
-        evidence_rows.append([float(rows[actuator][index]) for index in range(count)])
-        mean_abs = sum(values) / len(values)
-        covariance = sum((a - mean_angle) * (v - mean_abs)
-                         for a, v in zip(angles, values))
-        slope = covariance / var_angle
-        first = round_to_int32(mean_abs + slope * (angle_min - mean_angle))
-        last = round_to_int32(mean_abs + slope * (angle_max - mean_angle))
-        line_rows.append([first, last])
-    while len(line_rows) < 2:
-        line_rows.append([0, 0])
-    # Keep the full 5-degree table in the calibration log as evidence; the
-    # durable/P4 control result only needs the fitted line endpoints.
-    if hasattr(io, "trace"):
-        io.trace("LUT_FULL", joint, int(result.get("tendonLutMotor", [255])[0]),
-                 count=count, step=step, rows=evidence_rows)
-    result["tendonLutMotorAbs"] = line_rows
-    result["tendonLutCount"] = 2
-    result["tendonLutAngleStartDeg"] = angle_min
-    result["tendonLutAngleStepDeg"] = f32(angle_max - angle_min)
-    result["tendonLutValid"] = True
-    return True
+    nominal = f32(first + f32(step * f32(index)))
+    angle_max = f32(result.get("angleMax", math.nan))
+    if (index == int(result.get("tendonLutCount", 0)) - 1
+            and math.isfinite(angle_max) and first < angle_max < nominal):
+        return angle_max
+    return nominal
 
 
 def extend_motor_abs_limits(motor: int, lo: int, hi: int,
@@ -397,7 +354,7 @@ def build_tendon_lut(io, joint: int, result: dict, primary: int,
             result["tendonLutMotorAbs"][actuator][index] = value
     result["tendonLutCount"] = count
     result["tendonLutValid"] = True
-    return fit_middle_line(io, joint, result, actuator_count)
+    return True
 
 
 def tendon_motor_abs_range(result: dict, actuator: int) -> tuple[int, int] | None:

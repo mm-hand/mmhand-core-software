@@ -52,8 +52,8 @@ from .config import (
     kOverloadLoadThreshold, load_magnitude,
     kTendonFitSampleStepDeg,
 )
-from .math import (TendonRawFitBuffer, encoder_count_to_deg, wrap_encoder_delta,
-                   map_manual_scaled_encoder_to_urdf)
+from .math import (TendonRawFitBuffer, encoder_count_to_deg, tendon_lut_sample_angle,
+                   wrap_encoder_delta, map_manual_scaled_encoder_to_urdf)
 from .dependencies import usable_snapshot_aa_result
 from .finish import dual_lut_targets
 from .time_alignment import TimeAlignmentError, align_feedback
@@ -460,7 +460,8 @@ class HostCalibrationIO:
                 or mask & state.servo_route_conflict_bitmap or mask & state.multi_turn_unknown_bitmap):
             raise ValueError('AA motor routes or multi-turn coordinates are untrusted')
         first = float(result['tendonLutAngleStartDeg'])
-        last = first + float(result['tendonLutAngleStepDeg']) * (int(result['tendonLutCount']) - 1)
+        # 末点按静态 angleMax 截断（与 P4 的取样角规则一致）。
+        last = tendon_lut_sample_angle(result, int(result['tendonLutCount']) - 1)
         # 工作区始终使用静态 URDF Min/Max；currentMin/Max 概念已删除。
         low = max(workspace.urdf_min_deg, first)
         high = min(workspace.urdf_max_deg, last)

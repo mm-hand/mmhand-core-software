@@ -11,9 +11,10 @@ from desktop.core.host_calibration.config import (
 )
 from desktop.core.host_calibration.math import (
     TendonRawFitBuffer, build_calibration_result, build_tendon_lut,
-    directed_encoder_delta, encoder_count_to_deg, f32, fit_middle_line,
+    directed_encoder_delta, encoder_count_to_deg, f32,
     manual_entry_crc, map_manual_scaled_encoder_to_urdf, orient_encoder_raw,
-    round_to_int32, tendon_motor_abs_limits, wrap_encoder_delta,
+    round_to_int32, tendon_lut_sample_angle, tendon_motor_abs_limits,
+    wrap_encoder_delta,
 )
 
 
@@ -108,12 +109,16 @@ def test_negative_install_direction_physical_endpoints_and_fixed_lut_remainder()
     for encoder, primary, secondary in ((12384, 0, 1000), (14384, 1000, 500), (0, 2000, 0)):
         assert raw.append(encoder, primary, secondary)
     assert build_tendon_lut(io, 1, result, 2, 255, 1, raw)
-    # 控制结果只保留拟合直线的两个端点，24 点表述样不再下发。
-    assert result["tendonLutCount"] == 2
-    assert result["tendonLutAngleStepDeg"] == 83.0
+    # 完整 5° 表：0, 5, ..., 80, 83（末点按 angleMax 截断），不再压成 2 点。
+    assert result["tendonLutCount"] == 18
+    assert result["tendonLutAngleStepDeg"] == 5.0
     assert result["tendonLutMotor"] == [2, 255]
-    assert result["tendonLutMotorAbs"][0] == [0, 2000]
-    assert result["tendonLutMotorAbs"][1] == [0, 0]
+    assert result["tendonLutMotorAbs"][0][0] == 0
+    assert result["tendonLutMotorAbs"][0][8] == 964
+    assert result["tendonLutMotorAbs"][0][17] == 2000
+    assert result["tendonLutMotorAbs"][1] == [0] * 24
+    assert tendon_lut_sample_angle(result, 17) == 83.0
+    assert tendon_lut_sample_angle(result, 1) == 5.0
 
 
 def test_buffer_capacity_sampling_threshold_and_duplicate_order():
@@ -135,40 +140,46 @@ def test_buffer_capacity_sampling_threshold_and_duplicate_order():
     assert not raw.append(last.encoder, last.primary_abs, last.secondary_abs)
 
 
-def test_middle_fit_ignores_distorted_lut_ends():
-    # 中间 2..8 点严格落在 abs = 10 * angle + 3 上，两端是腱绳松弛/张紧的畸变。
-    middle = [10 * (5 * index) + 3 for index in range(11)]
-    values = [-500] + middle[1:9] + [4000]
+def test_build_tendon_lut_keeps_the_full_5_degree_table():
+    io = MathIO(direction=1, limits=(0.0, 83.0), endpoints=(16000, 4000))
+    result = build_calibration_result(io, 1, 16000, 0, 4000, 0, 1000, 2000)
+    assert result
+    raw = TendonRawFitBuffer()
+    # 物理 raw 16000/1808/4000 对应 URDF 0°/41.5°/83°。
+    for encoder, primary in ((16000, 0), (1808, 1000), (4000, 2000)):
+        assert raw.append(encoder, primary, 0)
+    assert build_tendon_lut(io, 1, result, 2, 255, 1, raw)
+    assert result["tendonLutValid"] is True
+    assert result["tendonLutCount"] == 18
+    assert result["tendonLutAngleStartDeg"] == 0.0
+    assert result["tendonLutAngleStepDeg"] == 5.0
+    row = result["tendonLutMotorAbs"][0]
+    # 线性样本 -> 每 5° 一个点；末点 85° 按静态 angleMax 83° 解释。
+    assert row[0] == 0
+    assert row[8] == 964
+    assert row[17] == 2000
+    assert result["tendonLutMotorAbs"][1] == [0] * 24
+    assert tendon_lut_sample_angle(result, 1) == 5.0
+    assert tendon_lut_sample_angle(result, 17) == 83.0
+
+
+def test_tendon_limits_use_full_table_endpoints_with_margins():
+    # 两端陡、中间平的整表（J03 实测形状）：工作空间取整表端点，不取中段直线。
     result = {
         "success": True,
         "scaled": True,
-        "angleMin": 0.0,
-        "angleMax": 50.0,
-        "tendonLutCount": 11,
+        "tendonLutValid": True,
+        "tendonLutCount": 5,
         "tendonLutAngleStartDeg": 0.0,
         "tendonLutAngleStepDeg": 5.0,
-        "tendonLutMotorAbs": [list(values) + [0] * 13, [0] * 24],
-    }
-    assert fit_middle_line(None, 1, result, 1)
-    assert result["tendonLutCount"] == 2
-    assert result["tendonLutAngleStepDeg"] == 50.0
-    assert result["tendonLutMotorAbs"][0] == [3, 503]
-    assert result["tendonLutMotorAbs"][1] == [0, 0]
-
-
-def test_middle_fit_is_rejected_without_a_usable_line():
-    result = {
-        "success": True,
-        "scaled": True,
         "angleMin": 0.0,
-        "angleMax": 50.0,
-        "tendonLutCount": 2,
-        "tendonLutAngleStartDeg": 0.0,
-        "tendonLutAngleStepDeg": 50.0,
-        "tendonLutMotorAbs": [[777, 900], [0, 0]],
+        "angleMax": 20.0,
+        "tendonLutMotorAbs": [[7600, 8100, 8900, 11200, 11900], [0] * 24],
     }
-    assert not fit_middle_line(None, 1, result, 1)
-    assert result["tendonLutMotorAbs"][0] == [777, 900]
+    assert tendon_motor_abs_limits(result, 0, 0, 500, 1000) == (7100, 12900)
+    assert tendon_motor_abs_limits(result, 0, 1, 500, 1000) == (7100, 12900)
+    result["tendonLutMotorAbs"][0] = [11900, 11200, 8900, 8100, 7600]
+    assert tendon_motor_abs_limits(result, 0, 0, 500, 1000) == (7100, 12900)
 
 
 def test_tendon_limits_extend_past_fitted_line_instead_of_measured_tight_stop():

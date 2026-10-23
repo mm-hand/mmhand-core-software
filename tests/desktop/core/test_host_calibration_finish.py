@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from desktop.core.host_calibration.config import joint_motors
-from desktop.core.host_calibration.finish import finish_dual_zero
+from desktop.core.host_calibration.finish import dual_lut_targets, finish_dual_zero
 
 
 def _result(joint, *, rows=None, start=-2.5, step=5.0, maximum=7.5):
@@ -181,3 +181,13 @@ def test_release_failure_is_not_reported_as_complete():
     success, message = finish_dual_zero(io, io.selected_joint_mask)
     assert not success and 'release failed' in message
     assert len(io.commands) == 1 and io.releases == 1
+
+
+def test_dual_lut_targets_uses_angle_max_for_the_remainder_sample():
+    # 20 点、5° 步长的名义末点是 25°，静态 URDF Max 是 21°：末点按 21° 解释。
+    rows = [[100 + index for index in range(20)], [200 - index for index in range(20)]]
+    result = _result(0, rows=rows, start=-70.0, step=5.0, maximum=21.0)
+    motors = joint_motors(0)
+    assert dual_lut_targets(result, motors, 21.0) == {motors[0]: 119, motors[1]: 181}
+    assert dual_lut_targets(result, motors, 20.0) == {motors[0]: 118, motors[1]: 182}
+    assert dual_lut_targets(result, motors, 21.5) is None

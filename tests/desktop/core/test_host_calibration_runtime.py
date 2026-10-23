@@ -926,6 +926,8 @@ def test_each_joint_writes_manual_and_lut_once_then_limits_and_anchors(io, monke
     ]
     assert sent[0][1] == ('manual_encoder_single', 1, 10000, 6000)
     assert sent[1][1][1]['tendonLutMotor'] == [2, 255]
+    # 完整 5° 表随 result 一起提交/下发，不再压成 2 点直线。
+    assert sent[1][1][1]['tendonLutCount'] == result['tendonLutCount'] > 2
     assert sent[2][1][1:3] == (4, 4)
     io.snapshot_store.merge_calibration.assert_called_once()
     assert saved_anchors[0][1]['motor_mask'] == 4

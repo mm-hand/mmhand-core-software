@@ -14,7 +14,7 @@ import math
 
 from ..protocol import DUAL_TENDON_JOINT_INDICES, ENCODER_COUNT, TENDON_LUT_MAX_SAMPLES
 from .config import default_auto_calibration_params, joint_motors
-from .math import f32, round_to_int32
+from .math import f32, round_to_int32, tendon_lut_sample_angle
 
 
 _STEP_PERIOD_MS = 50
@@ -37,19 +37,11 @@ def dual_lut_targets(result, motors, angle):
             return None
         first = f32(result['tendonLutAngleStartDeg'])
         step = f32(result['tendonLutAngleStepDeg'])
-        # LUT 末段按静态 angleMax/URDF max 截断；currentMaxDeg 概念已从 host 删除。
-        angle_max = f32(result.get('angleMax', float('nan')))
         if not math.isfinite(first) or not math.isfinite(step) or step <= 0:
             return None
 
-        def sample_angle(index):
-            nominal = f32(first + f32(step * f32(index)))
-            if (index == count - 1 and math.isfinite(angle_max) and
-                    first < angle_max < nominal):
-                return angle_max
-            return nominal
-
-        last = sample_angle(count - 1)
+        # LUT 末段按静态 angleMax/URDF max 截断；currentMaxDeg 概念已从 host 删除。
+        last = tendon_lut_sample_angle(result, count - 1)
         angle = f32(angle)
         if not math.isfinite(last) or not first <= angle <= last or last <= first:
             return None
@@ -57,10 +49,11 @@ def dual_lut_targets(result, motors, angle):
         if angle >= last:
             upper_index = count - 1
         elif angle > first:
-            while upper_index < count - 1 and angle > sample_angle(upper_index):
+            while upper_index < count - 1 and angle > tendon_lut_sample_angle(result, upper_index):
                 upper_index += 1
         lower_index = upper_index - 1
-        lower_deg, upper_deg = sample_angle(lower_index), sample_angle(upper_index)
+        lower_deg = tendon_lut_sample_angle(result, lower_index)
+        upper_deg = tendon_lut_sample_angle(result, upper_index)
         if upper_deg <= lower_deg:
             return None
         fraction = f32(f32(angle - lower_deg) / f32(upper_deg - lower_deg))

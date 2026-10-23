@@ -14,14 +14,6 @@ using namespace mmhand::config::control;
 namespace {
 float clip(float value, float low, float high) { return fmaxf(low, fminf(high, value)); }
 int8_t sign(float value) { return value > 0.0001f ? 1 : value < -0.0001f ? -1 : 0; }
-bool slopeAt(const JointCalibrationResult& lut, uint8_t axis, float q, float* slope, float* model) {
-    float lower, upper;
-    if (!interpolateTendonCalibrationMotorAbs(lut, axis, q, model) ||
-        !interpolateTendonCalibrationMotorAbs(lut, axis, q - 0.01f, &lower) ||
-        !interpolateTendonCalibrationMotorAbs(lut, axis, q + 0.01f, &upper)) return false;
-    *slope = (upper - lower) / 0.02f;
-    return isfinite(*slope) && fabsf(*slope) > 0.001f;
-}
 Parameter jointKpParameter(uint8_t joint) {
     // J00..J19: four joints per finger in AA/MCP/PIP/DIP order; J20: thumb CMC.
     if (joint + 1 == ENCODER_TOTAL_NUM) return JointKpCmc;
@@ -153,8 +145,12 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
         JointActuatorItem actuator;
         if (!getJointActuator(joint, i, &actuator) || actuator.motorChannel >= SERVO_TOTAL_NUM) return out;
         const auto motor = actuator.motorChannel;
+        // Local LUT interpolation feeds the model/pair recovery; the PID gains always
+        // use the constant middle-table slope so the loop gain cannot explode at the
+        // distorted tendon ends.
         if (!(motorMask & (1UL << motor)) || !servo.onlineStatus[motor] || lut.tendonLutMotor[i] != motor ||
-            !slopeAt(lut, i, fb.fast, &slope[i], &model[i])) return out;
+            !interpolateTendonCalibrationMotorAbs(lut, i, fb.fast, &model[i]) ||
+            !tendonCalibrationMiddleSlope(lut, i, &slope[i])) return out;
         // The LUT working window (calibrated span widened by the configurable
         // release/tight margins) is the only command boundary; nothing widens it.
         int32_t lo, hi;

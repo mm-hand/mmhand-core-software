@@ -38,6 +38,7 @@ struct JointActuatorItem { uint8_t motorChannel; };
 inline uint8_t getJointActuatorCount(uint8_t joint) { return joint == 1 || joint == 20 ? 2 : 1; }
 inline bool getJointActuator(uint8_t, uint8_t axis, JointActuatorItem* out) { out->motorChannel = axis; return true; }
 inline bool interpolateTendonCalibrationMotorAbs(const JointCalibrationResult&, uint8_t axis, float q, float* out) { *out = 100 + (axis ? -20 : 10)*q; return true; }
+inline bool tendonCalibrationMiddleSlope(const JointCalibrationResult&, uint8_t axis, float* out) { *out = axis ? -20.0f : 10.0f; return true; }
 inline bool singleTendonCalibrationMotorAbsRange(const JointCalibrationResult&,uint8_t,uint8_t,int32_t,int32_t,int32_t* lo,int32_t* hi) { *lo=-10000; *hi=10000; return true; }
 inline bool tendonCalibrationMotorAbsRangeWithMargins(const JointCalibrationResult& c,uint8_t a,uint8_t m,int32_t r,int32_t t,int32_t* lo,int32_t* hi) { return singleTendonCalibrationMotorAbsRange(c,a,m,r,t,lo,hi); }
 '''
@@ -87,7 +88,7 @@ int main() {
     FeedbackEstimate fb; fb.fast=fb.slow=0; fb.ready=fb.fresh=true; fb.sampleDt=0.01f;
     JointFeedbackController controller; RampParameters ramp;
     auto one=controller.compute(0,1,fb,1000,servo,telemetry,lut,3,p,ramp);
-    assert(one.count==1 && one.targets[0]==110); // measured 100 + 1.0 * signed local slope 10 * 1
+    assert(one.count==1 && one.targets[0]==110); // measured 100 + 1.0 * signed middle slope 10 * 1
     servo.servoAngles[0]=110; servo.servoAngles[1]=105;
     auto two=controller.compute(1,1,fb,1000,servo,telemetry,lut,3,p,ramp);
     assert(two.count==2 && fabsf(two.proportional[0]-10)<0.01f && fabsf(two.proportional[1]+20)<0.01f);
@@ -216,3 +217,90 @@ int main() {
     command = [compiler, '/nologo', '/std:c++17', '/EHsc', *sources, f'/Fe:{exe}'] if Path(compiler).name.lower()=='cl.exe' else [compiler,'-std=c++17',*sources,'-o',str(exe)]
     subprocess.run(command,cwd=tmp_path,check=True,capture_output=True,text=True,encoding='utf-8',errors='replace')
     subprocess.run([str(exe)],check=True,capture_output=True,text=True,encoding='utf-8',errors='replace')
+
+
+def test_full_table_middle_slope_and_envelope_match_the_host_rule(tmp_path):
+    compiler = shutil.which('cl') or shutil.which('g++') or shutil.which('clang++')
+    assert compiler, 'Run under a native compiler environment (MSVC vcvars64 or GCC/Clang)'
+    header = (SRC / 'system/calibration/CalibrationRuntimeStore.h').read_text(encoding='utf-8')
+    match = re.search(r'struct JointCalibrationResult \{.*?\n\};', header, re.S)
+    assert match, 'JointCalibrationResult struct moved; update the fixture'
+    source = re.sub(r'^#include ".*"\n', '',
+                    (SRC / 'system/calibration/TendonCalibrationLut.cpp').read_text(encoding='utf-8'),
+                    flags=re.M)
+    fixture = f'''
+#include <stdint.h>
+#include <stddef.h>
+#include <math.h>
+#define TENDON_LUT_ACTUATOR_COUNT 2
+#define TENDON_LUT_MAX_SAMPLES 24
+static const uint8_t kManualScaledUrdfFeedbackMappingVersion = 4;
+{match.group(0)}
+inline int8_t getMotorTendonShortenAbsSign(uint8_t) {{ return 1; }}
+inline int32_t motorApplyTendonDelta(uint8_t, int32_t abs, int32_t delta) {{ return abs + delta; }}
+bool tendonCalibrationMiddleSlope(const JointCalibrationResult&, uint8_t, float*);
+bool tendonCalibrationContainsAngle(const JointCalibrationResult&, float);
+bool tendonCalibrationMotorAbsRangeWithMargins(const JointCalibrationResult&, uint8_t, uint8_t,
+                                               int32_t, int32_t, int32_t*, int32_t*);
+bool interpolateTendonCalibrationMotorAbs(const JointCalibrationResult&, uint8_t, float, float*);
+'''
+    harness = r'''
+#include "fixture.h"
+#include <cassert>
+#include <cstdio>
+static void fill(JointCalibrationResult& c, const int32_t* values, uint8_t count,
+                 float start, float step, float angleMax) {
+    c = JointCalibrationResult{};
+    c.success = true;
+    c.scaled = true;
+    c.tendonLutValid = 1;
+    c.mappingVersion = 4;
+    c.tendonLutCount = count;
+    c.tendonLutAngleStartDeg = start;
+    c.tendonLutAngleStepDeg = step;
+    c.angleMin = start;
+    c.angleMax = angleMax;
+    for (uint8_t i = 0; i < count; i++) {
+        c.tendonLutMotorAbs[0][i] = values[i];
+        c.tendonLutMotorAbs[1][i] = values[i];
+    }
+}
+int main() {
+    JointCalibrationResult c;
+    float slope = 0.0f;
+    int32_t lo = 0, hi = 0;
+    // 两端陡、中间平：索引 1..5（5..25 度）严格是 abs = 3000 + 10*angle。
+    const int32_t shaped[7] = {0, 3000, 3050, 3100, 3150, 3200, 6000};
+    fill(c, shaped, 7, 0.0f, 5.0f, 30.0f);
+    assert(tendonCalibrationMiddleSlope(c, 0, &slope));
+    assert(fabsf(slope - 10.0f) < 0.01f);          // 中段斜率，不是端点斜率 200
+    assert(tendonCalibrationMotorAbsRangeWithMargins(c, 0, 0, 500, 1000, &lo, &hi));
+    assert(lo == -500 && hi == 7000);              // min 0-500, max 6000+1000
+    // 旧 2 点表：中段斜率退化为唯一线段斜率，旧 bundle 不需要重标。
+    const int32_t two[2] = {1000, 4000};
+    fill(c, two, 2, -15.0f, 105.0f, 90.0f);
+    assert(tendonCalibrationMiddleSlope(c, 0, &slope));
+    assert(fabsf(slope - 3000.0f / 105.0f) < 0.001f);
+    assert(tendonCalibrationContainsAngle(c, 90.0f));
+    assert(!tendonCalibrationContainsAngle(c, 90.5f));
+    // 全平表：没有可用斜率，必须拒绝而不是给出 0 增益。
+    const int32_t flat[5] = {1000, 1000, 1000, 1000, 1000};
+    fill(c, flat, 5, 0.0f, 5.0f, 20.0f);
+    assert(!tendonCalibrationMiddleSlope(c, 0, &slope));
+    printf("ok\n");
+    return 0;
+}
+'''
+    (tmp_path / 'fixture.h').write_text(fixture, encoding='utf-8')
+    (tmp_path / 'TendonCalibrationLut.cpp').write_text('#include "fixture.h"\n' + source,
+                                                       encoding='utf-8')
+    (tmp_path / 'main.cpp').write_text(harness, encoding='utf-8')
+    exe = tmp_path / ('lut_test.exe' if os.name == 'nt' else 'lut_test')
+    sources = [str(tmp_path / name) for name in ('main.cpp', 'TendonCalibrationLut.cpp')]
+    command = ([compiler, '/nologo', '/std:c++17', '/EHsc', *sources, f'/Fe:{exe}']
+               if Path(compiler).name.lower() == 'cl.exe'
+               else [compiler, '-std=c++17', *sources, '-o', str(exe)])
+    subprocess.run(command, cwd=tmp_path, check=True, capture_output=True, text=True,
+                   encoding='utf-8', errors='replace')
+    subprocess.run([str(exe)], check=True, capture_output=True, text=True,
+                   encoding='utf-8', errors='replace')

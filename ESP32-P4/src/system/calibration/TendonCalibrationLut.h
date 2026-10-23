@@ -19,6 +19,15 @@ bool interpolateTendonCalibrationMotorAbs(const JointCalibrationResult& calibrat
 bool tendonCalibrationContainsAngle(const JointCalibrationResult& calibration,
                                     float urdfDeg);
 
+/**
+ * 返回整表角度区间中间 50% 上的最小二乘斜率（counts/deg，带符号）。
+ * 反馈环的 Kp/Ki/Kd 只乘这个中段斜率：两端斜率被腱绳松弛/张紧放大，
+ * 直接用会让环路增益在行程末端爆掉。中段退化时退回端点斜率。
+ */
+bool tendonCalibrationMiddleSlope(const JointCalibrationResult& calibration,
+                                  uint8_t actuatorIndex,
+                                  float* outCountsPerDeg);
+
 // 返回某一路执行器在 LUT 实测样本中的 raw ABS 最小值和最大值。
 // 该范围用于生成单腱关节的标定后舵机工作区。
 bool tendonCalibrationMotorAbsRange(const JointCalibrationResult& calibration,

@@ -8,6 +8,8 @@ from desktop.core.calibration_snapshot import (
     atomic_write_snapshot,
     format_mask,
     invalidate_calibration_snapshot_scope,
+    joint_calib_result_has_valid_tendon_lut,
+    joint_calib_result_tendon_lut_abs_ranges,
     merge_snapshot,
     parse_mask,
     read_snapshot,
@@ -410,3 +412,28 @@ def test_new_out_of_scope_anchor_is_still_rejected(tmp_path):
         update_snapshot_multiturn_anchors(
             path, motor_mask=1 << 20,
             logical_abs=[0] * MOTOR_COUNT, raw=[0] * MOTOR_COUNT)
+
+
+def test_full_5_degree_table_is_valid_and_ranges_follow_the_endpoints():
+    result = _result(1, 2)
+    result.update(
+        tendonLutCount=24,
+        tendonLutAngleStartDeg=-15.0,
+        tendonLutAngleStepDeg=5.0,
+        tendonLutMotorAbs=[[1000 + 37 * index for index in range(24)],
+                           [0] * 24],
+    )
+    assert joint_calib_result_has_valid_tendon_lut(result, 1)
+    assert joint_calib_result_tendon_lut_abs_ranges(result, 1) == [(2, 1000, 1851)]
+
+
+def test_old_two_point_lut_still_validates():
+    result = _result(1, 2)
+    result.update(
+        tendonLutCount=2,
+        tendonLutAngleStartDeg=-15.0,
+        tendonLutAngleStepDeg=105.0,
+        tendonLutMotorAbs=[[4000, 9000], [0] * 24],
+    )
+    assert joint_calib_result_has_valid_tendon_lut(result, 1)
+    assert joint_calib_result_tendon_lut_abs_ranges(result, 1) == [(2, 4000, 9000)]
