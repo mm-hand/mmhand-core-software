@@ -116,54 +116,10 @@ struct ServoSyncReadResult {
 class FeetechServoDriver {
 public:
     /** 构造空驱动；必须先调用 begin() 绑定一条硬件 UART。 */
-    FeetechServoDriver()
-        : _serial(NULL),
-          _busIndex(0xFF),
-          _rxPin(-1),
-          _txPin(-1),
-          _baud(0),
-          _writeCount(0),
-          _currentReadDivider(0),
-          _syncReadActive(false),
-          _syncReadIncludeCurrent(false),
-          _syncReadCount(0),
-          _syncReadFeedbackLen(0),
-          _syncReadSequence(0),
-          _syncReadStartedUs(0),
-          _syncReadDeadlineUs(0),
-          _multiTurnConfigId(0xFF),
-          _multiTurnConfigPhase(ServoMultiTurnConfigPhase::Idle),
-          _multiTurnConfigNotBeforeMs(0),
-          _multiTurnConfigFailed(false)
-    {
-        memset(_feedback, 0, sizeof(_feedback));
-        memset(_torqueDisabled, 0, sizeof(_torqueDisabled));
-        memset(_multiTurnConfigured, 0, sizeof(_multiTurnConfigured));
-        memset(_syncReadIds, 0, sizeof(_syncReadIds));
-    }
+    FeetechServoDriver();
 
     /** 绑定总线索引和串口引脚，不扫描舵机，也不改变舵机 EEPROM。 */
-    void begin(uint8_t busIndex, int rxPin, int txPin, uint32_t baud)
-    {
-        HardwareSerial* serial = NULL;
-        switch (busIndex) {
-            case 0: serial = &Serial1; break;
-            case 1: serial = &Serial2; break;
-            case 2: serial = &Serial3; break;
-            case 3: serial = &Serial4; break;
-            default: return;
-        }
-
-        _serial = serial;
-        _busIndex = busIndex;
-        _rxPin = rxPin;
-        _txPin = txPin;
-        _baud = baud;
-        // 必须在 begin() 前扩大 Arduino UART RX ring；不设置 TX ring，命令立即下发。
-        _serial->setRxBufferSize(kServoBusUartRxBufferBytes);
-        _serial->begin(baud, SERIAL_8N1, rxPin, txPin);
-        _sms.pSerial = _serial;
-    }
+    void begin(uint8_t busIndex, int rxPin, int txPin, uint32_t baud);
 
     /**
      * 重建当前 BUS 的 UART 传输层，并撤销该 BUS 上全部旧反馈的在线/多圈可信状态。
@@ -203,25 +159,7 @@ public:
     }
 
     /** 清除角度限制以启用 ST3215 多圈模式；会解锁并写入舵机 EEPROM。 */
-    bool configureMultiTurnMode(uint8_t id)
-    {
-        if (!_serial || id > MAX_SERVO_ID) {
-            return false;
-        }
-
-        uint8_t zeroLimits[4] = {0, 0, 0, 0};
-        bool ok = true;
-        ok = (_sms.unLockEprom(id) >= 0) && ok;
-        delay(kMultiTurnConfigDelayMs);
-        ok = (_sms.genWrite(id, SMS_STS_MIN_ANGLE_LIMIT_L, zeroLimits, sizeof(zeroLimits)) >= 0) && ok;
-        delay(kMultiTurnConfigDelayMs);
-        ok = (_sms.LockEprom(id) >= 0) && ok;
-        delay(kMultiTurnConfigDelayMs);
-        if (ok) {
-            _multiTurnConfigured[id] = true;
-        }
-        return ok;
-    }
+    bool configureMultiTurnMode(uint8_t id);
 
     /**
      * 按需推进一台舵机的多圈配置。
@@ -316,14 +254,7 @@ public:
     }
 
     /** 检查实际 ABS 的范围和信任状态后加入同步写批次。 */
-    bool setTarget(uint8_t id, int32_t logicalPosition, uint16_t speed, uint8_t acc)
-    {
-        int16_t hardwarePosition = 0;
-        if (!validateAbsoluteTarget(id, logicalPosition, &hardwarePosition)) {
-            return false;
-        }
-        return queueTarget(id, hardwarePosition, speed, acc);
-    }
+    bool setTarget(uint8_t id, int32_t logicalPosition, uint16_t speed, uint8_t acc);
 
     /** 追加一台舵机到本总线同步写缓存；必要时自动重新使能力矩。 */
     bool queueTarget(uint8_t id, int16_t position, uint16_t speed, uint8_t acc)
@@ -348,14 +279,7 @@ public:
     void clearQueuedTargets() { _writeCount = 0; }
 
     /** 一次性发送当前缓存并清空批次；空批次不访问 UART。 */
-    void syncWriteAll()
-    {
-        if (_writeCount == 0 || !_serial) {
-            return;
-        }
-        _sms.SyncWritePosEx(_writeIDs, _writeCount, _writePos, _writeSpd, _writeAcc);
-        _writeCount = 0;
-    }
+    void syncWriteAll();
 
     /**
      * 启动一次非阻塞同步读，只向当前 UART 发送广播请求。
@@ -406,89 +330,10 @@ public:
     }
 
     /** 搬运当前已到达字节；完整到包或截止后才解析并更新反馈可信状态。 */
-    ServoSyncReadResult collectSyncRead(uint64_t nowUs)
-    {
-        ServoSyncReadResult result = {
-            _syncReadActive ? ServoSyncReadState::Pending
-                            : ServoSyncReadState::Idle,
-            _syncReadCount,
-            0,
-            _sms.syncReadBufferedBytes(),
-            _sms.syncReadExpectedBytes(),
-            _syncReadSequence,
-            _syncReadStartedUs,
-            0,
-        };
-        if (!_syncReadActive) {
-            return result;
-        }
-
-        _sms.syncReadCollectAvailable();
-        result.bufferedBytes = _sms.syncReadBufferedBytes();
-        result.expectedBytes = _sms.syncReadExpectedBytes();
-        const bool allBytesReceived =
-            result.expectedBytes != 0 &&
-            result.bufferedBytes >= result.expectedBytes;
-        const bool deadlineReached = nowUs >= _syncReadDeadlineUs;
-        if (!allBytesReceived && !deadlineReached) {
-            return result;
-        }
-
-        uint8_t successCount = 0;
-        for (uint8_t i = 0; i < _syncReadCount; i++) {
-            const uint8_t id = _syncReadIds[i];
-            uint8_t rxBuf[15] = {0};
-            const int rxLen = _sms.syncReadPacketRx(id, rxBuf);
-            if (id > MAX_SERVO_ID) {
-                continue;
-            }
-            if (rxLen == _syncReadFeedbackLen) {
-                const int16_t current = _syncReadIncludeCurrent
-                    ? decodeSigned(rxBuf[13], rxBuf[14])
-                    : _feedback[id].current;
-                recordFeedbackSuccess(id,
-                                      decodeSigned(rxBuf[0], rxBuf[1]),
-                                      decodeSigned(rxBuf[2], rxBuf[3]),
-                                      decodeServoLoad(rxBuf[4], rxBuf[5]),
-                                      current,
-                                      rxBuf[6],
-                                      rxBuf[7]);
-                successCount++;
-            } else {
-                markReadFailure(id);
-            }
-        }
-
-        _sms.syncReadEnd();
-        _syncReadActive = false;
-        result.successCount = successCount;
-        result.completedUs = nowUs;
-        result.state = successCount == _syncReadCount
-            ? ServoSyncReadState::Complete
-            : (deadlineReached ? ServoSyncReadState::TimedOut
-                               : ServoSyncReadState::ProtocolError);
-        _syncReadCount = 0;
-        return result;
-    }
+    ServoSyncReadResult collectSyncRead(uint64_t nowUs);
 
     /** 取消当前事务；E-STOP/UART重启不把主动取消累计为舵机读失败。 */
-    void abortSyncRead(bool markFailure)
-    {
-        if (!_syncReadActive) {
-            return;
-        }
-        if (markFailure) {
-            for (uint8_t i = 0; i < _syncReadCount; ++i) {
-                if (_syncReadIds[i] <= MAX_SERVO_ID) {
-                    markReadFailure(_syncReadIds[i]);
-                }
-            }
-        }
-        _sms.syncReadCollectAvailable();
-        _sms.syncReadEnd();
-        _syncReadActive = false;
-        _syncReadCount = 0;
-    }
+    void abortSyncRead(bool markFailure);
 
     // Maintenance uses raw addresses, independent of product Mxx feedback arrays.
     bool probeMaintenanceId(uint8_t id) {
