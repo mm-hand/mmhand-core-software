@@ -274,12 +274,11 @@ def test_ros2_output_gate_reuses_ros2_authorization():
 
     ok, message = backend.set_ros2_output_enabled(True)
     assert ok, message
-    assert backend.ros2_output_enabled()
     assert backend.ros2_output_armed()
 
     ok, message = backend.set_ros2_output_enabled(False)
     assert ok, message
-    assert not backend.ros2_output_enabled()
+    assert not backend.ros2_output_armed()
 
 
 def test_ros2_output_gate_rejects_prearming_before_ordinary_enable():
@@ -292,7 +291,7 @@ def test_ros2_output_gate_rejects_prearming_before_ordinary_enable():
 
     assert not ok
     assert "press ENABLE first" in message
-    assert not backend.ros2_output_enabled()
+    assert not backend.ros2_output_armed()
 
 
 def _midpoint_frame() -> list[float]:

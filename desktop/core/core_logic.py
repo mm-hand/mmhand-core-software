@@ -1027,21 +1027,6 @@ class HandController:
             return True, "runtime and calibration snapshot anchors saved"
         return False, last_error or "runtime or calibration snapshot anchor missing"
 
-    def wait_for_multiturn_anchor_capture(
-        self,
-        motor_mask: int,
-        timeout_s: float = MULTITURN_ANCHOR_CAPTURE_TIMEOUT_S,
-    ) -> Tuple[bool, str]:
-        """等待标定锚点同时写入运行文件和标定快照。"""
-        deadline = time.monotonic() + max(0.0, float(timeout_s))
-        last_message = "waiting for trusted Mxx feedback"
-        while time.monotonic() < deadline:
-            ok, last_message = self.multiturn_anchor_capture_status(motor_mask)
-            if ok:
-                return True, last_message
-            time.sleep(0.02)
-        return False, last_message
-
     def _service_multiturn_anchor_capture(self, state: HandModel) -> None:
         with self._multiturn_io_lock:
             self._service_multiturn_anchor_capture_locked(state)

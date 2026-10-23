@@ -61,7 +61,7 @@ def test_generated_p4_urdf_limits_are_current_and_crc_matches():
     root = Path(__file__).resolve().parents[3]
     from tools.generate_robot_model import check_outputs
     assert check_outputs() == []
-    version, _ = angle_mapping.urdf_feedback_mapping_metadata()
+    version = json.loads(Path(ROBOT_MODEL_PATH).read_text(encoding="utf-8"))["feedback_mapping_version"]
     header = (
         root
         / "ESP32-P4"

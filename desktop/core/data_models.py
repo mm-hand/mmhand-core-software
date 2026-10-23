@@ -539,11 +539,6 @@ class HandModel:
         return [e.current_angle_deg for e in self.encoders]
 
     @property
-    def encoder_angles_deg(self) -> List[float]:
-        """与 angles 一致"""
-        return self.angles
-
-    @property
     def target_angles(self) -> List[float]:
         """ENCODER_COUNT 个关节目标角度（度）"""
         return [e.target_angle_deg for e in self.encoders]

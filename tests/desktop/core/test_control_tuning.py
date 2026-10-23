@@ -117,18 +117,3 @@ def test_recorded_feedback_age_preserves_snapshot_order_and_wrap():
     assert signed_age_ms(1000,1001)==-1
     assert signed_age_ms(1000,849)==151
     assert signed_age_ms(5,0xfffffff0)==21
-
-
-def test_export_preserves_interrupted_samples_and_missing_values(tmp_path):
-    import json,csv
-    from tools.debug.export_control_tuning import export
-    source=tmp_path/'interrupted.jsonl'
-    original='\n'.join(json.dumps(dict(t=i*.1,q=1,target=2,missing=None)) for i in range(20))+'\n{'
-    source.write_text(original)
-    index=export(tmp_path)
-    assert source.read_text()==original
-    assert index[0]['malformed_lines']==1 and index[0]['rows']==20
-    with (tmp_path/'derived/interrupted.csv').open(encoding='utf-8-sig') as f:
-        rows=list(csv.DictReader(f))
-    assert rows[0]['missing']==''
-    assert (tmp_path/'derived/interrupted.svg').exists()

@@ -43,13 +43,6 @@ class JointTargetAdaptation:
     mapping: UrdfMappingIdentity
 
 
-@dataclass(frozen=True)
-class NamedJointTargetAdaptation:
-    urdf_targets_deg: tuple[float, ...]
-    mapped_indices: tuple[int, ...]
-    unknown_names: tuple[str, ...]
-
-
 @lru_cache(maxsize=1)
 def active_mapping_identity() -> UrdfMappingIdentity:
     from .robot_model import mapping as _robot_mapping
@@ -151,39 +144,14 @@ def joint_index_for_urdf_name(joint_name: str) -> int | None:
     return None
 
 
-def named_urdf_radians_to_joint_targets(
-    joint_angles: Mapping[str, float],
-) -> NamedJointTargetAdaptation:
-    targets = [0.0] * ENCODER_COUNT
-    mapped: set[int] = set()
-    unknown: list[str] = []
-    for name, angle_rad in joint_angles.items():
-        idx = joint_index_for_urdf_name(str(name))
-        if idx is None:
-            unknown.append(str(name))
-            continue
-        value = float(angle_rad)
-        if not math.isfinite(value):
-            raise ValueError(f"non-finite URDF angle for {name}")
-        targets[idx] = math.degrees(value)
-        mapped.add(idx)
-    return NamedJointTargetAdaptation(
-        urdf_targets_deg=tuple(targets),
-        mapped_indices=tuple(sorted(mapped)),
-        unknown_names=tuple(unknown),
-    )
-
-
 __all__ = [
     "SUPPORTED_TARGET_SPACES",
     "URDF_DEG",
     "URDF_RAD",
     "JointTargetAdaptation",
-    "NamedJointTargetAdaptation",
     "UrdfMappingIdentity",
     "active_mapping_identity",
     "adapt_joint_targets",
     "joint_index_for_urdf_name",
-    "named_urdf_radians_to_joint_targets",
     "normalize_target_space",
 ]

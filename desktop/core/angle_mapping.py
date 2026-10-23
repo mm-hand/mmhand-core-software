@@ -54,15 +54,6 @@ def _urdf_mapping_metadata(
     return version, zlib.crc32(payload) & 0xFFFFFFFF
 
 
-def urdf_feedback_mapping_metadata(
-    mapping_path: Path | str = URDF_JOINT_MAPPING_PATH,
-) -> tuple[int, int]:
-    """Return the generated-P4 runtime mapping version and canonical CRC32."""
-    return _urdf_mapping_metadata(
-        "feedback_mapping_version", "URDF feedback", mapping_path
-    )
-
-
 def urdf_manual_scaled_mapping_metadata(
     mapping_path: Path | str = URDF_JOINT_MAPPING_PATH,
 ) -> tuple[int, int]:
@@ -460,6 +451,5 @@ __all__ = [
     "load_calibrated_ranges",
     "resolve_joint",
     "urdf_to_calibrated",
-    "urdf_feedback_mapping_metadata",
     "urdf_manual_scaled_mapping_metadata",
 ]

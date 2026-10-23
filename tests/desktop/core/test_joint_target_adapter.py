@@ -8,7 +8,6 @@ from desktop.core.joint_target_adapter import (
     URDF_RAD,
     adapt_joint_targets,
     joint_index_for_urdf_name,
-    named_urdf_radians_to_joint_targets,
 )
 from desktop.core.protocol import ENCODER_COUNT
 
@@ -40,19 +39,6 @@ def test_semantic_thumb_names_use_canonical_j16_to_j20_order() -> None:
     assert joint_index_for_urdf_name("Thumb_CMC") == 20
     assert joint_index_for_urdf_name("thumb_aa_joint") is None
     assert joint_index_for_urdf_name("5-1") is None
-
-
-def test_named_urdf_radians_map_all_21_semantic_names() -> None:
-    source = {
-        spec.urdf_joint_name: math.radians(float(idx))
-        for idx, spec in angle_mapping.JOINT_SPECS.items()
-    }
-    result = named_urdf_radians_to_joint_targets(source)
-    assert result.mapped_indices == tuple(range(ENCODER_COUNT))
-    assert result.unknown_names == ()
-    assert list(result.urdf_targets_deg) == pytest.approx(
-        [float(idx) for idx in range(ENCODER_COUNT)]
-    )
 
 
 @pytest.mark.parametrize(

@@ -52,13 +52,6 @@ def directed_encoder_delta(start_raw: int, end_raw: int, direction: int) -> int:
     return wrap_encoder_count((end - start) if direction > 0 else (start - end))
 
 
-def signed_directed_encoder_delta(start: int, end: int, direction: int) -> int:
-    value = directed_encoder_delta(start, end, direction)
-    if value < 0:
-        return 0
-    return value - kCalibrationEncoderModulo if value > kCalibrationEncoderHalfTurn else value
-
-
 def wrap_encoder_delta(target: int, actual: int) -> int:
     delta = target - actual
     while delta > kCalibrationEncoderHalfTurn:

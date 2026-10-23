@@ -682,10 +682,6 @@ class HandBackend(ApplicationActions):
             return True, "ROS2 input disabled"
         return ok, message
 
-    def ros2_output_enabled(self) -> bool:
-        """返回当前 ROS2 用户授权；运行门禁仍在每一帧发送前复核。"""
-        return self.ros2_output_armed()
-
     def _log_ros2_drop_locked(self, reason: str) -> None:
         """同类 ROS2 丢帧日志每秒最多记录一次，避免 100 Hz 输入刷屏。"""
         now = time.monotonic()
@@ -999,11 +995,6 @@ class HandBackend(ApplicationActions):
             ),
             False,
         )
-
-    @staticmethod
-    def joint_motor_lut_ranges(result, joint: int):
-        """提供展示所需的已验证 LUT 范围，UI 不解析持久化格式。"""
-        return joint_calib_result_tendon_lut_abs_ranges(result, joint)
 
     def query_manual_encoder_references(self) -> bool:
         return self._controller.query_manual_encoder_references()

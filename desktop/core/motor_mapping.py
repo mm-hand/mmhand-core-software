@@ -40,7 +40,3 @@ def motor_tendon_shorten_abs_sign(motor_idx: int) -> int:
 def motor_abs_after_tendon_action(current_abs: int, motor_idx: int, shorten_counts: int) -> int:
     sign = motor_tendon_shorten_abs_sign(motor_idx)
     return clamp_motor_abs(int(current_abs) + sign * int(shorten_counts))
-
-
-def motor_target_from_servo_feedback(servo_raw_single: int) -> int:
-    return max(0, min(4095, int(servo_raw_single) % 4096))
