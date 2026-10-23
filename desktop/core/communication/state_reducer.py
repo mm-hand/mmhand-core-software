@@ -94,6 +94,33 @@ STATE_SNAPSHOT_CRITICAL_PACKET_KINDS = frozenset({
 class StateReducer:
     """把增量协议包归并为完整设备快照。"""
 
+    # 包类型 -> 处理函数。新增一种 P4 包只在 _apply_xxx 写好后来这里登记一行。
+    PACKET_APPLIERS = {
+        "sensor": lambda self, owner, model, payload, time_ms, rx_at: self._apply_sensor(owner, model, payload, time_ms, rx_at),
+        "encoder_raw": lambda self, owner, model, payload, time_ms, rx_at: self._apply_encoder_raw(owner, model, payload, time_ms, rx_at),
+        "servo_position": lambda self, owner, model, payload, time_ms, rx_at: self._apply_servo_position(owner, model, payload, time_ms, rx_at),
+        "multiturn_restore_result": lambda self, owner, model, payload, time_ms, rx_at: self._apply_multiturn_restore_result(owner, model, payload, time_ms, rx_at),
+        "servo_rebase_zero_result": lambda self, owner, model, payload, time_ms, rx_at: self._apply_servo_rebase_zero_result(owner, model, payload, time_ms, rx_at),
+        "direct_target_result": lambda self, owner, model, payload, time_ms, rx_at: self._apply_direct_target_result(owner, model, payload, time_ms, rx_at),
+        "servo_telemetry": lambda self, owner, model, payload, time_ms, rx_at: self._apply_servo_telemetry(owner, model, payload, time_ms, rx_at),
+        "fault_status": lambda self, owner, model, payload, time_ms, rx_at: self._apply_fault_status(owner, model, payload, time_ms, rx_at),
+        "system_status": lambda self, owner, model, payload, time_ms, rx_at: self._apply_system_status(owner, model, payload, time_ms, rx_at),
+        "servo_route_status": lambda self, owner, model, payload, time_ms, rx_at: self._apply_servo_route_status(owner, model, payload, time_ms, rx_at),
+        "product_fingerprint": lambda self, owner, model, payload, time_ms, rx_at: self._apply_product_fingerprint(owner, model, payload, time_ms, rx_at),
+        "safety_event": lambda self, owner, model, payload, time_ms, rx_at: self._apply_safety_event(owner, model, payload, time_ms, rx_at),
+        "motor_abs_limit": lambda self, owner, model, payload, time_ms, rx_at: self._apply_motor_abs_limit(owner, model, payload, time_ms, rx_at),
+        "servo_logical_range": lambda self, owner, model, payload, time_ms, rx_at: self._apply_servo_logical_range(owner, model, payload, time_ms, rx_at),
+        "manual_reference": lambda self, owner, model, payload, time_ms, rx_at: self._apply_manual_reference(owner, model, payload, time_ms, rx_at),
+        "joint_calibration_snapshot": lambda self, owner, model, payload, time_ms, rx_at: self._apply_joint_calibration_snapshot(owner, model, payload, time_ms, rx_at),
+        "calibration_diagnostic": lambda self, owner, model, payload, time_ms, rx_at: self._apply_calibration_diagnostic(owner, model, payload, time_ms, rx_at),
+        "adaptive_kp": lambda self, owner, model, payload, time_ms, rx_at: self._apply_adaptive_kp(owner, model, payload, time_ms, rx_at),
+        "control_trace": lambda self, owner, model, payload, time_ms, rx_at: self._apply_control_trace(owner, model, payload, time_ms, rx_at),
+        "task_diagnostic": lambda self, owner, model, payload, time_ms, rx_at: self._apply_task_diagnostic(owner, model, payload, time_ms, rx_at),
+        "tactile_summary": lambda self, owner, model, payload, time_ms, rx_at: self._apply_tactile_summary(owner, model, payload, time_ms, rx_at),
+        "tactile_full": lambda self, owner, model, payload, time_ms, rx_at: self._apply_tactile_full(owner, model, payload, time_ms, rx_at),
+        "protocol_ack": lambda self, owner, model, payload, time_ms, rx_at: self._apply_protocol_ack(owner, model, payload, time_ms, rx_at),
+    }
+
     def __init__(
         self,
         packet_router: Optional[P4PacketRouter] = None,
@@ -205,65 +232,19 @@ class StateReducer:
         publish_now = False
 
         for routed_packet in self._packet_router.route_many(packets):
-            packet_kind = routed_packet.kind
-            payload = routed_packet.payload
-            packet_p4_time_ms = routed_packet.p4_time_ms
-            if packet_kind in STATE_SNAPSHOT_CRITICAL_PACKET_KINDS:
-                publish_now = True
-            if packet_p4_time_ms is not None:
-                model.p4_time_ms = int(packet_p4_time_ms)
-                model.has_p4_time = True
-            # 磁编码器映射角：更新负反馈使用的实时关节角及工作空间提示。
-            if packet_kind == "sensor":
-                emitted = self._apply_sensor(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
-            elif packet_kind == "encoder_raw":
-                emitted = self._apply_encoder_raw(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
-            elif packet_kind == "servo_position":
-                emitted = self._apply_servo_position(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
-            elif packet_kind == "multiturn_restore_result":
-                emitted = self._apply_multiturn_restore_result(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
-            elif packet_kind == "servo_rebase_zero_result":
-                emitted = self._apply_servo_rebase_zero_result(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
-            elif packet_kind == "direct_target_result":
-                emitted = self._apply_direct_target_result(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
-            elif packet_kind == "servo_telemetry":
-                emitted = self._apply_servo_telemetry(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
-            elif packet_kind == "fault_status":
-                emitted = self._apply_fault_status(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
-            elif packet_kind == "system_status":
-                emitted = self._apply_system_status(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
-            elif packet_kind == "servo_route_status":
-                emitted = self._apply_servo_route_status(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
-            elif packet_kind == "product_fingerprint":
-                emitted = self._apply_product_fingerprint(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
-            elif packet_kind == "safety_event":
-                emitted = self._apply_safety_event(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
-            elif packet_kind == "motor_abs_limit":
-                emitted = self._apply_motor_abs_limit(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
-            elif packet_kind == "servo_logical_range":
-                emitted = self._apply_servo_logical_range(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
-            elif packet_kind == "manual_reference":
-                emitted = self._apply_manual_reference(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
-            elif packet_kind == "joint_calibration_snapshot":
-                emitted = self._apply_joint_calibration_snapshot(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
-            elif packet_kind == "calibration_diagnostic":
-                emitted = self._apply_calibration_diagnostic(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
-            elif packet_kind == "control_components":
+            kind, payload, time_ms = routed_packet.kind, routed_packet.payload, routed_packet.p4_time_ms
+            publish_now = publish_now or kind in STATE_SNAPSHOT_CRITICAL_PACKET_KINDS
+            if time_ms is not None:
+                model.p4_time_ms, model.has_p4_time = int(time_ms), True
+            if kind == "control_components":
                 part = parse_control_components_packet(payload)
                 if part is not None:
-                    self._cache_control_part(packet_p4_time_ms, part, 'components')
-            elif packet_kind == "adaptive_kp":
-                emitted = self._apply_adaptive_kp(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
-            elif packet_kind == "control_trace":
-                emitted = self._apply_control_trace(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
-            elif packet_kind == "task_diagnostic":
-                emitted = self._apply_task_diagnostic(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
-            elif packet_kind == "tactile_summary":
-                emitted = self._apply_tactile_summary(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
-            elif packet_kind == "tactile_full":
-                emitted = self._apply_tactile_full(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
-            elif packet_kind == "protocol_ack":
-                emitted = self._apply_protocol_ack(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
+                    self._cache_control_part(time_ms, part, 'components')
+                continue
+            # 包类型到处理函数的唯一映射；未登记的类型（文本日志等）直接忽略。
+            apply = self.PACKET_APPLIERS.get(kind)
+            if apply is not None:
+                emitted = apply(self, owner, model, payload, time_ms, _host_received_at) or emitted
 
         return self.commit(
             model,
