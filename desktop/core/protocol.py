@@ -867,6 +867,22 @@ def parse_direct_target_result_packet(
     return token, requested, applied, rejected, status
 
 
+def parse_adaptive_kp_packet(payload: bytes) -> Optional[dict]:
+    """Parse 21 per-joint adaptive Kp scales and effective gains (int16 x1000)."""
+    if len(payload) != 1 + 4 * ENCODER_COUNT:
+        return None
+    scale = [
+        struct.unpack(">h", payload[1 + 2 * i:3 + 2 * i])[0] / 1000.0
+        for i in range(ENCODER_COUNT)
+    ]
+    base = 1 + 2 * ENCODER_COUNT
+    effective = [
+        struct.unpack(">h", payload[base + 2 * i:base + 2 * i + 2])[0] / 1000.0
+        for i in range(ENCODER_COUNT)
+    ]
+    return {"enabled": bool(payload[0]), "scale": scale, "effective": effective}
+
+
 def parse_fault_status_packet(payload: bytes) -> Optional[Tuple[int, List[Optional[int]]]]:
     if len(payload) != 4 + MOTOR_COUNT * 2:
         return None
@@ -978,27 +994,24 @@ def build_protocol_hello_cmd() -> bytes:
     return _build_command_frame(CMD_PROTOCOL_HELLO, payload)
 
 
-def build_angle_cmd(angles: List[float]) -> bytes:
+def build_angle_cmd(angles: List[float], joint_mask: int | None = None) -> bytes:
+    """Build the one angle command: little-endian mask followed by 21 floats.
+
+    The mask only selects which active joints enter PID; unset joints keep their
+    current servo ABS. ``None`` means all 21 joints.
+    """
     if len(angles) != ENCODER_COUNT:
         raise ValueError(f"need exactly {ENCODER_COUNT} joint angles")
-    payload = struct.pack(f"<{ENCODER_COUNT}f", *angles)
+    valid_mask = (1 << ENCODER_COUNT) - 1 if joint_mask is None else int(joint_mask) & ((1 << ENCODER_COUNT) - 1)
+    if valid_mask == 0:
+        raise ValueError("angle command requires a non-zero joint mask")
+    payload = struct.pack("<I", valid_mask)
+    payload += struct.pack(f"<{ENCODER_COUNT}f", *angles)
     return _build_command_frame(CMD_ANGLE_CTRL, payload)
 
 
 def build_masked_angle_cmd(angles: List[float], joint_mask: int) -> bytes:
-    """构造带本次控制掩码的 21 路角度命令。
-
-    角度数组仍保持固定 21 路，掩码只决定哪些 active joint 进入 PID；
-    未置位关节由 P4 保持当前舵机 ABS，避免单行 Send 带动同组其他关节。
-    """
-    if len(angles) != ENCODER_COUNT:
-        raise ValueError(f"need exactly {ENCODER_COUNT} joint angles")
-    valid_mask = int(joint_mask) & ((1 << ENCODER_COUNT) - 1)
-    if valid_mask == 0:
-        raise ValueError("masked angle command requires a non-zero joint mask")
-    payload = struct.pack(">I", valid_mask)
-    payload += struct.pack(f"<{ENCODER_COUNT}f", *angles)
-    return _build_command_frame(CMD_ANGLE_CTRL_MASKED, payload)
+    return build_angle_cmd(angles, joint_mask)
 
 
 def build_run_feedback_cmd() -> bytes:

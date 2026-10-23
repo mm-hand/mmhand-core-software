@@ -27,7 +27,7 @@ def label():
 
 def quality_name(value):
     if value == 'OFFSET':
-        return 'Magnetic Encoder or Joint Installation Error'
+        return 'Magnetic Encoder or Joint Installation Warning'
     if value == 'PENDING':
         return 'NEED CALIBRATION'
     return value

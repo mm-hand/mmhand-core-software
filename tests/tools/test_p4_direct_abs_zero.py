@@ -228,7 +228,7 @@ static void run(const std::string& name) {
         ++f.runtime.servo_rebase_zero_request_token;
         for (uint8_t command : {CMD_START, CMD_RUN_FEEDBACK, CMD_ROPE_INIT,
                                CMD_MOTOR_POS_ABS, CMD_MOTOR_POS_ABS_ONE,
-                               CMD_ANGLE_CTRL, CMD_ANGLE_CTRL_MASKED,
+                               CMD_ANGLE_CTRL,
                                CMD_CALIB_LOAD_JOINT, CMD_CALIB_LOAD_LIMITS}) {
             acks.clear();
             f.dispatch(command, 1UL << 7);

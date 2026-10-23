@@ -45,6 +45,7 @@ BOUNDS = {
     'collision': {'arm_velocity_flex_deg_s': (0.1, 100.0), 'arm_velocity_extend_deg_s': (0.1, 100.0), 'stall_velocity_flex_deg_s': (0, 20.0), 'stall_velocity_extend_deg_s': (0, 20.0), 'min_error_deg': (0.5, 30.0), 'target_reset_deg': (0.1, 10.0), 'retreat_deg': (0.1, 10.0)},
     'output': {'lut_release_margin_counts': (0, 500), 'lut_tight_margin_counts': (0, 1000)},
     'ros2_input': {'min_cutoff_hz': (0.01, 10.0), 'beta': (0, 1.0), 'derivative_cutoff_hz': (0.01, 10.0), 'enter_deg': (0.01, 1.0), 'enter_dwell_ms': (0, 1000), 'exit_deg': (0.02, 2.0), 'exit_confirm_ms': (0, 500), 'max_gap_ms': (100, 5000)},
+    'adaptive_kp': {'enabled': (0, 1), 'lag_limit_s': (0.02, 1.0), 'overshoot_deg': (0.5, 10.0)},
 }
 
 RAMP_TYPES = TYPES
@@ -60,7 +61,7 @@ RAMP_VERSION = 1
 def validate(data: dict) -> dict:
     if not isinstance(data, dict) or set(data) != {'schema_version', 'revision', 'ramp_revision', *BOUNDS, 'reversal_ramp'}:
         raise ValueError('Control parameter groups do not match the current schema')
-    if data['schema_version'] != 6 or not isinstance(data['revision'], int) or data['revision'] < 1 \
+    if data['schema_version'] != 7 or not isinstance(data['revision'], int) or data['revision'] < 1 \
             or not isinstance(data['ramp_revision'], int) or data['ramp_revision'] < 1:
         raise ValueError('Control parameter schema or revision is invalid')
     for group, fields in BOUNDS.items():
@@ -100,7 +101,7 @@ def configuration_values(data: dict) -> bytes:
 
 
 def configuration_payload(data: dict) -> bytes:
-    return struct.pack('>BI', 6, data['revision']) + configuration_values(data) + struct.pack('>I', configuration_crc(data))
+    return struct.pack('>BI', 7, data['revision']) + configuration_values(data) + struct.pack('>I', configuration_crc(data))
 
 
 def configuration_frame(data: dict) -> bytes:

@@ -46,6 +46,22 @@ static mmhand::control::FeedbackEstimate g_feedbackEstimates[ENCODER_TOTAL_NUM];
 // 碰撞检测历史放在静态区，避免挤占 10 ms 控制任务栈。
 static FeedbackCollisionGuard g_feedbackCollisionGuard;
 
+/** 把每关节自适应 Kp 发布给 HostComm 的低频遥测；只写 16 位倍率。 */
+static void publishAdaptiveKp(SystemRuntimeContext* sharedData,
+                              const mmhand::control::Parameters& parameters)
+{
+    sharedData->adaptive_kp_enabled =
+        parameters[mmhand::control::AdaptiveKpEnabled] > 0.5f ? 1 : 0;
+    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; ++joint) {
+        const float scale = g_jointController.kpScaleOf(joint);
+        const float effective = g_jointController.effectiveKpOf(joint, parameters);
+        sharedData->adaptive_kp_scale_milli[joint] =
+            (int16_t)lroundf(scale * 1000.0f);
+        sharedData->adaptive_kp_effective_milli[joint] =
+            (int16_t)lroundf(effective * 1000.0f);
+    }
+}
+
 /** 将控制角度压成协议 0.01 degree；非有限值使用断开哨兵。 */
 static int16_t controlTraceAngleCenti(float angleDeg)
 {
@@ -956,6 +972,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                 }
             }
         }
+        publishAdaptiveKp(sharedData, controlParameters);
 
         const uint32_t recoveredLutClampMask =
             runtime.lutClampEventLatchedBitmap & ~runtime.lutClampObservedBitmap;

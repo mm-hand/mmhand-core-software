@@ -29,7 +29,7 @@ def test_schema_generates_matching_cpp_and_python_contracts(tmp_path: Path) -> N
 
     assert module.ENCODER_COUNT == 21
     assert module.MOTOR_COUNT == 27
-    assert module.COMMAND_PAYLOAD_LENGTHS[module.CMD_ANGLE_CTRL] == 84
+    assert module.COMMAND_PAYLOAD_LENGTHS[module.CMD_ANGLE_CTRL] == 88
     assert module.COMMAND_PAYLOAD_LENGTHS[module.CMD_CALIB_LOAD_LIMITS] == 224
     assert "case CMD_ANGLE_CTRL:" in cpp
     assert "case CMD_ANGLE_CTRL: return kFloatPayloadBytes;" in cpp

@@ -49,6 +49,7 @@ from .protocol import (
     BAUDRATE,
     ENCODER_COUNT,
     MOTOR_COUNT,
+    PACKET_TYPE_ADAPTIVE_KP,
     PACKET_TYPE_CALIB_DIAG,
     PACKET_TYPE_CONTROL_TRACE,
     PACKET_TYPE_CONTROL_COMPONENTS,
@@ -186,6 +187,7 @@ MAPPED_ANGLE_COUNTS_PER_DEG = 16384.0 / 360.0
 # P4PacketRouter 只负责“包号 -> 稳定语义名”。当前状态归并仍按 packet_type
 # 保持完全兼容，语义名用于诊断和后续把各分支进一步下沉到独立 reducer。
 P4_PACKET_KINDS = {
+    PACKET_TYPE_ADAPTIVE_KP: "adaptive_kp",
     PACKET_TYPE_SENSOR: "sensor",
     PACKET_TYPE_ENCODER_RAW: "encoder_raw",
     PACKET_TYPE_SERVO_ANGLE: "servo_abs",

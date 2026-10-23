@@ -308,7 +308,7 @@ def format_calibration_warning(state: object, warning_mask: int) -> dict:
                 if bool(result.get("hasAssemblySpanComparisonFields", False)):
                     details.append(
                         f"Manual span={manual_span} counts, URDF span={urdf_span} counts, "
-                        f"difference={span_difference} counts (limit: 360 counts). Possible magnetic encoder or joint installation error."
+                        f"difference={span_difference} counts (limit: 360 counts). Possible magnetic encoder or joint installation warning."
                     )
                 else:
                     details.append(f"Legacy firmware reported an Auto span warning: {auto_span} counts.")

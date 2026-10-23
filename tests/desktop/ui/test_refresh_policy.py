@@ -134,7 +134,7 @@ def test_reconnect_script_is_executed_not_rendered_as_body_text():
 def test_quality_pending_reads_need_calibration():
     assert common.quality_name('PENDING') == 'NEED CALIBRATION'
     assert common.quality_name('READY') == 'READY'
-    assert common.quality_name('OFFSET') == 'Magnetic Encoder or Joint Installation Error'
+    assert common.quality_name('OFFSET') == 'Magnetic Encoder or Joint Installation Warning'
 
 
 def test_json_status_prefers_snapshot_field_and_falls_back_to_persistence():

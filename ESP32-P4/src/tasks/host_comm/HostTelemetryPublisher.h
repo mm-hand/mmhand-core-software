@@ -33,6 +33,7 @@ bool sendMappedAnglePacket(const MappedAngleData_t& mappedAngle);
 bool sendControlTracePacket(const ControlTraceData_t& trace);
 bool sendServoPositionPackets(const ServoAngleData_t& position);
 bool sendServoTelemetryPacket(const ServoTelemetryData_t& telemetry);
+bool sendAdaptiveKpPacket(SystemRuntimeContext* sharedData);
 bool sendTactileSummaryPacket(const RemoteTactileData_t& tactile);
 bool sendTactileFullPackets(const RemoteTactileData_t& tactile);
 /** 上报异步多圈恢复最终结果；仅在结果 token 变化或同步请求时发送。 */

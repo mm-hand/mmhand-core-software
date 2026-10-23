@@ -715,6 +715,27 @@ bool sendServoTelemetryPacket(const ServoTelemetryData_t& telemetry)
     return FW_SERIAL_WRITE(buffer, idx) == idx;
 }
 
+/** 1 Hz 上报每关节自适应倍率与实际 Kp；运行值只来自 MotionControlTask。 */
+bool sendAdaptiveKpPacket(SystemRuntimeContext* sharedData)
+{
+    if (!sharedData) return false;
+    uint8_t buffer[3 + 1 + ENCODER_TOTAL_NUM * 4 + 1];
+    size_t idx = 0;
+    buffer[idx++] = PROTOCOL_HEADER;
+    buffer[idx++] = 0;
+    buffer[idx++] = PACKET_TYPE_ADAPTIVE_KP;
+    buffer[idx++] = sharedData->adaptive_kp_enabled ? 1 : 0;
+    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; ++joint) {
+        appendI16BigEndian(buffer, &idx, sharedData->adaptive_kp_scale_milli[joint]);
+    }
+    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; ++joint) {
+        appendI16BigEndian(buffer, &idx, sharedData->adaptive_kp_effective_milli[joint]);
+    }
+    buffer[idx++] = PROTOCOL_TAIL;
+    buffer[1] = static_cast<uint8_t>(idx - 2U);
+    return FW_SERIAL_WRITE(buffer, idx) == idx;
+}
+
 /** 发送一帧触觉摘要；全量事件不得再次经过本函数。 */
 bool sendTactileSummaryPacket(const RemoteTactileData_t& tactile)
 {

@@ -52,7 +52,11 @@ from ..protocol import (
     TASK_RUNTIME_NAMES,
 )
 from ..session_log import log_session
-from ..protocol import parse_control_components_packet, parse_control_detail_packet
+from ..protocol import (
+    parse_adaptive_kp_packet,
+    parse_control_components_packet,
+    parse_control_detail_packet,
+)
 from .ack_tracker import AckTracker
 from .event_channel import EventChannel
 from .feedback_history import TimestampedFeedbackHistory
@@ -250,6 +254,8 @@ class StateReducer:
                 part = parse_control_components_packet(payload)
                 if part is not None:
                     self._cache_control_part(packet_p4_time_ms, part, 'components')
+            elif packet_kind == "adaptive_kp":
+                emitted = self._apply_adaptive_kp(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
             elif packet_kind == "control_trace":
                 emitted = self._apply_control_trace(owner, model, payload, packet_p4_time_ms, _host_received_at) or emitted
             elif packet_kind == "task_diagnostic":
@@ -862,6 +868,18 @@ class StateReducer:
             model.has_p4_time = True
             emitted = True
         return emitted
+
+    def _apply_adaptive_kp(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
+        """Apply the 1 Hz per-joint adaptive Kp snapshot."""
+        parsed = parse_adaptive_kp_packet(payload)
+        if parsed is None:
+            return False
+        model.adaptive_kp_enabled = bool(parsed["enabled"])
+        model.adaptive_kp_scale = list(parsed["scale"])
+        model.adaptive_kp_effective = list(parsed["effective"])
+        model.adaptive_kp_last_rx_ts = _host_received_at
+        model.has_adaptive_kp_data = True
+        return True
 
     def _apply_control_trace(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one control_trace packet within the RX batch boundary."""

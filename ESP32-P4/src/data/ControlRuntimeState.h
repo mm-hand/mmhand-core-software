@@ -13,6 +13,9 @@
 struct ControlRuntimeState {
     volatile uint8_t control_enabled; ///< MotionControlTask 总使能。
     volatile uint8_t control_mode; ///< CONTROL_MODE_*。
+    volatile uint8_t adaptive_kp_enabled; ///< 自适应 Kp 是否启用。
+    volatile int16_t adaptive_kp_scale_milli[ENCODER_TOTAL_NUM]; ///< 每关节自适应倍率 ×1000。
+    volatile int16_t adaptive_kp_effective_milli[ENCODER_TOTAL_NUM]; ///< 每关节实际 Kp ×1000。
     volatile uint8_t system_state; ///< SYSTEM_STATE_*。
     volatile uint8_t servo_target_owner; ///< 唯一 SERVO_TARGET_OWNER_*。
     volatile uint32_t feedback_admission_sequence; ///< 反馈门禁结果序号。

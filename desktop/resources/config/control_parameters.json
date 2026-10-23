@@ -1,5 +1,5 @@
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "revision": 555,
   "ramp_revision": 134,
   "joint_kp": {
@@ -95,5 +95,10 @@
     "exit_deg": 0.25,
     "exit_confirm_ms": 20,
     "max_gap_ms": 500
+  },
+  "adaptive_kp": {
+    "enabled": 0,
+    "lag_limit_s": 0.12,
+    "overshoot_deg": 2.0
   }
 }

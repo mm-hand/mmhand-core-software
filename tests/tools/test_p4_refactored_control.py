@@ -170,6 +170,43 @@ int main() {
         input.timestampMs=t; collision=guard.update(0,input);
         assert(!collision.armed && !collision.holdActive); // a stationary joint never arms itself
     }
+
+    // Adaptive Kp: a persistent lag plus a clean hold raises only that joint.
+    p.values[AdaptiveKpEnabled] = 1.0f;
+    p.values[AdaptiveKpLagLimitS] = 0.12f;
+    p.values[AdaptiveKpOvershootDeg] = 2.0f;
+    JointFeedbackController adaptive;
+    FeedbackEstimate afb; afb.ready = afb.fresh = true; afb.sampleDt = 0.01f;
+    ServoAngleData_t aservo; aservo.onlineStatus[0] = 1; aservo.onlineStatus[1] = 1;
+    ServoTelemetryData_t atel;
+    for (uint32_t t = 1000; t <= 61000; t += 10) {
+        const float atarget = t < 1500 ? (t - 1000) * 0.02f : 10.0f;
+        afb.fast = atarget - 3.0f;
+        afb.slow = afb.fast;
+        aservo.servoAngles[0] = 1000 + (int32_t)(afb.fast * 10.0f);
+        adaptive.compute(0, atarget, afb, t, aservo, atel, lut, 3, p, ramp);
+    }
+    assert(adaptive.kpScaleOf(0) > 1.25f);
+    assert(fabsf(adaptive.kpScaleOf(1) - 1.0f) < 1e-6f); // no cross-joint coupling
+
+    // A completed move/hold with 3 deg overshoot lowers that joint once.
+    JointFeedbackController overshoot;
+    FeedbackEstimate ofb; ofb.ready = ofb.fresh = true; ofb.sampleDt = 0.01f;
+    for (uint32_t t = 1000; t <= 3200; t += 10) {
+        const float target = t < 1500 ? (t - 1000) * 0.02f : 10.0f;
+        ofb.fast = t < 1650 ? target : 13.0f;
+        ofb.slow = ofb.fast;
+        aservo.servoAngles[0] = 1000 + (int32_t)(ofb.fast * 10.0f);
+        overshoot.compute(0, target, ofb, t, aservo, atel, lut, 3, p, ramp);
+    }
+    assert(fabsf(overshoot.kpScaleOf(0) - 0.9f) < 0.01f);
+
+    // Revision changes reset the learned scale; disabling falls back to base Kp.
+    p.revision++;
+    adaptive.compute(0, 10.0f, afb, 61010, aservo, atel, lut, 3, p, ramp);
+    assert(fabsf(adaptive.kpScaleOf(0) - 1.0f) < 1e-6f);
+    p.values[AdaptiveKpEnabled] = 0.0f;
+    assert(fabsf(adaptive.effectiveKpOf(0, p) - p[JointKpAa]) < 1e-6f);
     return 0;
 }
 '''.replace('PAYLOAD', payload)

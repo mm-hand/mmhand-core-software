@@ -64,7 +64,10 @@ enum Parameter : size_t {
     Ros2InputExitDeg = 55,
     Ros2InputExitConfirmMs = 56,
     Ros2InputMaxGapMs = 57,
-    ParameterCount = 58
+    AdaptiveKpEnabled = 58,
+    AdaptiveKpLagLimitS = 59,
+    AdaptiveKpOvershootDeg = 60,
+    ParameterCount = 61
 };
 inline constexpr float kParameterMinimum[] = {
     0.0f,
@@ -125,6 +128,9 @@ inline constexpr float kParameterMinimum[] = {
     0.02f,
     0.0f,
     100.0f,
+    0.0f,
+    0.02f,
+    0.5f,
 };
 inline constexpr float kParameterMaximum[] = {
     2.0f,
@@ -185,5 +191,8 @@ inline constexpr float kParameterMaximum[] = {
     2.0f,
     500.0f,
     5000.0f,
+    1.0f,
+    1.0f,
+    10.0f,
 };
 } // namespace mmhand::control

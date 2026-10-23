@@ -50,7 +50,6 @@ bool commandRequiresManualReference(uint8_t command)
     switch (command) {
         case CMD_RUN_FEEDBACK:
         case CMD_ANGLE_CTRL:
-        case CMD_ANGLE_CTRL_MASKED:
             return true;
         default:
             return false;

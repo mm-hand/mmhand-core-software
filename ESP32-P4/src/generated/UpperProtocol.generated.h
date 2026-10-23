@@ -47,10 +47,11 @@ inline constexpr uint8_t PACKET_TYPE_DIRECT_TARGET_RESULT = 0x1A; ///< 通用直
 inline constexpr uint8_t PACKET_TYPE_CONTROL_PARAMETERS = 0x1C; ///< 控制参数整组应用结果及实际修订和CRC读回
 inline constexpr uint8_t PACKET_TYPE_CONTROL_COMPONENTS = 0x1D; ///< 同周期PI、换向和慢反馈分量及采样分频
 inline constexpr uint8_t PACKET_TYPE_CONTROL_RAMP_PARAMETERS = 0x1E; ///< 渐进快速换向参数应用结果及实际修订和CRC读回
+inline constexpr uint8_t PACKET_TYPE_ADAPTIVE_KP = 0x1F; ///< 21 路自适应 Kp 倍率与实际 Kp
 
 // Desktop -> P4 命令及 ACK 状态。
 inline constexpr uint8_t CMD_SERVO_MAINTENANCE = 0xF4; ///< 舵机维护会话、探测及单步改号
-inline constexpr uint8_t CMD_ANGLE_CTRL = 0xCB; ///< 下发完整 21 路关节目标角，单位 degree
+inline constexpr uint8_t CMD_ANGLE_CTRL = 0xCB; ///< 下发 21 路关节目标角（小端掩码+小端 float），mask=all 即全量
 inline constexpr uint8_t CMD_START = 0xCC; ///< 申请当前活动范围的就绪状态，供上位机标定流程使用
 inline constexpr uint8_t CMD_STOP = 0xCD; ///< 停止当前运行并撤销待执行目标
 inline constexpr uint8_t CMD_RESET = 0xCE; ///< 清除允许恢复的系统故障锁存
@@ -67,7 +68,6 @@ inline constexpr uint8_t CMD_MANUAL_ENCODER_REFERENCE = 0xE6; ///< 写入或清�
 inline constexpr uint8_t CMD_MANUAL_ENCODER_QUERY = 0xE7; ///< 请求 P4 立即回传 Manual 标定表
 inline constexpr uint8_t CMD_MANUAL_ENCODER_SINGLE = 0xE8; ///< 写入单个 Jxx 的 Manual Min/Max
 inline constexpr uint8_t CMD_ROPE_INIT = 0xE9; ///< 按 21 位关节掩码启动 P4 Rope Init
-inline constexpr uint8_t CMD_ANGLE_CTRL_MASKED = 0xEA; ///< 按关节掩码下发稀疏关节目标角
 inline constexpr uint8_t CMD_CLEAR_CALIBRATION_SCOPE = 0xEB; ///< 按电机位图清除关联关节 Auto/LUT
 inline constexpr uint8_t CMD_SERVO_RESET_ZERO = 0xEC; ///< 标定前归零所选舵机硬件圈数并清除对应多圈锚点
 inline constexpr uint8_t CMD_STATE_SYNC_REQUEST = 0xED; ///< 按位请求静态状态、标定快照、路由和产品指纹
@@ -78,7 +78,7 @@ inline constexpr uint8_t CMD_MOTOR_ABS_ZERO = 0xF1; ///< Direct电机页按非�
 inline constexpr uint8_t CMD_MOTOR_DIRECT_RELEASE = 0xF2; ///< 结束当前普通直控并保留扭矩和故障；非零token匹配已执行事务，零匹配当前直控代际
 inline constexpr uint8_t CMD_PROTOCOL_HELLO = 0xF3; ///< 双向版本及控制模型与反馈拓扑契约握手，不授权运动
 inline constexpr uint8_t CMD_CONTROL_RELEASE = 0xF6; ///< 释放普通控制权，不锁存急停，不恢复旧目标
-inline constexpr uint8_t CMD_CONTROL_PARAMETERS_SET = 0xF8; ///< 原子设置58个控制与输入滤波参数，版本6、修订、浮点数组、CRC32
+inline constexpr uint8_t CMD_CONTROL_PARAMETERS_SET = 0xF8; ///< 原子设置61个控制与输入滤波参数，版本7、修订、浮点数组、CRC32
 inline constexpr uint8_t CMD_CONTROL_PARAMETERS_QUERY = 0xF9; ///< 读回P4当前控制参数修订、CRC和已配置状态
 inline constexpr uint8_t CMD_CONTROL_RAMP_PARAMETERS_SET = 0xFB; ///< 原子设置16个渐进快速换向参数（B0/vB/负载阈值/超时），版本1、修订、浮点数组、CRC32
 inline constexpr uint8_t CMD_CONTROL_RAMP_PARAMETERS_QUERY = 0xFC; ///< 读回P4当前渐进快速换向参数修订、CRC和已配置状态
@@ -103,8 +103,7 @@ inline constexpr uint8_t STATE_SYNC_MULTITURN_STATE = 64; ///< 同步多圈恢�
 inline constexpr uint8_t STATE_SYNC_ALL = 127; ///< 同步全部静态运行契约
 
 // 固定 payload 长度；单位 byte，不包含命令字本身。
-inline constexpr size_t kFloatPayloadBytes = 84;
-inline constexpr size_t kMaskedFloatPayloadBytes = 88;
+inline constexpr size_t kFloatPayloadBytes = 88;
 inline constexpr size_t kMotorPosAbsPayloadBytes = 119;
 inline constexpr size_t kMotorPosAbsOnePayloadBytes = 5;
 inline constexpr size_t kActiveScopePayloadBytes = 9;
@@ -146,7 +145,6 @@ inline constexpr size_t generatedCommandPayloadLength(uint8_t command)
         case CMD_MANUAL_ENCODER_QUERY: return 0;
         case CMD_MANUAL_ENCODER_SINGLE: return kManualEncoderSinglePayloadBytes;
         case CMD_ROPE_INIT: return kRopeInitPayloadBytes;
-        case CMD_ANGLE_CTRL_MASKED: return kMaskedFloatPayloadBytes;
         case CMD_CLEAR_CALIBRATION_SCOPE: return kClearCalibrationScopePayloadBytes;
         case CMD_SERVO_RESET_ZERO: return kServoResetZeroPayloadBytes;
         case CMD_STATE_SYNC_REQUEST: return kStateSyncRequestPayloadBytes;
@@ -157,7 +155,7 @@ inline constexpr size_t generatedCommandPayloadLength(uint8_t command)
         case CMD_MOTOR_DIRECT_RELEASE: return kMotorDirectReleasePayloadBytes;
         case CMD_PROTOCOL_HELLO: return 9;
         case CMD_CONTROL_RELEASE: return 0;
-        case CMD_CONTROL_PARAMETERS_SET: return 241;
+        case CMD_CONTROL_PARAMETERS_SET: return 253;
         case CMD_CONTROL_PARAMETERS_QUERY: return 0;
         case CMD_CONTROL_RAMP_PARAMETERS_SET: return 73;
         case CMD_CONTROL_RAMP_PARAMETERS_QUERY: return 0;
@@ -181,7 +179,6 @@ inline constexpr bool generatedCommandRequiresHandshake(uint8_t command)
         case CMD_MANUAL_ENCODER_REFERENCE: return true;
         case CMD_MANUAL_ENCODER_SINGLE: return true;
         case CMD_ROPE_INIT: return true;
-        case CMD_ANGLE_CTRL_MASKED: return true;
         case CMD_SERVO_RESET_ZERO: return true;
         case CMD_SERVO_REBASE_ZERO: return true;
         case CMD_MOTOR_ABS_ZERO: return true;

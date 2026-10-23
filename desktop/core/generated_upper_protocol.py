@@ -45,10 +45,11 @@ PACKET_TYPE_DIRECT_TARGET_RESULT = 0x1A  # 通用直控目标完成总线同步�
 PACKET_TYPE_CONTROL_PARAMETERS = 0x1C  # 控制参数整组应用结果及实际修订和CRC读回
 PACKET_TYPE_CONTROL_COMPONENTS = 0x1D  # 同周期PI、换向和慢反馈分量及采样分频
 PACKET_TYPE_CONTROL_RAMP_PARAMETERS = 0x1E  # 渐进快速换向参数应用结果及实际修订和CRC读回
+PACKET_TYPE_ADAPTIVE_KP = 0x1F  # 21 路自适应 Kp 倍率与实际 Kp
 
 # Desktop -> P4 命令。
 CMD_SERVO_MAINTENANCE = 0xF4  # 舵机维护会话、探测及单步改号
-CMD_ANGLE_CTRL = 0xCB  # 下发完整 21 路关节目标角，单位 degree
+CMD_ANGLE_CTRL = 0xCB  # 下发 21 路关节目标角（小端掩码+小端 float），mask=all 即全量
 CMD_START = 0xCC  # 申请当前活动范围的就绪状态，供上位机标定流程使用
 CMD_STOP = 0xCD  # 停止当前运行并撤销待执行目标
 CMD_RESET = 0xCE  # 清除允许恢复的系统故障锁存
@@ -65,7 +66,6 @@ CMD_MANUAL_ENCODER_REFERENCE = 0xE6  # 写入或清除 21 组 Manual Min/Max 原
 CMD_MANUAL_ENCODER_QUERY = 0xE7  # 请求 P4 立即回传 Manual 标定表
 CMD_MANUAL_ENCODER_SINGLE = 0xE8  # 写入单个 Jxx 的 Manual Min/Max
 CMD_ROPE_INIT = 0xE9  # 按 21 位关节掩码启动 P4 Rope Init
-CMD_ANGLE_CTRL_MASKED = 0xEA  # 按关节掩码下发稀疏关节目标角
 CMD_CLEAR_CALIBRATION_SCOPE = 0xEB  # 按电机位图清除关联关节 Auto/LUT
 CMD_SERVO_RESET_ZERO = 0xEC  # 标定前归零所选舵机硬件圈数并清除对应多圈锚点
 CMD_STATE_SYNC_REQUEST = 0xED  # 按位请求静态状态、标定快照、路由和产品指纹
@@ -76,7 +76,7 @@ CMD_MOTOR_ABS_ZERO = 0xF1  # Direct电机页按非空电机位图将当前位置
 CMD_MOTOR_DIRECT_RELEASE = 0xF2  # 结束当前普通直控并保留扭矩和故障；非零token匹配已执行事务，零匹配当前直控代际
 CMD_PROTOCOL_HELLO = 0xF3  # 双向版本及控制模型与反馈拓扑契约握手，不授权运动
 CMD_CONTROL_RELEASE = 0xF6  # 释放普通控制权，不锁存急停，不恢复旧目标
-CMD_CONTROL_PARAMETERS_SET = 0xF8  # 原子设置58个控制与输入滤波参数，版本6、修订、浮点数组、CRC32
+CMD_CONTROL_PARAMETERS_SET = 0xF8  # 原子设置61个控制与输入滤波参数，版本7、修订、浮点数组、CRC32
 CMD_CONTROL_PARAMETERS_QUERY = 0xF9  # 读回P4当前控制参数修订、CRC和已配置状态
 CMD_CONTROL_RAMP_PARAMETERS_SET = 0xFB  # 原子设置16个渐进快速换向参数（B0/vB/负载阈值/超时），版本1、修订、浮点数组、CRC32
 CMD_CONTROL_RAMP_PARAMETERS_QUERY = 0xFC  # 读回P4当前渐进快速换向参数修订、CRC和已配置状态
@@ -132,7 +132,7 @@ P4_TRAILING_TIMESTAMP_PACKET_TYPES = frozenset({
 # 固定下行 payload 长度，不包含命令字。
 COMMAND_PAYLOAD_LENGTHS = {
     CMD_SERVO_MAINTENANCE: 12,
-    CMD_ANGLE_CTRL: 84,
+    CMD_ANGLE_CTRL: 88,
     CMD_START: 0,
     CMD_STOP: 0,
     CMD_RESET: 0,
@@ -149,7 +149,6 @@ COMMAND_PAYLOAD_LENGTHS = {
     CMD_MANUAL_ENCODER_QUERY: 0,
     CMD_MANUAL_ENCODER_SINGLE: 5,
     CMD_ROPE_INIT: 4,
-    CMD_ANGLE_CTRL_MASKED: 88,
     CMD_CLEAR_CALIBRATION_SCOPE: 4,
     CMD_SERVO_RESET_ZERO: 4,
     CMD_STATE_SYNC_REQUEST: 4,
@@ -160,7 +159,7 @@ COMMAND_PAYLOAD_LENGTHS = {
     CMD_MOTOR_DIRECT_RELEASE: 4,
     CMD_PROTOCOL_HELLO: 9,
     CMD_CONTROL_RELEASE: 0,
-    CMD_CONTROL_PARAMETERS_SET: 241,
+    CMD_CONTROL_PARAMETERS_SET: 253,
     CMD_CONTROL_PARAMETERS_QUERY: 0,
     CMD_CONTROL_RAMP_PARAMETERS_SET: 73,
     CMD_CONTROL_RAMP_PARAMETERS_QUERY: 0,
@@ -179,7 +178,6 @@ COMMANDS_REQUIRING_HANDSHAKE = frozenset({
     CMD_MANUAL_ENCODER_REFERENCE,
     CMD_MANUAL_ENCODER_SINGLE,
     CMD_ROPE_INIT,
-    CMD_ANGLE_CTRL_MASKED,
     CMD_SERVO_RESET_ZERO,
     CMD_SERVO_REBASE_ZERO,
     CMD_MOTOR_ABS_ZERO,

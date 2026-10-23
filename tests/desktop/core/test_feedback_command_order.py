@@ -46,11 +46,11 @@ def test_masked_joint_command_encodes_mask_before_21_floats():
         ("joint_target_run_masked", [2.0] * 21, 1 << 3)
     )
 
-    # FE, LEN, EA, mask(00 00 00 08), 21 little-endian floats, FF;
+    # FE, LEN, CB, mask(08 00 00 00), 21 little-endian floats, FF;
     # paired RUN_FEEDBACK frame follows immediately.
     assert encoded[0] == 0xFE
-    assert encoded[2] == 0xEA
-    assert encoded[3:7] == bytes([0, 0, 0, 8])
+    assert encoded[2] == 0xCB
+    assert encoded[3:7] == bytes([8, 0, 0, 0])
     assert encoded[91] == 0xFF
     assert encoded[92:] == bytes([0xFE, 0x02, 0xD8, 0xFF])
 

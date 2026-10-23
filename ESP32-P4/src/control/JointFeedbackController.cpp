@@ -104,6 +104,17 @@ RampParameter jointLoadLimitParameter(uint8_t joint) {
                              ReversalRampLoadLimitCmc);
 }
 }
+JointFeedbackController::JointFeedbackController() {
+    for (auto& scale : kpScale) scale = 1.0f;
+}
+float JointFeedbackController::kpScaleOf(uint8_t joint) const {
+    return joint < ENCODER_TOTAL_NUM ? kpScale[joint] : 1.0f;
+}
+float JointFeedbackController::effectiveKpOf(uint8_t joint, const Parameters& parameters) const {
+    if (joint >= ENCODER_TOTAL_NUM) return 0.0f;
+    const float base = parameters[jointKpParameter(joint)];
+    return parameters[AdaptiveKpEnabled] > 0.5f ? base * kpScale[joint] : base;
+}
 void JointFeedbackController::reset(uint8_t joint) { if (joint < ENCODER_TOTAL_NUM) states[joint] = {}; }
 void JointFeedbackController::suspend(uint8_t joint, uint32_t now) {
     if (joint >= ENCODER_TOTAL_NUM) return;
@@ -115,8 +126,18 @@ void JointFeedbackController::suspend(uint8_t joint, uint32_t now) {
     state.lastFast = 0;
     state.lastFastMs = 0;
     state.derivativeFiltered = 0;
+    // Cancels any half-finished adaptive event; adaptation resumes on fresh data only.
+    state.suspended = true;
+    state.holdActive = false;
+    state.moveDir = 0;
+    state.targetVelocity = 0;
 }
-void JointFeedbackController::resetAll() { for (auto& state : states) state = {}; }
+void JointFeedbackController::resetAll() {
+    for (auto& state : states) state = {};
+    for (auto& scale : kpScale) scale = 1.0f;
+    scaleRevision = 0;
+    lastAdaptiveCheckMs = 0;
+}
 
 JointControlResult JointFeedbackController::compute(uint8_t joint, float target, const FeedbackEstimate& fb,
     uint32_t now, const ServoAngleData_t& servo, const ServoTelemetryData_t& telemetry,
@@ -147,11 +168,41 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
         if (low[i] > high[i]) return out;
     }
     auto& state = states[joint];
+    if (p.revision != scaleRevision) {
+        for (auto& scale : kpScale) scale = 1.0f;
+        scaleRevision = p.revision;
+        lastAdaptiveCheckMs = 0;
+    }
     if (!state.initialized || state.revision != p.revision) {
         state = {};
         state.initialized = true; state.revision = p.revision;
         state.lastTarget = target;
+        state.lastTargetMs = now;
+        state.stableTarget = target;
+        state.lastTargetChangeMs = now;
+        state.lastHoldTarget = target;
     }
+    const bool suspendedThisCycle = state.suspended;
+    if (suspendedThisCycle) {
+        // A collision/release gap must not look like a huge target move.
+        state.lastTarget = target;
+        state.lastTargetMs = now;
+        state.targetVelocity = 0;
+        state.stableTarget = target;
+        state.lastTargetChangeMs = now;
+        state.lastHoldTarget = target;
+        state.holdActive = false;
+        state.moveDir = 0;
+        state.suspended = false;
+    }
+    const uint32_t targetDtMs = now - state.lastTargetMs;
+    float rawTargetVelocity = 0.0f;
+    if (targetDtMs > 0 && targetDtMs <= 100) {
+        rawTargetVelocity = (target - state.lastTarget) * 1000.0f / (float)targetDtMs;
+    }
+    const float velocityAlpha = 1.0f - expf(-(float)(targetDtMs > 100 ? 100 : targetDtMs) * 0.001f / 0.1f);
+    state.targetVelocity += velocityAlpha * (rawTargetVelocity - state.targetVelocity);
+    state.lastTargetMs = now;
     // D term uses the measured joint velocity only; a target step must not create
     // a derivative kick. The 20 ms fast mean already rejects most encoder jitter;
     // this first-order low-pass plus hard rate limit rejects the rest.
@@ -211,7 +262,8 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
         state.phase = Tracking;
     }
     out.count = count;
-    const float kp = p[jointKpParameter(joint)];
+    const float kp = p[jointKpParameter(joint)] *
+        (p[AdaptiveKpEnabled] > 0.5f ? kpScale[joint] : 1.0f);
     const float ki = p[jointKiParameter(joint)];
     const float kd = p[jointKdParameter(joint)];
     const float iLimit = p[jointIntegralLimitParameter(joint)];
@@ -292,6 +344,103 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
     // A mechanical boundary clamp is normal operation, not collision evidence.
     for (uint8_t i = 0; i < count; ++i)
         if (raw[i] < low[i] || raw[i] > high[i]) { out.pushing = false; out.boundaryClamped = true; }
+    state.boundaryClamped = out.boundaryClamped;
+    if (!suspendedThisCycle) updateAdaptiveKp(joint, target, fb, now, p);
     return out;
+}
+
+void JointFeedbackController::updateAdaptiveKp(uint8_t joint, float target, const FeedbackEstimate& fb,
+                                               uint32_t now, const Parameters& p) {
+    if (joint >= ENCODER_TOTAL_NUM) return;
+    auto& state = states[joint];
+    auto finalizeHold = [&]() {
+        if (state.holdAmplitude >= 2.0f) {
+            const float peak = state.holdPeak;
+            if (!state.overFresh || now - state.lastEventMs > 30000) {
+                state.overScore = peak;
+            } else {
+                const float dt = (float)(now - state.lastEventMs) * 0.001f;
+                const float alpha = 1.0f - expf(-dt / 10.0f);
+                state.overScore = (1.0f - alpha) * state.overScore + alpha * peak;
+            }
+            state.overFresh = true;
+            state.lastEventMs = now;
+            if (peak > p[AdaptiveKpOvershootDeg]) {
+                kpScale[joint] = fmaxf(0.3f, kpScale[joint] * 0.9f);
+                state.noIncreaseUntilMs = now + 2000u;
+            }
+        }
+        state.holdActive = false;
+        state.lastHoldTarget = state.holdTarget;
+        state.moveDir = 0;
+    };
+
+    if (!(p[AdaptiveKpEnabled] > 0.5f)) {
+        state.holdActive = false;
+        state.moveDir = 0;
+        return;
+    }
+
+    const float targetDelta = target - state.stableTarget;
+    if (fabsf(targetDelta) >= 0.05f) {
+        if (state.holdActive) finalizeHold();
+        state.moveDir = sign(targetDelta);
+        state.stableTarget = target;
+        state.lastTargetChangeMs = now;
+    }
+
+    if (!state.holdActive && state.moveDir != 0 && now - state.lastTargetChangeMs >= 150) {
+        state.holdActive = true;
+        state.holdStartMs = now;
+        state.holdTarget = target;
+        state.holdPeak = fmaxf(0.0f, state.moveDir * (fb.fast - target));
+        state.holdAmplitude = fabsf(target - state.lastHoldTarget);
+    }
+
+    if (state.holdActive) {
+        if (state.phase != Tracking || state.candidate != 0 ||
+            state.saturated || state.boundaryClamped) {
+            state.holdActive = false;
+            state.lastHoldTarget = target;
+            state.moveDir = 0;
+        } else {
+            state.holdPeak = fmaxf(state.holdPeak, state.moveDir * (fb.fast - state.holdTarget));
+            if (now - state.holdStartMs >= 800) finalizeHold();
+        }
+    }
+
+    // Lag learns only while a moving target is actually being tracked.
+    if (fb.fresh && state.phase == Tracking && state.candidate == 0 &&
+        !state.saturated && !state.boundaryClamped &&
+        fabsf(state.targetVelocity) >= 3.0f) {
+        const float error = target - fb.fast;
+        if (sign(error) == sign(state.targetVelocity)) {
+            const float lag = clip(error / state.targetVelocity, 0.0f, 0.5f);
+            if (!state.lagFresh || now - state.lastLagMs > 30000) {
+                state.lagScore = lag;
+            } else {
+                const float dt = (float)(now - state.lastLagMs) * 0.001f;
+                const float alpha = 1.0f - expf(-dt / 10.0f);
+                state.lagScore = (1.0f - alpha) * state.lagScore + alpha * lag;
+            }
+            state.lagFresh = true;
+            state.lastLagMs = now;
+        }
+    }
+
+    if (now - lastAdaptiveCheckMs < 2000) return;
+    lastAdaptiveCheckMs = now;
+    for (uint8_t j = 0; j < ENCODER_TOTAL_NUM; ++j) {
+        auto& candidate = states[j];
+        if (!candidate.lagFresh || !candidate.overFresh) continue;
+        if (now - candidate.lastLagMs > 30000 || now - candidate.lastEventMs > 30000) continue;
+        if (candidate.phase != Tracking || candidate.candidate != 0 ||
+            candidate.saturated || candidate.boundaryClamped) continue;
+        if (now < candidate.noIncreaseUntilMs) continue;
+        if (candidate.lagScore > p[AdaptiveKpLagLimitS] &&
+            candidate.overScore <= p[AdaptiveKpOvershootDeg]) {
+            kpScale[j] = fminf(1.3f, kpScale[j] * 1.05f);
+        }
+    }
 }
 }

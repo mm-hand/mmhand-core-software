@@ -1578,6 +1578,15 @@ class ApplicationActions(IdResetActions):
                 'communication': communication, 'device': device, 'problems': problems,
                 'control_parameters': control_parameters,
                 'control_parameter_sync': self._control_parameter_sync,
+                'adaptive_kp': {
+                    'enabled': bool(state.adaptive_kp_enabled),
+                    'valid': bool(state.has_adaptive_kp_data and state.adaptive_kp_last_rx_ts
+                                  and 0 <= now - state.adaptive_kp_last_rx_ts <= 2.0),
+                    'scale': list(state.adaptive_kp_scale),
+                    'effective': list(state.adaptive_kp_effective),
+                    'age_ms': (int((now - state.adaptive_kp_last_rx_ts) * 1000)
+                               if state.adaptive_kp_last_rx_ts else None),
+                },
                 'message': self._last_operation_message, 'busy': busy, 'selected_joints': list(self._selected_joints),
                 'devices': [asdict(d) for d in self._devices], 'discovery_error': self._discovery_error,
                 'operations': deepcopy(list(self._application_operations)), 'joints': joints,

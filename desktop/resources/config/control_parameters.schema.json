@@ -2,7 +2,7 @@
   "schema_version": 7,
   "payloads": {
     "main": {
-      "version": 6,
+      "version": 7,
       "fields": [
         {
           "group": "joint_kp",
@@ -351,6 +351,24 @@
           "name": "max_gap_ms",
           "minimum": 100,
           "maximum": 5000
+        },
+        {
+          "group": "adaptive_kp",
+          "name": "enabled",
+          "minimum": 0,
+          "maximum": 1
+        },
+        {
+          "group": "adaptive_kp",
+          "name": "lag_limit_s",
+          "minimum": 0.02,
+          "maximum": 1.0
+        },
+        {
+          "group": "adaptive_kp",
+          "name": "overshoot_deg",
+          "minimum": 0.5,
+          "maximum": 10.0
         }
       ]
     },

@@ -84,7 +84,6 @@ bool commandConflictsWithServoRebaseZero(uint8_t command)
         case CMD_MOTOR_POS_ABS:
         case CMD_MOTOR_POS_ABS_ONE:
         case CMD_ANGLE_CTRL:
-        case CMD_ANGLE_CTRL_MASKED:
         case CMD_CALIB_LOAD_JOINT:
         case CMD_CALIB_LOAD_LIMITS:
             return true;
@@ -223,7 +222,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         return;
     }
     if ((cmd == CMD_RUN_FEEDBACK || cmd == CMD_START || cmd == CMD_MOTOR_POS_ABS ||
-         cmd == CMD_MOTOR_POS_ABS_ONE || cmd == CMD_ANGLE_CTRL || cmd == CMD_ANGLE_CTRL_MASKED) &&
+         cmd == CMD_MOTOR_POS_ABS_ONE || cmd == CMD_ANGLE_CTRL) &&
         !mmhand::control::parametersConfigured()) {
         FW_LOG_WARN_PRINTF("[UPPER] motion rejected cmd=0x%02X parameters not configured\r\n", (unsigned)cmd);
         sendProtoAckPacket(cmd, sharedData->system_state, PROTO_ACK_STATUS_INVALID_DATA);
@@ -427,23 +426,14 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
 
     if (cmd == CMD_ANGLE_CTRL)
     {
-        float parsedAngles[ENCODER_TOTAL_NUM] = {0.0f};
-        if (parseFloatArrayLittleEndian(frame + 1, frameLen - 1, parsedAngles, ENCODER_TOTAL_NUM)) {
-            upperApplyTargetAngles(sharedData, parsedAngles, ENCODER_TOTAL_NUM);
-        }
-        return;
-    }
-
-    if (cmd == CMD_ANGLE_CTRL_MASKED)
-    {
-        if (frameLen < 1 + kMaskedFloatPayloadBytes) {
+        if (frameLen < 1 + kFloatPayloadBytes) {
             return;
         }
         const uint32_t jointMask =
-            ((uint32_t)frame[1] << 24) |
-            ((uint32_t)frame[2] << 16) |
-            ((uint32_t)frame[3] << 8) |
-            (uint32_t)frame[4];
+            (uint32_t)frame[1] |
+            ((uint32_t)frame[2] << 8) |
+            ((uint32_t)frame[3] << 16) |
+            ((uint32_t)frame[4] << 24);
         float parsedAngles[ENCODER_TOTAL_NUM] = {0.0f};
         if (parseFloatArrayLittleEndian(frame + 5,
                                         frameLen - 5,

@@ -673,3 +673,16 @@ def test_partial_serial_frame_is_a_transport_failure():
     transport.serial.write = lambda data: len(data) - 1
     with pytest.raises(OSError, match="serial short write: 2/3 bytes"):
         transport.write(b"abc")
+
+
+def test_adaptive_kp_packet_parser():
+    from desktop.core.protocol import parse_adaptive_kp_packet
+    payload = bytes([1])
+    payload += b"".join(struct.pack(">h", 1000 + i) for i in range(ENCODER_COUNT))
+    payload += b"".join(struct.pack(">h", 500 + i) for i in range(ENCODER_COUNT))
+    parsed = parse_adaptive_kp_packet(payload)
+    assert parsed is not None
+    assert parsed["enabled"] is True
+    assert parsed["scale"] == [1.0 + i / 1000.0 for i in range(ENCODER_COUNT)]
+    assert parsed["effective"][0] == 0.5
+    assert parse_adaptive_kp_packet(payload[:-1]) is None

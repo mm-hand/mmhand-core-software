@@ -123,7 +123,6 @@ def _render_cpp(schema: dict) -> str:
     lengths = {item["name"]: int(item["payload_bytes"]) for item in schema["commands"]}
     aliases = {
         "kFloatPayloadBytes": "CMD_ANGLE_CTRL",
-        "kMaskedFloatPayloadBytes": "CMD_ANGLE_CTRL_MASKED",
         "kMotorPosAbsPayloadBytes": "CMD_MOTOR_POS_ABS",
         "kMotorPosAbsOnePayloadBytes": "CMD_MOTOR_POS_ABS_ONE",
         "kActiveScopePayloadBytes": "CMD_ACTIVE_SCOPE",

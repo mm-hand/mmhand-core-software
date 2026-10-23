@@ -12,6 +12,7 @@ from __future__ import annotations
 import copy
 from nicegui import ui
 from desktop.core.control_parameters import BOUNDS, RAMP_BOUNDS
+from . import common
 
 TITLES = {
     'joint_kp': 'Kp config',
@@ -21,8 +22,22 @@ TITLES = {
     'feedback': 'Encoder windows', 'reversal': 'Fast reversal',
     'collision': 'Collision thresholds', 'output': 'Output limits',
     'ros2_input': 'ROS2 One Euro and stationary anchor',
+    'adaptive_kp': 'Adaptive Kp thresholds (runtime multiplier)',
     'reversal_ramp': 'Progressive fast reversal (B0 / vB / load limit)',
 }
+
+JOINT_TYPES = ('AA', 'MCP', 'PIP', 'DIP')
+
+
+def _joint_type(joint):
+    return 'CMC' if joint == 20 else JOINT_TYPES[joint % 4]
+
+
+def _finger_name(joint):
+    for name, joints in common.FINGERS:
+        if joint in joints:
+            return name
+    return ''
 
 
 def build(hand, act):
@@ -33,7 +48,7 @@ def build(hand, act):
             ui.tooltip('Apply the drafted parameter revision. The host writes it to the configuration and P4 applies the whole revision when idle.')
         defaults = ui.button('Restore Defaults', on_click=lambda: act(hand.request_restore_control_defaults))
         status = ui.label().classes('text-sm')
-    ui.label('Kp/Ki/Kd, integral limit/noise/confirm, reversal confirm/takeup/exit are per joint type; pair recovery applies to AA/CMC. Collision, windows, output and ROS2 timing remain global in schema v6; progressive ramp is a separate parameter frame. P4 applies an entire revision only when idle.').classes('text-sm')
+    ui.label('Kp/Ki/Kd, integral limit/noise/confirm, reversal confirm/takeup/exit are per joint type; pair recovery applies to AA/CMC. Collision, windows, output, ROS2 timing and adaptive thresholds remain global in schema v7; progressive ramp is a separate parameter frame. P4 applies an entire revision only when idle.').classes('text-sm')
     with ui.column().classes('w-full gap-3'):
         for group, fields in list(BOUNDS.items()) + [('reversal_ramp', RAMP_BOUNDS)]:
             with ui.expansion(TITLES[group], value=group in ('joint_kp', 'joint_ki', 'joint_kd', 'dual_tendon')).classes('w-full bg-white rounded'):
@@ -41,6 +56,12 @@ def build(hand, act):
                     for name, (lower, upper) in fields.items():
                         controls[(group, name)] = ui.number(name.upper() if group.startswith('joint_') else name.replace('_', ' '), min=lower, max=upper,
                                                            step=1 if isinstance(lower, int) and isinstance(upper, int) else 0.01).props('dense outlined').classes('w-44')
+    with ui.expansion('Adaptive Kp (runtime)', value=True).classes('w-full bg-white rounded'):
+        adaptive_status = ui.label('Adaptive: waiting for P4').classes('text-sm')
+        adaptive_table = common.table([
+            ('joint', 'Joint'), ('finger', 'Finger'), ('type', 'Type'),
+            ('base', 'Base Kp'), ('scale', 'Scale'), ('effective', 'Effective Kp'),
+        ])
     draft_revision = [None]
 
     def submit():
@@ -58,6 +79,30 @@ def build(hand, act):
             for (group, name), widget in controls.items(): widget.set_value(data[group][name])
             draft_revision[0] = (data['revision'], data['ramp_revision'])
         status.set_text(f"Desired revision {data['revision']} / ramp {data['ramp_revision']} · CRC32 {data['crc32']:08X} ramp {data['ramp_crc32']:08X} · P4: {snapshot['control_parameter_sync']}")
+        adaptive = snapshot.get('adaptive_kp') or {}
+        scales = adaptive.get('scale') or []
+        effective = adaptive.get('effective') or []
+        rows = []
+        for joint in range(21):
+            joint_type = _joint_type(joint)
+            base = data['joint_kp'][joint_type.lower()]
+            rows.append({
+                'joint': f'J{joint:02d}',
+                'finger': _finger_name(joint),
+                'type': joint_type,
+                'base': f'{base:.3f}',
+                'scale': f'×{scales[joint]:.3f}' if joint < len(scales) else '—',
+                'effective': f'{effective[joint]:.3f}' if joint < len(effective) else '—',
+            })
+        common.set_rows(adaptive_table, rows)
+        if adaptive.get('valid'):
+            scale_values = [value for value in scales if value]
+            span = f'{min(scale_values):.3f}–{max(scale_values):.3f}' if scale_values else '—'
+            adaptive_status.set_text(
+                f"Adaptive: {'ON' if adaptive.get('enabled') else 'OFF'} · "
+                f"updated {adaptive.get('age_ms', 0)} ms ago · scale {span}")
+        else:
+            adaptive_status.set_text('Adaptive: waiting for P4 1 Hz packet (showing configured base Kp)')
         save.set_enabled(not snapshot['busy'])
         defaults.set_enabled(not snapshot['busy'])
     return refresh

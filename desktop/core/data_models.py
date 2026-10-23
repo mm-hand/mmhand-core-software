@@ -342,6 +342,12 @@ class HandModel:
     control_trace_last_rx_ts: float = 0.0
     control_trace_components: dict = field(default_factory=dict)
     control_trace_detail: dict = field(default_factory=dict)
+    # 自适应 Kp 运行快照（P4 1 Hz 上报；不是配置参数）。
+    has_adaptive_kp_data: bool = False
+    adaptive_kp_enabled: bool = False
+    adaptive_kp_scale: List[float] = field(default_factory=lambda: [1.0] * ENCODER_COUNT)
+    adaptive_kp_effective: List[float] = field(default_factory=lambda: [0.0] * ENCODER_COUNT)
+    adaptive_kp_last_rx_ts: float = 0.0
     # 最近一次协议 ACK，用于把“UI 请求”和“P4 实际处理”分别写入事件日志。
     proto_ack_sequence: int = 0
     proto_ack_cmd: int = 0

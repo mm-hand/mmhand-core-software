@@ -4,6 +4,7 @@
   "retired_command_values": [
     202,
     217,
+    234,
     239,
     245,
     247
@@ -183,6 +184,12 @@
       "value": 30,
       "timestamp": false,
       "description": "渐进快速换向参数应用结果及实际修订和CRC读回"
+    },
+    {
+      "name": "PACKET_TYPE_ADAPTIVE_KP",
+      "value": 31,
+      "timestamp": false,
+      "description": "21 路自适应 Kp 倍率与实际 Kp"
     }
   ],
   "commands": [
@@ -197,8 +204,8 @@
       "name": "CMD_ANGLE_CTRL",
       "requires_handshake": true,
       "value": 203,
-      "payload_bytes": 84,
-      "description": "下发完整 21 路关节目标角，单位 degree"
+      "payload_bytes": 88,
+      "description": "下发 21 路关节目标角（小端掩码+小端 float），mask=all 即全量"
     },
     {
       "name": "CMD_START",
@@ -307,13 +314,6 @@
       "description": "按 21 位关节掩码启动 P4 Rope Init"
     },
     {
-      "name": "CMD_ANGLE_CTRL_MASKED",
-      "requires_handshake": true,
-      "value": 234,
-      "payload_bytes": 88,
-      "description": "按关节掩码下发稀疏关节目标角"
-    },
-    {
       "name": "CMD_CLEAR_CALIBRATION_SCOPE",
       "value": 235,
       "payload_bytes": 4,
@@ -380,9 +380,9 @@
     {
       "name": "CMD_CONTROL_PARAMETERS_SET",
       "value": 248,
-      "payload_bytes": 241,
+      "payload_bytes": 253,
       "requires_handshake": true,
-      "description": "原子设置58个控制与输入滤波参数，版本6、修订、浮点数组、CRC32"
+      "description": "原子设置61个控制与输入滤波参数，版本7、修订、浮点数组、CRC32"
     },
     {
       "name": "CMD_CONTROL_PARAMETERS_QUERY",

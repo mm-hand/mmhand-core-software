@@ -33,7 +33,12 @@ public:
     void reset(uint8_t joint);
     void suspend(uint8_t joint, uint32_t now);
     void resetAll();
+    float kpScaleOf(uint8_t joint) const;
+    float effectiveKpOf(uint8_t joint, const Parameters& parameters) const;
+    JointFeedbackController();
 private:
+    void updateAdaptiveKp(uint8_t joint, float target, const FeedbackEstimate& fb,
+                          uint32_t now, const Parameters& parameters);
     enum Phase : uint8_t { Tracking, Pending, Takeup };
     struct State {
         bool initialized = false, saturated = false;
@@ -52,6 +57,18 @@ private:
         uint32_t lastFastMs = 0;
         float lastFast = 0;
         float derivativeFiltered = 0;
+        // Adaptive Kp: slow closed-loop evidence, never a fast control loop.
+        float lagScore = 0, overScore = 0;
+        uint32_t lastLagMs = 0, lastEventMs = 0, noIncreaseUntilMs = 0;
+        bool lagFresh = false, overFresh = false;
+        float targetVelocity = 0, stableTarget = 0, lastHoldTarget = 0;
+        float holdTarget = 0, holdPeak = 0, holdAmplitude = 0;
+        uint32_t lastTargetMs = 0, lastTargetChangeMs = 0, holdStartMs = 0;
+        int8_t moveDir = 0;
+        bool holdActive = false, suspended = false, boundaryClamped = false;
     } states[ENCODER_TOTAL_NUM];
+    float kpScale[ENCODER_TOTAL_NUM];
+    uint32_t scaleRevision = 0;
+    uint32_t lastAdaptiveCheckMs = 0;
 };
 }

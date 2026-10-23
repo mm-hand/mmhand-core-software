@@ -63,6 +63,8 @@ struct HostCommRuntimeContext {
     uint32_t lastFeedbackCollisionTransitionSent;
     uint32_t lastSystemStatusSentMs;
     bool systemStatusSentInitialized;
+    uint32_t lastAdaptiveKpSentMs;
+    bool adaptiveKpSentInitialized;
     uint32_t lastServoRouteGenerationSent;
     uint32_t lastManualReferenceSequenceSent;
     uint32_t lastManualReferenceValidMaskSent;
@@ -385,6 +387,15 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
                     feedbackCollisionTransitionCount;
                 lastSystemStatusSentMs = nowMs;
                 systemStatusSentInitialized = true;
+            }
+        }
+
+        // 1 Hz 自适应 Kp 快照；变化本身最慢 2 s，不需要更快。
+        if (!runtime.adaptiveKpSentInitialized ||
+            (uint32_t)(nowMs - runtime.lastAdaptiveKpSentMs) >= 1000u) {
+            if (sendAdaptiveKpPacket(sharedData)) {
+                runtime.lastAdaptiveKpSentMs = nowMs;
+                runtime.adaptiveKpSentInitialized = true;
             }
         }
 
