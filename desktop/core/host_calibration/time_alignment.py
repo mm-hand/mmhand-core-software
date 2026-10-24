@@ -137,7 +137,7 @@ def _evaluate(segment: _Segment, time_ms: int) -> tuple[tuple[float, ...], tuple
 
 
 def align_feedback(frames: Iterable[FeedbackFrame], joint: int,
-                   motors: Iterable[int], direction: int, *,
+                   motors: Iterable[int], *,
                    raw_max_gap_ms: int = 300,
                    abs_max_gap_ms: int = 500) -> AlignedFeedbackResult:
     """Return common-time pairs from measured encoder and servo position tables.
@@ -152,8 +152,6 @@ def align_feedback(frames: Iterable[FeedbackFrame], joint: int,
             or any(motor < 0 for motor in motor_indices)
             or len(set(motor_indices)) != len(motor_indices)):
         raise ValueError("time alignment requires one joint and one or two distinct motors")
-    if direction not in (-1, 1):
-        raise ValueError("encoder direction must be -1 or 1")
     if raw_max_gap_ms <= 0 or abs_max_gap_ms <= 0:
         raise ValueError("maximum feedback gaps must be positive")
     packets = tuple(frames)
@@ -182,7 +180,7 @@ def align_feedback(frames: Iterable[FeedbackFrame], joint: int,
                 absolute, abs_bracket = _evaluate(abs_segment, time_ms)
                 physical_raw = _round_away(raw[0]) % 16384
                 samples.append(AlignedFeedbackSample(
-                    encoder=(physical_raw * direction) % 16384,
+                    encoder=physical_raw,
                     primary_abs=_round_away(absolute[0]),
                     secondary_abs=_round_away(absolute[1]) if len(absolute) == 2 else 0,
                     timestamp_ms=(origin + time_ms) & 0xFFFFFFFF,

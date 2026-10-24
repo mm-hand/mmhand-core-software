@@ -13,8 +13,7 @@ static const int32_t kCalibrationEncoderHalfTurn = kCalibrationEncoderModulo / 2
 // Rope Init/READY 允许落在 Manual Min 外侧的最大容差。
 static const int32_t kFeedbackReadyEnterOutsideToleranceCounts = 24;
 
-// 按安装方向把 0..16383 原始值变成“正方向递增”的环形坐标。
-int32_t calibrationOrientEncoderRaw(uint16_t rawValue, int8_t direction);
+// S3 只发映射后的 raw（正方向递增）。P4 直接使用 raw，不做方向/取反。
 // 将任意整数折回 0..16383。
 int32_t calibrationWrapEncoderCount(int32_t value);
 // 计算环形坐标中 from 到 to 的正向距离，结果为 0..16383。
@@ -37,23 +36,12 @@ struct EncoderUrdfMapResult {
     float urdfDeg;                 // 区间内线性映射、区间外诊断外推角度。
 };
 
-// 沿安装正方向计算两个原始端点的距离；端点允许跨 0/16383。
-int32_t calibrationDirectedEncoderDelta(uint16_t fromRaw,
-                                        uint16_t toRaw,
-                                        int8_t direction);
-
-// 沿安装正方向计算最短有符号位移，正数为同向，负数为反向。
-int32_t calibrationSignedDirectedEncoderDelta(uint16_t fromRaw,
-                                              uint16_t toRaw,
-                                              int8_t direction);
-
 // 生成当前 V4 映射契约：Manual Min/Max 对应 URDF Min/Max，Auto 仅供诊断。
 bool applyManualScaledUrdfMappingToCalibration(
     uint8_t jointIndex,
     const ManualEncoderReference& manual,
     uint16_t autoMinRaw,
     uint16_t autoMaxRaw,
-    int8_t direction,
     uint32_t manualEntryCrc,
     JointCalibrationResult* result);
 
@@ -63,7 +51,6 @@ bool mapManualScaledEncoderToUrdf(uint8_t jointIndex,
                                   const JointCalibrationResult& calibration,
                                   const ManualEncoderReference& manual,
                                   uint16_t currentRaw,
-                                  int8_t direction,
                                   EncoderUrdfMapResult* out);
 
 #endif // CALIBRATION_MATH_H

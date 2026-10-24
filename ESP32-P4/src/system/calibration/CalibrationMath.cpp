@@ -13,16 +13,6 @@
 static_assert(kManualScaledUrdfFeedbackMappingVersion == 4,
               "Manual-scaled calibration contract must remain v4");
 
-// 按固定安装方向归一化原始磁编值，使“关节正方向”始终对应坐标增加。
-int32_t calibrationOrientEncoderRaw(uint16_t rawValue, int8_t direction)
-{
-    int32_t oriented = (int32_t)rawValue & (kCalibrationEncoderModulo - 1);
-    if (direction < 0) {
-        oriented = (kCalibrationEncoderModulo - oriented) & (kCalibrationEncoderModulo - 1);
-    }
-    return oriented;
-}
-
 // 环形取模，兼容负数输入。
 int32_t calibrationWrapEncoderCount(int32_t value)
 {
@@ -37,36 +27,6 @@ int32_t calibrationWrapEncoderCount(int32_t value)
 int32_t calibrationForwardEncoderDelta(int32_t from, int32_t to)
 {
     return calibrationWrapEncoderCount(to - from);
-}
-
-// 直接在原始磁编值上按安装方向计算正向距离。
-int32_t calibrationDirectedEncoderDelta(uint16_t fromRaw,
-                                        uint16_t toRaw,
-                                        int8_t direction)
-{
-    if (direction != 1 && direction != -1) {
-        return -1;
-    }
-    const int32_t from = (int32_t)fromRaw & (kCalibrationEncoderModulo - 1);
-    const int32_t to = (int32_t)toRaw & (kCalibrationEncoderModulo - 1);
-    return direction > 0
-        ? calibrationWrapEncoderCount(to - from)
-        : calibrationWrapEncoderCount(from - to);
-}
-
-// 把正向距离折算为半圈内的最短有符号位移。
-int32_t calibrationSignedDirectedEncoderDelta(uint16_t fromRaw,
-                                              uint16_t toRaw,
-                                              int8_t direction)
-{
-    const int32_t forward = calibrationDirectedEncoderDelta(
-        fromRaw, toRaw, direction);
-    if (forward < 0) {
-        return 0;
-    }
-    return forward > kCalibrationEncoderHalfTurn
-        ? forward - kCalibrationEncoderModulo
-        : forward;
 }
 
 // 计算两个环形坐标之间的最短有符号差。
@@ -102,7 +62,6 @@ bool applyManualScaledUrdfMappingToCalibration(
     const ManualEncoderReference& manual,
     uint16_t autoMinRaw,
     uint16_t autoMaxRaw,
-    int8_t direction,
     uint32_t manualEntryCrc,
     JointCalibrationResult* result)
 {
@@ -114,10 +73,10 @@ bool applyManualScaledUrdfMappingToCalibration(
         return false;
     }
 
-    const int32_t manualSpan = calibrationDirectedEncoderDelta(
-        manual.minRaw, manual.maxRaw, direction);
-    const int32_t autoSpan = calibrationDirectedEncoderDelta(
-        autoMinRaw, autoMaxRaw, direction);
+    const int32_t manualSpan = calibrationForwardEncoderDelta(
+        manual.minRaw, manual.maxRaw);
+    const int32_t autoSpan = calibrationForwardEncoderDelta(
+        autoMinRaw, autoMaxRaw);
     if (manualSpan <= 0 || manualSpan >= kCalibrationEncoderModulo ||
         autoSpan <= 0 || autoSpan >= kCalibrationEncoderModulo) {
         return false;
@@ -144,11 +103,10 @@ bool applyManualScaledUrdfMappingToCalibration(
     result->urdfConfigCrc = kManualScaledUrdfConfigCrc;
     const float autoManualRatio = (float)autoSpan / (float)manualSpan;
     FW_LOG_INFO_PRINTF(
-        "[CALIB MAP V4] J%02u dir=%d manual=%ld(%u->%u) "
+        "[CALIB MAP V4] J%02u manual=%ld(%u->%u) "
         "auto=%ld(%u->%u) ratio=%.6f "
         "urdf=[%.3f,%.3f] crc=0x%08lX\r\n",
         (unsigned)jointIndex,
-        (int)direction,
         (long)manualSpan,
         (unsigned)manual.minRaw,
         (unsigned)manual.maxRaw,
@@ -173,11 +131,9 @@ bool applyManualScaledUrdfMappingToCalibration(
 static int32_t signedDirectedCoordinateFromWindowStart(
     uint16_t windowStartRaw,
     uint16_t currentRaw,
-    int8_t direction,
     int32_t windowSpan)
 {
-    const int32_t forward = calibrationDirectedEncoderDelta(
-        windowStartRaw, currentRaw, direction);
+    const int32_t forward = calibrationForwardEncoderDelta(windowStartRaw, currentRaw);
     if (forward <= windowSpan) {
         return forward;
     }
@@ -193,7 +149,6 @@ bool mapManualScaledEncoderToUrdf(uint8_t jointIndex,
                                   const JointCalibrationResult& calibration,
                                   const ManualEncoderReference& manual,
                                   uint16_t currentRaw,
-                                  int8_t direction,
                                   EncoderUrdfMapResult* out)
 {
     if (!out) {
@@ -223,8 +178,8 @@ bool mapManualScaledEncoderToUrdf(uint8_t jointIndex,
     const float urdfSpanDeg = limit->maxDeg - limit->minDeg;
     // 运行时重新根据 P4 当前 Manual 端点计算跨度，禁止旧快照中的
     // manualSpanCounts 与当前 Manual 数据不一致时继续参与角度换算。
-    const int32_t currentManualSpan = calibrationDirectedEncoderDelta(
-        manual.minRaw, manual.maxRaw, direction);
+    const int32_t currentManualSpan = calibrationForwardEncoderDelta(
+        manual.minRaw, manual.maxRaw);
     if (currentManualSpan <= 0 ||
         currentManualSpan >= kCalibrationEncoderModulo ||
         currentManualSpan != calibration.manualSpanCounts) {
@@ -235,8 +190,7 @@ bool mapManualScaledEncoderToUrdf(uint8_t jointIndex,
     // 以 Manual Min 为零点建立有符号坐标，跨 0/16383 时仍能区分上下边界。
     const int32_t manualCoordinate =
         signedDirectedCoordinateFromWindowStart(
-            manual.minRaw, currentRaw, direction,
-            currentManualSpan);
+            manual.minRaw, currentRaw, currentManualSpan);
     const int32_t belowMinCounts = manualCoordinate < 0
         ? -manualCoordinate : 0;
     const int32_t aboveMaxCounts =

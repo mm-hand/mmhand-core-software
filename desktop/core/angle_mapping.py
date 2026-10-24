@@ -230,7 +230,6 @@ def get_spec(joint: int | str) -> JointAngleSpec:
 
 def _has_consistent_auto_raw_endpoints(item: dict) -> bool:
     try:
-        direction = -1 if int(item.get("encoderDirection", 1)) < 0 else 1
         start_oriented = int(item.get("startEncoder", 0)) % 16384
         tight_oriented = int(item.get("tightEncoder", 0)) % 16384
         auto_min_raw = int(item.get("autoMinRaw", -1))
@@ -239,8 +238,8 @@ def _has_consistent_auto_raw_endpoints(item: dict) -> bool:
         return False
     if not 0 <= auto_min_raw < 16384 or not 0 <= auto_max_raw < 16384:
         return False
-    expected_min = (-start_oriented) % 16384 if direction < 0 else start_oriented
-    expected_max = (-tight_oriented) % 16384 if direction < 0 else tight_oriented
+    expected_min = start_oriented
+    expected_max = tight_oriented
     return auto_min_raw == expected_min and auto_max_raw == expected_max
 
 

@@ -20,7 +20,7 @@ from copy import deepcopy
 from ..calibration_snapshot import joint_calib_result_has_valid_tendon_lut, parse_mask
 from ..protocol import ENCODER_COUNT
 from .config import finger_aa_joint, joint_motors
-from .math import directed_encoder_delta, manual_entry_crc
+from .math import forward_encoder_delta, manual_entry_crc
 
 
 def _joint_mask_bits(joint_mask: int):
@@ -77,21 +77,18 @@ def usable_snapshot_aa_result(
     if state_device and snapshot_device and state_device != snapshot_device:
         return None
 
-    # Manual endpoints and direction must still describe the same reference.
-    if not bool(state.has_manual_reference_encoder_directions):
-        return None
+    # Manual endpoints must still describe the same reference.
     if not int(state.manual_reference_valid_bitmap) & (1 << joint):
         return None
     try:
         low = int(state.manual_reference_min_raw[joint])
         high = int(state.manual_reference_max_raw[joint])
-        direction = int(state.manual_reference_encoder_directions[joint])
     except (AttributeError, IndexError, TypeError, ValueError):
         return None
     expected_crc = manual_entry_crc(joint, {"minRaw": low, "maxRaw": high})
     if int(result.get("manualReferenceCrc", 0) or 0) != expected_crc:
         return None
-    expected_span = directed_encoder_delta(low, high, direction)
+    expected_span = forward_encoder_delta(low, high)
     if not 0 < expected_span < 16384:
         return None
     if int(result.get("manualSpanCounts", 0) or 0) != expected_span:

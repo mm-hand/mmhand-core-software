@@ -166,15 +166,7 @@ HAND_PROFILE = "v2"
 VALID_MOTOR_MASK = (1 << MOTOR_COUNT) - 1
 
 
-def directed_encoder_delta(from_raw: int, to_raw: int, direction: int) -> Optional[int]:
-    """Mirror P4 calibrationDirectedEncoderDelta for raw 14-bit endpoints."""
-    if int(direction) not in (-1, 1):
-        return None
-    start = int(from_raw) & (ENCODER_RAW_MODULO - 1)
-    end = int(to_raw) & (ENCODER_RAW_MODULO - 1)
-    if int(direction) > 0:
-        return (end - start) % ENCODER_RAW_MODULO
-    return (start - end) % ENCODER_RAW_MODULO
+
 
 CALIB_LOAD_THRESHOLD = 0.3
 ERROR_VAL_FLAG = 0xFFFF
@@ -395,20 +387,16 @@ def parse_servo_logical_range_packet(
 
 
 def parse_manual_encoder_reference_packet(payload: bytes) -> Optional[dict]:
-    """Parse only the current v3 Manual snapshot, including all encoder directions."""
-    if len(payload) != 124 or payload[0] != 3:
+    """Parse the current v4 Manual snapshot."""
+    if len(payload) != 103 or payload[0] != 4:
         return None
     valid_bitmap, reference_crc, revision = struct.unpack_from('>III', payload, 1)
     auto_valid_bitmap = struct.unpack_from('>I', payload, 14)[0]
-    directions = list(struct.unpack_from('>21b', payload, 103))
-    if any(value not in (-1, 1) for value in directions):
-        return None
     endpoints = struct.unpack_from('>42H', payload, 19)
-    return dict(version=3, valid_bitmap=valid_bitmap, reference_crc=reference_crc,
+    return dict(version=4, valid_bitmap=valid_bitmap, reference_crc=reference_crc,
                 revision=revision, committed=bool(payload[13]),
                 auto_valid_bitmap=auto_valid_bitmap, commit_status=payload[18],
-                min_raw=list(endpoints[::2]), max_raw=list(endpoints[1::2]),
-                encoder_directions=directions, has_encoder_directions=True)
+                min_raw=list(endpoints[::2]), max_raw=list(endpoints[1::2]))
 
 
 def _unpack_float_be(data: bytes) -> float:
@@ -417,7 +405,7 @@ def _unpack_float_be(data: bytes) -> float:
 
 def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
     """解析当前 V4 快照；P4 上行体在装配告警后附带设备时间戳。"""
-    if len(payload) != 202:
+    if len(payload) != 201:
         return None
     idx = 0
     joint = payload[idx]
@@ -438,8 +426,6 @@ def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
         result[key] = _unpack_float_be(payload[idx:idx + 4])
         idx += 4
     result['scaled'] = bool(payload[idx])
-    idx += 1
-    result['encoderDirection'] = -1 if struct.unpack('>b', payload[idx:idx + 1])[0] < 0 else 1
     idx += 1
     result['tendonLutValid'] = bool(payload[idx])
     idx += 1
@@ -476,7 +462,7 @@ def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
     idx += 4
     # V4 wire 仍携带 currentMinDeg/currentMaxDeg 两个 float 保留槽；host 不再维护
     # current 概念，读取后立即跳过，工作区统一使用静态 URDF Min/Max。保持 idx
-    # 前进 8 字节，后面的装配告警字段偏移和 202-byte payload 长度不变。
+    # 前进 8 字节，后面的装配告警字段偏移和 201-byte payload 长度不变。
     _unpack_float_be(payload[idx:idx + 4])
     _unpack_float_be(payload[idx + 4:idx + 8])
     idx += 8
@@ -1025,8 +1011,6 @@ def build_calib_load_joint_cmd(result: dict) -> bytes:
     for key in ("startDeg", "tightDeg", "totalDeg"):
         payload.extend(_pack_float_be(float(result.get(key, 0.0))))
     payload.append(1 if bool(result.get("scaled", False)) else 0)
-    direction = -1 if int(result.get("encoderDirection", 1)) < 0 else 1
-    payload.extend(struct.pack(">b", direction))
     payload.append(1 if bool(tendon_lut_field(result, "tendonLutValid", False)) else 0)
     payload.append(int(tendon_lut_field(result, "tendonLutCount", 0)) & 0xFF)
     motors = list(tendon_lut_field(result, "tendonLutMotor", [0xFF, 0xFF]))
@@ -1069,12 +1053,8 @@ def build_calib_load_joint_cmd(result: dict) -> bytes:
         raise ValueError(f"J{joint:02d} Auto raw must be in [0, 16383]")
     start_oriented = int(result.get("startEncoder", 0)) % 16384
     tight_oriented = int(result.get("tightEncoder", 0)) % 16384
-    expected_auto_min_raw = (
-        (-start_oriented) % 16384 if direction < 0 else start_oriented
-    )
-    expected_auto_max_raw = (
-        (-tight_oriented) % 16384 if direction < 0 else tight_oriented
-    )
+    expected_auto_min_raw = start_oriented
+    expected_auto_max_raw = tight_oriented
     if (
         auto_min_raw != expected_auto_min_raw
         or auto_max_raw != expected_auto_max_raw
@@ -1089,7 +1069,7 @@ def build_calib_load_joint_cmd(result: dict) -> bytes:
     payload.extend(struct.pack(">H", auto_max_raw))
     payload.extend(struct.pack(">I", int(result.get("manualReferenceCrc", 0)) & 0xFFFFFFFF))
     # 下行仍写 8 字节 currentMinDeg/currentMaxDeg 保留槽（固定 0.0）；host 已删除
-    # current 概念，保留槽只为维持 CMD_CALIB_LOAD_JOINT 的 189-byte wire 兼容。
+    # current 概念，保留槽只为维持 CMD_CALIB_LOAD_JOINT 的 188-byte wire 兼容。
     payload.extend(_pack_float_be(0.0))
     payload.extend(_pack_float_be(0.0))
     return _build_command_frame(CMD_CALIB_LOAD_JOINT, bytes(payload))

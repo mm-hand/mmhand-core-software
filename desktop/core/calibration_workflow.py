@@ -252,8 +252,7 @@ class CalibrationWorkflowService:
                 selected_manual_mask = int(
                     getattr(baseline_state, "manual_reference_valid_bitmap", 0) or 0
                 )
-                if (bool(getattr(baseline_state, "has_manual_reference_encoder_directions", False))
-                        and selected_manual_mask & joint_mask):
+                if selected_manual_mask & joint_mask:
                     snapshot = None
                     try:
                         if self._store.exists():

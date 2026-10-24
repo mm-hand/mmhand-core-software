@@ -56,10 +56,6 @@ kTendonRawSampleCapacity = TENDON_LUT_MAX_SAMPLES * 3
 kCalibrationEncoderModulo = 16384
 kCalibrationEncoderHalfTurn = 8192
 kFeedbackReadyEnterOutsideToleranceCounts = 24
-kDefaultEncoderDirection = (
-    -1, -1, -1, 1, -1, -1, -1, 1, -1, -1, -1, 1,
-    -1, -1, -1, 1, -1, -1, -1, 1, -1,
-)
 
 
 @dataclass(frozen=True)
@@ -99,10 +95,6 @@ def primary_motor(joint: int) -> int:
 
 def shorten_sign(motor: int) -> int:
     return motor_tendon_shorten_abs_sign(motor) if 0 <= motor < MOTOR_COUNT else 0
-
-
-def default_encoder_direction(joint: int) -> int:
-    return kDefaultEncoderDirection[joint]
 
 
 def load_magnitude(raw: int) -> int:

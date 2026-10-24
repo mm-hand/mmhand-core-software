@@ -3,7 +3,7 @@ import json
 import pytest
 
 from desktop.core.calibration_snapshot import (
-    _empty_v6_snapshot,
+    _empty_v7_snapshot,
     CalibrationSnapshotError,
     atomic_write_snapshot,
     format_mask,
@@ -61,13 +61,13 @@ def _current_payload(joint: int, result: dict) -> dict:
 
 
 def test_empty_auto_snapshot_is_not_loadable():
-    assert validate_snapshot_for_load(seal_snapshot(_empty_v6_snapshot())) == (
+    assert validate_snapshot_for_load(seal_snapshot(_empty_v7_snapshot())) == (
         "snapshot contains no calibration result or Manual endpoints"
     )
 
 
 def test_manual_only_snapshot_is_loadable():
-    payload = _empty_v6_snapshot()
+    payload = _empty_v7_snapshot()
     payload["manual_reference_valid_bitmap"] = format_mask((1 << ENCODER_COUNT) - 1)
     payload["manual_reference_min_raw"] = [100] * ENCODER_COUNT
     payload["manual_reference_max_raw"] = [5000] * ENCODER_COUNT
@@ -75,7 +75,7 @@ def test_manual_only_snapshot_is_loadable():
 
 
 def test_partial_manual_snapshot_is_loadable():
-    payload = _empty_v6_snapshot()
+    payload = _empty_v7_snapshot()
     payload["manual_reference_min_raw"] = [0] * ENCODER_COUNT
     payload["manual_reference_max_raw"] = [0] * ENCODER_COUNT
     payload["manual_reference_min_raw"][15] = 100
@@ -327,7 +327,7 @@ def test_manual_update_backfills_missing_hand_profile(tmp_path):
 
 
 def _manual_only_bundle(path):
-    payload = _empty_v6_snapshot()
+    payload = _empty_v7_snapshot()
     payload["manual_reference_valid_bitmap"] = format_mask((1 << ENCODER_COUNT) - 1)
     payload["manual_reference_min_raw"] = [100] * ENCODER_COUNT
     payload["manual_reference_max_raw"] = [5000] * ENCODER_COUNT

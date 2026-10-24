@@ -19,8 +19,6 @@ def capture(monkeypatch):
     stamp(state, 'encoder_raw_last_rx_ts')
     state.system_state = SYSTEM_STATE_READY
     state.encoder_online_bitmap = 1
-    state.has_manual_reference_encoder_directions = True
-    state.manual_reference_encoder_directions = [1] * 21
     state.encoders[0].raw_error = False
     writer = Mock(return_value=True)
     monkeypatch.setattr(hand, 'set_manual_encoder_reference', writer)
@@ -47,9 +45,9 @@ def test_wrap_pair_and_subsequent_single_endpoint_save(capture):
     assert run(hand, 'max')
     assert writer.call_count == 1 and writer.call_args.args == (0, 16000, 200)
     assert writer.call_args.kwargs['cancelled']() is False
-    state.encoders[0].raw_sensor = 400
+    state.encoders[0].raw_sensor = 16300
     assert run(hand, 'max')
-    assert writer.call_args.args == (0, 16000, 400)
+    assert writer.call_args.args == (0, 16000, 16300)
     assert writer.call_count == 2
 
 @pytest.mark.parametrize('second', [100, 99, 8292])
@@ -61,15 +59,14 @@ def test_equal_reverse_or_half_turn_pair_is_not_installed(capture, second):
     assert not run(hand, 'max')
     writer.assert_not_called()
 
-@pytest.mark.parametrize('fault', ['stale', 'raw_error', 'missing_direction', 'bad_direction'])
-def test_invalid_feedback_or_direction_never_enters_draft(capture, fault):
+@pytest.mark.parametrize('fault', ['stale', 'raw_error'])
+def test_invalid_feedback_never_enters_draft(capture, fault):
     hand, state, writer = capture
     if fault == 'stale':
         state.encoder_raw_last_rx_ts -= 1
         stamp(state, 'encoder_raw_last_rx_ts')
-    elif fault == 'raw_error': state.encoders[0].raw_error = True
-    elif fault == 'missing_direction': state.has_manual_reference_encoder_directions = False
-    else: state.manual_reference_encoder_directions[0] = 0
+    else:
+        state.encoders[0].raw_error = True
     assert not run(hand, 'min')
     assert not hand._manual_drafts
     writer.assert_not_called()
@@ -106,7 +103,7 @@ def test_single_click_waits_for_a_fresh_raw_frame(capture):
 
 def test_stop_during_save_is_visible_to_write_callback(capture):
     hand,state,writer=capture
-    hand._manual_drafts[0]=dict(min=100,max=200,direction=1,status='DRAFT')
+    hand._manual_drafts[0]=dict(min=100,max=200,status='DRAFT')
     state.encoders[0].raw_sensor=200
     def saving(*_args,**kwargs):
         assert not kwargs['cancelled']()

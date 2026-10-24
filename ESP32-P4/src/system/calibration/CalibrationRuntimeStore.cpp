@@ -42,7 +42,6 @@ bool readJointCalibrationRuntimeSnapshot(
     SharedSafetyGuard guard;
     out->result = g_jointCalibResult[jointIndex];
     out->manual = g_manualEncoderReference[jointIndex];
-    out->encoderDirection = g_encoderDirection[jointIndex];
     return true;
 }
 
@@ -57,7 +56,6 @@ bool readAllJointCalibrationRuntimeSnapshots(
     for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; ++joint) {
         out[joint].result = g_jointCalibResult[joint];
         out[joint].manual = g_manualEncoderReference[joint];
-        out[joint].encoderDirection = g_encoderDirection[joint];
     }
     return true;
 }
@@ -127,15 +125,14 @@ bool evaluateCalibrationAssemblyWarning(
 
     const ManualEncoderReference& manual =
         g_manualEncoderReference[jointIndex];
-    const int8_t direction = g_encoderDirection[jointIndex];
-    const int32_t minOffset = calibrationSignedDirectedEncoderDelta(
-        manual.minRaw, result.autoMinRaw, direction);
-    const int32_t maxShortfall = calibrationSignedDirectedEncoderDelta(
-        result.autoMaxRaw, manual.maxRaw, direction);
-    const int32_t autoSpan = calibrationDirectedEncoderDelta(
-        result.autoMinRaw, result.autoMaxRaw, direction);
-    const int32_t manualSpan = calibrationDirectedEncoderDelta(
-        manual.minRaw, manual.maxRaw, direction);
+    const int32_t minOffset = calibrationWrapEncoderDelta(
+        result.autoMinRaw, manual.minRaw);
+    const int32_t maxShortfall = calibrationWrapEncoderDelta(
+        manual.maxRaw, result.autoMaxRaw);
+    const int32_t autoSpan = calibrationForwardEncoderDelta(
+        result.autoMinRaw, result.autoMaxRaw);
+    const int32_t manualSpan = calibrationForwardEncoderDelta(
+        manual.minRaw, manual.maxRaw);
     const float urdfSpanDeg =
         kUrdfJointLimits[jointIndex].maxDeg -
         kUrdfJointLimits[jointIndex].minDeg;
@@ -204,7 +201,7 @@ bool updateCalibrationAssemblyWarning(
     }
 
     FW_LOG_INFO_PRINTF(
-        "[CALIB ASSEMBLY] J%02u manual=%u->%u auto=%u->%u dir=%d "
+        "[CALIB ASSEMBLY] J%02u manual=%u->%u auto=%u->%u "
         "minOffset=%d/%ld maxShortfall=%d/%ld autoSpan=%u "
         "manualSpan=%u urdfSpan=%u spanDiff=%u/%ld "
         "reason=0x%02X warning=%u\r\n",
@@ -213,7 +210,6 @@ bool updateCalibrationAssemblyWarning(
         (unsigned)g_manualEncoderReference[jointIndex].maxRaw,
         (unsigned)result.autoMinRaw,
         (unsigned)result.autoMaxRaw,
-        (int)g_encoderDirection[jointIndex],
         (int)info.autoMinOffsetCounts,
         (long)p4::safety::kCalibrationAutoMinAssemblyWarnCounts,
         (int)info.autoMaxShortfallCounts,
@@ -248,28 +244,6 @@ bool updateCalibrationAssemblyWarning(
     }
     return warning;
 }
-// 运行期磁编方向表。默认使用固定安装方向，上位机可通过现有协议同步方向；
-// 角度显示、Manual/Auto 跨度计算和 PID 反馈映射都读取这张表。
-// +1 表示 raw 增加为关节正向，-1 表示 raw 减少。
-int8_t g_encoderDirection[ENCODER_TOTAL_NUM] = {
-    -1, -1, -1,  1,
-    -1, -1, -1,  1,
-    -1, -1, -1,  1,
-    -1, -1, -1,  1,
-    -1, -1, -1,  1, -1
-};
-
-// 修改单关节运行期方向；输入只接受 ±1。
-bool setRuntimeEncoderDirection(uint8_t jointIndex, int8_t direction)
-{
-    if (jointIndex >= ENCODER_TOTAL_NUM || direction == 0) {
-        return false;
-    }
-    SharedSafetyGuard guard;
-    g_encoderDirection[jointIndex] = (direction < 0) ? -1 : 1;
-    return true;
-}
-
 // 初始化标定 RAM。P4 重启后由桌面端 JSON 通过 Manual/Calib Load 协议重新同步数据。
 void initializeCalibrationRuntimeState(void) {
     memset(g_jointCalibResult, 0, sizeof(g_jointCalibResult));

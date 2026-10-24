@@ -33,7 +33,7 @@ from .protocol import (
 
 
 CALIBRATION_SNAPSHOT_FORMAT = "mmhand_calibration_bundle"
-CALIBRATION_SNAPSHOT_SCHEMA_VERSION = 6
+CALIBRATION_SNAPSHOT_SCHEMA_VERSION = 7
 _JOINT_MASK = (1 << ENCODER_COUNT) - 1
 _SNAPSHOT_WRITE_LOCK = threading.RLock()
 
@@ -214,7 +214,7 @@ def seal_snapshot(payload: dict) -> dict:
 
 
 def validate_snapshot(payload: dict, *, verify_integrity: bool = True) -> dict:
-    """严格验证唯一受支持的 V6/V4 快照，不再兼容旧映射语义。"""
+    """严格验证唯一受支持的 V7/V4 快照，不再兼容旧映射语义。"""
     if not isinstance(payload, dict):
         raise CalibrationSnapshotError("snapshot root must be an object")
     if payload.get("format") != CALIBRATION_SNAPSHOT_FORMAT:
@@ -382,7 +382,7 @@ def validate_snapshot_for_load(
 
 
 def read_snapshot(path: Path | str) -> dict:
-    """读取并严格校验 V6 快照。"""
+    """读取并严格校验 V7 快照。"""
     source = Path(path)
     try:
         payload = json.loads(source.read_text(encoding="utf-8"))
@@ -428,7 +428,7 @@ def _normalized_list(values, count: int, default):
 
 
 def multiturn_anchor_fields(payload: dict) -> tuple[int, list[int], list[int]]:
-    """读取快照内的多圈后备锚点；旧 V6 快照没有该字段时视为全空。"""
+    """读取快照内的多圈后备锚点；缺失该字段时视为全空。"""
     has_any = any(
         key in payload
         for key in (
@@ -461,8 +461,8 @@ def multiturn_anchor_fields(payload: dict) -> tuple[int, list[int], list[int]]:
         raise CalibrationSnapshotError("invalid multiturn anchor values") from exc
 
 
-def _empty_v6_snapshot() -> dict:
-    """建立新的 V6 空快照。"""
+def _empty_v7_snapshot() -> dict:
+    """建立新的 V7 空快照。"""
     return {
         # 导入契约要求快照自带 hand_profile；缺失的文件无法通过 Inspect。
         "hand_profile": HAND_PROFILE,
@@ -600,7 +600,7 @@ def _update_manual_snapshot_locked(
                 for key in ("device_id", "urdf_repo_path")):
             raise CalibrationSnapshotError("existing Manual snapshot identity mismatch")
     else:
-        payload = _empty_v6_snapshot()
+        payload = _empty_v7_snapshot()
     if len(min_raw) != ENCODER_COUNT or len(max_raw) != ENCODER_COUNT:
         raise CalibrationSnapshotError("Manual endpoints must contain 21 entries")
     valid_mask = int(valid_mask) & _JOINT_MASK
@@ -818,7 +818,7 @@ def merge_snapshot(
             raise CalibrationSnapshotError("existing Auto snapshot identity mismatch")
         merged = json.loads(json.dumps(previous, ensure_ascii=False))
     else:
-        merged = _empty_v6_snapshot()
+        merged = _empty_v7_snapshot()
 
     anchor_valid, anchor_abs, anchor_raw = multiturn_anchor_fields(merged)
     merged["multiturn_anchor_valid_bitmap"] = format_mask(anchor_valid)
@@ -862,7 +862,7 @@ def merge_snapshot(
     merged["motor_abs_limit_min"] = merged_mins
     merged["motor_abs_limit_max"] = merged_maxs
     merged["motor_abs_limit_valid_bitmap"] = format_mask(merged_valid)
-    # 旧 V6 文件中的 motor_abs_limit_locked_bitmap 作为多余字段被忽略；
+    # 旧文件中的 motor_abs_limit_locked_bitmap 作为多余字段被忽略；
     # 新快照不再写出该字段，运行边界统一由 LUT 和 logical range 决定。
     merged.pop("motor_abs_limit_locked_bitmap", None)
 

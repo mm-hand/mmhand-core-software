@@ -53,8 +53,8 @@ def io(monkeypatch):
     state.encoder_raw_p4_time_ms = 1000
     state.encoder_online_bitmap = (1 << 21) - 1
     state.manual_reference_valid_bitmap = (1 << 21) - 1
-    state.manual_reference_min_raw = [10000] * 21
-    state.manual_reference_max_raw = [6000] * 21
+    state.manual_reference_min_raw = [6000] * 21
+    state.manual_reference_max_raw = [10000] * 21
     for encoder in state.encoders:
         encoder.raw_error = False
         encoder.raw_sensor = 10000
@@ -103,28 +103,26 @@ def test_lut_fit_pairs_p4_time_instead_of_latest_model_and_never_waits(io, monke
     fit = io.finish_lut_sampling(window)
     assert fit.count >= 3
     for sample in fit.samples:
-        assert sample.primary_abs == 100 + 2 * (sample.encoder - 6384)
+        assert sample.primary_abs == 300 + 2 * (9900 - sample.encoder)
         assert sample.secondary_abs == 0
     diagnostics = io._lut_sampling_diagnostics[1]
     assert (diagnostics['start_ms'], diagnostics['end_ms']) == (10, 100)
     assert diagnostics['raw_gap_ms'] == diagnostics['abs_gap_ms'] == 20
     assert diagnostics['fit_points'] == len(diagnostics['samples']) == fit.count
-    assert fit.samples[0].encoder == 6484
-    assert fit.samples[-1].encoder == 7384
+    assert fit.samples[0].encoder == 9900
+    assert fit.samples[-1].encoder == 9000
     io.controller.comm.send_command.assert_not_called()
 
 
-@pytest.mark.parametrize('change', ['reset', 'source', 'direction'])
+@pytest.mark.parametrize('change', ['reset', 'source'])
 def test_lut_fit_rejects_coordinate_or_source_change_without_fallback(io, change):
     history, window = _fit_window(io)
     _record_fit_raw(history, 100, 9000)
     _record_fit_abs(history, 110, 2300)
     if change == 'reset':
         history.reset()
-    elif change == 'source':
-        io.controller.comm.feedback_history = TimestampedFeedbackHistory()
     else:
-        io.set_direction(1, 1)
+        io.controller.comm.feedback_history = TimestampedFeedbackHistory()
     with pytest.raises(TimeAlignmentError):
         io.finish_lut_sampling(window)
     assert io.lut_sampling_error
@@ -168,9 +166,9 @@ def test_old_sampling_window_cannot_remove_new_active_window(io):
     assert io.finish_lut_sampling(active).count >= 3
 
 
-def test_encoder_raw_uses_packet_age_and_fixed_installation_direction(io):
+def test_encoder_raw_uses_packet_age_and_fixed_conversion(io):
     assert io.encoder_raw(1) == 10000
-    assert io.encoder(1) == 6384
+    assert io.encoder(1) == 10000
     io.controller.current_state.encoder_raw_p4_time_ms = 699
     assert io.encoder_raw(1) is None
 
@@ -927,7 +925,7 @@ def test_each_joint_writes_manual_and_lut_once_then_limits_and_anchors(io, monke
     assert [command for command, _value in sent] == [
         CMD_MANUAL_ENCODER_SINGLE, CMD_CALIB_LOAD_JOINT, CMD_CALIB_LOAD_LIMITS,
     ]
-    assert sent[0][1] == ('manual_encoder_single', 1, 10000, 6000)
+    assert sent[0][1] == ('manual_encoder_single', 1, 6000, 10000)
     assert sent[1][1][1]['tendonLutMotor'] == [2, 255]
     # 完整 5° 表随 result 一起提交/下发，不再压成 2 点直线。
     assert sent[1][1][1]['tendonLutCount'] == result['tendonLutCount'] > 2

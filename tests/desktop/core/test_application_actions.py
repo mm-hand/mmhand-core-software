@@ -92,8 +92,6 @@ def hand(monkeypatch, tmp_path):
     state.system_status_last_rx_ts = time.time()
     stamp(state, 'system_status_last_rx_ts')
     state.system_state = SYSTEM_STATE_READY
-    state.has_manual_reference_encoder_directions = True
-    state.manual_reference_encoder_directions = [-1] * 21
     state.protocol_compatible = True
     state.has_encoder_raw_data = True
     state.encoder_raw_last_rx_ts = time.time()
@@ -517,39 +515,41 @@ def test_direct_zero_invalid_scope_never_stops_or_writes(hand, monkeypatch, moto
     writer.assert_not_called()
 
 
-@pytest.mark.parametrize('minimum,maximum,direction,span', [(16000, 100, 1, 484), (100, 16000, -1, 484)])
-def test_manual_pair_preserves_direction_across_wrap(minimum, maximum, direction, span):
-    assert validate_manual_pair(minimum, maximum, direction) == span
+@pytest.mark.parametrize('minimum,maximum,span', [(16000, 100, 484)])
+def test_manual_pair_preserves_positive_travel_across_wrap(minimum, maximum, span):
+    assert validate_manual_pair(minimum, maximum) == span
 
 
-@pytest.mark.parametrize('minimum,maximum,direction', [(10, 10, 1), (100, 10, 1), (0, 8192, 1), (-1, 1, 1), (0, 10, 0)])
-def test_invalid_manual_pair_does_not_swap_endpoints(minimum, maximum, direction):
+@pytest.mark.parametrize('minimum,maximum', [(10, 10), (0, 8192), (-1, 1), (10, 0)])
+def test_invalid_manual_pair_does_not_swap_endpoints(minimum, maximum):
     with pytest.raises(ValueError):
-        validate_manual_pair(minimum, maximum, direction)
+        validate_manual_pair(minimum, maximum)
 
 
 def test_two_fresh_captures_save_once_then_single_endpoint_resaves(hand, monkeypatch):
     writer = Mock(return_value=True)
     monkeypatch.setattr(hand, 'set_manual_encoder_reference', writer)
+    state = hand._controller.current_state
+    state.encoders[0].raw_sensor = 11000
     assert wait_operation(hand, hand.request_manual_capture(0, 'min'))['status'] == 'SUCCESS'
     writer.assert_not_called()
-    state = hand._controller.current_state
-    state.encoders[0].raw_sensor = 11000  # J00 安装方向 -1
+    state.encoders[0].raw_sensor = 12000
     saved = wait_operation(hand, hand.request_manual_capture(0, 'max'))
     assert saved['status'] == 'SUCCESS'
     assert saved['message'] == ''
     assert hand.application_snapshot()['joints'][0]['capture_status'] == ''
-    assert writer.call_count == 1 and writer.call_args.args == (0, 12000, 11000)
+    assert writer.call_count == 1 and writer.call_args.args == (0, 11000, 12000)
     assert writer.call_args.kwargs['cancelled']() is False
-    state.encoders[0].raw_sensor = 12500
+    state.encoders[0].raw_sensor = 10500
     wait_operation(hand, hand.request_manual_capture(0, 'min'))
-    assert hand._manual_drafts[0]['max'] == 11000
+    assert hand._manual_drafts[0]['max'] == 12000
     assert writer.call_count == 2
-    assert writer.call_args.args == (0, 12500, 11000)
+    assert writer.call_args.args == (0, 10500, 12000)
 
 
 def test_manual_installed_but_not_saved_keeps_draft_until_next_set(hand, monkeypatch):
-    hand._manual_drafts[0] = dict(min=12000, max=11000, direction=-1, status='DRAFT')
+    hand._manual_drafts[0] = dict(min=11000, max=12000, status='DRAFT')
+    hand._controller.current_state.encoders[0].raw_sensor = 11000
     hand._controller.last_manual_write_phase = 'INSTALLED_NOT_SAVED'
     writer = Mock(side_effect=[False, True])
     monkeypatch.setattr(hand, 'set_manual_encoder_reference', writer)

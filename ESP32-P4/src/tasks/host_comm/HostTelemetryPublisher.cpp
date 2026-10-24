@@ -291,7 +291,7 @@ bool sendManualEncoderReferencePacket(SystemRuntimeContext* sharedData)
     buffer[idx++] = PROTOCOL_HEADER;
     buffer[idx++] = 0x00;
     buffer[idx++] = PACKET_TYPE_MANUAL_ENCODER_REFERENCE;
-    buffer[idx++] = 3; // Payload version: v3 appends P4 encoder directions.
+    buffer[idx++] = 4; // Payload version: v4; S3 raw is already direction-normalized.
     appendU32BigEndian(buffer, &idx, validMask);
     appendU32BigEndian(buffer, &idx, referenceCrc);
     appendU32BigEndian(buffer, &idx, revision);
@@ -301,9 +301,6 @@ bool sendManualEncoderReferencePacket(SystemRuntimeContext* sharedData)
     for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; joint++) {
         appendU16BigEndian(buffer, &idx, references[joint].minRaw);
         appendU16BigEndian(buffer, &idx, references[joint].maxRaw);
-    }
-    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; joint++) {
-        buffer[idx++] = (g_encoderDirection[joint] < 0) ? 0xFF : 0x01;
     }
     appendU32BigEndian(buffer, &idx, p4::platform::time::monotonicMillis());
     buffer[idx++] = PROTOCOL_TAIL;
@@ -482,8 +479,8 @@ bool sendJointCalibSnapshotPacket(uint8_t jointIndex)
         return false;
     }
     const JointCalibrationResult& result = snapshot.result;
-    // 当前唯一 V4 基础快照 189 bytes，附加 13 bytes 装配告警、4 bytes
-    // 时间戳和帧头尾后共 210 bytes；预留到 224，避免局部数组越界。
+    // 当前唯一 V4 基础快照 188 bytes，附加 13 bytes 装配告警、4 bytes
+    // 时间戳和帧头尾后共 209 bytes；预留到 224，避免局部数组越界。
     uint8_t buffer[224];
     size_t idx = 0;
     buffer[idx++] = PROTOCOL_HEADER;
@@ -503,7 +500,6 @@ bool sendJointCalibSnapshotPacket(uint8_t jointIndex)
     appendFloatBigEndian(buffer, &idx, result.tightDeg);
     appendFloatBigEndian(buffer, &idx, result.totalDeg);
     buffer[idx++] = result.scaled ? 1 : 0;
-    buffer[idx++] = (snapshot.encoderDirection < 0) ? 0xFF : 0x01;
     buffer[idx++] = result.tendonLutValid ? 1 : 0;
     buffer[idx++] = result.tendonLutCount;
     buffer[idx++] = result.tendonLutMotor[0];
@@ -542,7 +538,7 @@ bool sendJointCalibSnapshotPacket(uint8_t jointIndex)
     appendU16BigEndian(buffer, &idx, result.autoMinRaw);
     appendU16BigEndian(buffer, &idx, result.autoMaxRaw);
     appendU32BigEndian(buffer, &idx, result.manualReferenceCrc);
-    // 189-byte 基础快照保留两个旧 current 槽位；V4 已删除该概念，
+    // 188-byte 基础快照保留两个旧 current 槽位；V4 已删除该概念，
     // 固定输出 0.0 以维持 wire 长度，工作区由 URDF Min/Max 决定。
     appendFloatBigEndian(buffer, &idx, 0.0f);
     appendFloatBigEndian(buffer, &idx, 0.0f);

@@ -747,7 +747,7 @@ class TestLoadCalibrationSnapshot:
             }
         snapshot = seal_snapshot({
             "format": "mmhand_calibration_bundle",
-            "schema_version": 6,
+            "schema_version": 7,
             "hand_profile": "v2",
             "active_joint_mask": (1 << 9) | (1 << 10),
             "active_motor_mask": (1 << 12) | (1 << 13),

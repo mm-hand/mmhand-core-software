@@ -11,7 +11,6 @@ from desktop.core.protocol import (
     build_clear_manual_encoder_reference_cmd,
     build_manual_encoder_reference_cmd,
     build_servo_reset_zero_cmd,
-    directed_encoder_delta,
     parse_manual_encoder_reference_packet,
     parse_system_status_packet,
 )
@@ -160,7 +159,7 @@ def test_servo_reset_zero_command_contains_big_endian_motor_mask():
 def test_manual_reference_snapshot_parses_all_21_pairs():
     mins = [100 + i for i in range(ENCODER_COUNT)]
     maxs = [1000 + i for i in range(ENCODER_COUNT)]
-    payload = bytearray([3])
+    payload = bytearray([4])
     payload.extend(struct.pack(">III", (1 << ENCODER_COUNT) - 1, 0x12345678, 9))
     payload.append(1)
     payload.extend(struct.pack(">I", 0))
@@ -168,49 +167,16 @@ def test_manual_reference_snapshot_parses_all_21_pairs():
     for min_raw, max_raw in zip(mins, maxs):
         payload.extend(struct.pack(">HH", min_raw, max_raw))
 
-    payload.extend(bytes([1] * ENCODER_COUNT))
     parsed = parse_manual_encoder_reference_packet(bytes(payload))
 
     assert parsed is not None
+    assert parsed["version"] == 4
     assert parsed["valid_bitmap"] == (1 << ENCODER_COUNT) - 1
     assert parsed["reference_crc"] == 0x12345678
     assert parsed["revision"] == 9
     assert parsed["committed"] is True
     assert parsed["min_raw"] == mins
     assert parsed["max_raw"] == maxs
-    assert parsed["has_encoder_directions"] is True
-    assert parsed["encoder_directions"] == [1] * ENCODER_COUNT
-
-
-def test_manual_reference_v3_parses_p4_encoder_directions():
-    mins = [16000] * ENCODER_COUNT
-    maxs = [200] * ENCODER_COUNT
-    directions = [-1 if index % 2 == 0 else 1 for index in range(ENCODER_COUNT)]
-    payload = bytearray([3])
-    payload.extend(struct.pack(">III", (1 << ENCODER_COUNT) - 1, 0x87654321, 12))
-    payload.append(1)
-    payload.extend(struct.pack(">I", 0x00000003))
-    payload.append(1)
-    for min_raw, max_raw in zip(mins, maxs):
-        payload.extend(struct.pack(">HH", min_raw, max_raw))
-    for direction in directions:
-        payload.extend(struct.pack(">b", direction))
-
-    parsed = parse_manual_encoder_reference_packet(bytes(payload))
-
-    assert parsed is not None
-    assert parsed["version"] == 3
-    assert parsed["auto_valid_bitmap"] == 0x00000003
-    assert parsed["commit_status"] == 1
-    assert parsed["has_encoder_directions"] is True
-    assert parsed["encoder_directions"] == directions
-
-
-def test_directed_encoder_delta_matches_p4_cross_wrap_rules():
-    assert directed_encoder_delta(16000, 200, 1) == 584
-    assert directed_encoder_delta(200, 16000, -1) == 584
-    assert directed_encoder_delta(16000, 200, -1) == 15800
-    assert directed_encoder_delta(100, 200, 0) is None
 
 
 def test_manual_reference_snapshot_rejects_wrong_version_or_short_payload():

@@ -4,7 +4,7 @@ from dataclasses import replace
 
 from desktop.core import protocol as p
 from desktop.core.host_calibration.config import AutoCalibrationParams, kSingleTendonMaxReleaseCounts
-from desktop.core.host_calibration.math import TendonRawFitBuffer, orient_encoder_raw
+from desktop.core.host_calibration.math import TendonRawFitBuffer
 from desktop.core.host_calibration.time_alignment import TimeAlignmentError
 from desktop.core.host_calibration.single_motor import (
     AutoCalibState, JointCalibContext, run_single, step_single,
@@ -16,10 +16,9 @@ class FakeIO:
         self.ms = 0
         self.abs = 0
         self.encoder_value = 2000
-        self.raw_value = 14384
+        self.raw_value = 2000
         self.load = 0
         self.owner = True
-        self.direction_value = -1
         self.limits = {}
         self.diags = []
         self.traces = []
@@ -60,12 +59,6 @@ class FakeIO:
     def inside_limit(self, motor, target):
         return self.range[0] <= target <= self.range[1]
 
-    def set_direction(self, joint, direction):
-        self.direction_value = direction
-
-    def direction(self, joint):
-        return self.direction_value
-
     def clear_limits(self, joint):
         self.limits.clear()
 
@@ -73,7 +66,7 @@ class FakeIO:
         self.limits[motor] = (lo, hi)
 
     def manual_reference(self, joint):
-        return {"valid": True, "minRaw": 14384, "maxRaw": 10384}
+        return {"valid": True, "minRaw": 2000, "maxRaw": 6000}
 
     def urdf_limits(self, joint):
         return (0.0, 83.0)
@@ -92,7 +85,7 @@ class FakeIO:
         if self.dynamic and 2 in targets:
             self.abs = targets[2]
             self.encoder_value = 2000 + 4 * max(0, min(1000, self.abs))
-            self.raw_value = orient_encoder_raw(self.encoder_value, -1)
+            self.raw_value = self.encoder_value
             self.load = 250 if self.abs >= 1000 else 0
         return self.publish_ok
 

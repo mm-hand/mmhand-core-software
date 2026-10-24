@@ -796,12 +796,6 @@ class StateReducer:
             model.has_manual_reference_status = True
             model.manual_reference_min_raw = list(parsed["min_raw"])
             model.manual_reference_max_raw = list(parsed["max_raw"])
-            model.manual_reference_encoder_directions = list(
-                parsed.get("encoder_directions", [0] * ENCODER_COUNT)
-            )
-            model.has_manual_reference_encoder_directions = bool(
-                parsed.get("has_encoder_directions", False)
-            )
             emitted = True
         return emitted
 

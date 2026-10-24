@@ -26,7 +26,7 @@ from .calibration_diagnostics import (
     format_calibration_diagnostic, format_calibration_warning, format_calibration_batch_summary,
 )
 from .data_recording.recorder import DataSessionRecorder
-from .host_calibration.config import default_encoder_direction, joint_motors, shorten_sign
+from .host_calibration.config import joint_motors, shorten_sign
 from .session_log import log_session, session_log_since
 from .communication.connection_diagnostics import describe_connection_failure
 from .console_snapshot import enrich_snapshot, motor_quality
@@ -60,12 +60,12 @@ class DeviceChoice:
     description: str
 
 
-def validate_manual_pair(minimum: int, maximum: int, direction: int) -> int:
-    if direction not in (-1, 1) or not all(0 <= v < 16384 for v in (minimum, maximum)):
-        raise ValueError('Invalid Manual raw value or encoder direction')
-    span = ((maximum - minimum) * direction) % 16384
+def validate_manual_pair(minimum: int, maximum: int) -> int:
+    if not all(0 <= v < 16384 for v in (minimum, maximum)):
+        raise ValueError('Invalid Manual raw value')
+    span = (maximum - minimum) % 16384
     if not 0 < span < 8192:
-        raise ValueError('Manual endpoints are equal or the direction appears reversed. Capture again using the configured direction; endpoints are never swapped automatically.')
+        raise ValueError('Manual endpoints are equal or reversed. Capture again; endpoints are never swapped automatically.')
     return span
 
 
@@ -863,18 +863,13 @@ class ApplicationActions(IdResetActions):
             if (state.control_enabled or state.servo_target_owner or state.system_state == SYSTEM_STATE_ROPE_INIT_RUNNING
                     or current.control_enabled or current.servo_target_owner or current.system_state == SYSTEM_STATE_ROPE_INIT_RUNNING):
                 return False, 'Press STOP and wait until P4 is stationary before capturing Manual endpoints.'
-            if not state.has_manual_reference_encoder_directions:
-                return False, 'P4 encoder installation direction is unavailable. Wait for valid device status.'
-            direction = int(state.manual_reference_encoder_directions[joint])
-            if direction not in (-1, 1):
-                return False, 'P4 encoder installation direction is invalid. Check device configuration.'
             with self._application_lock:
                 if epoch != self._application_epoch:
                     return False, 'Capture cancelled'
                 self._joint_transactions.pop(joint, None)
                 self._motor_transactions[joint] = 'PENDING'
                 draft = self._manual_drafts.setdefault(joint, {})
-                draft.update({endpoint: int(encoder.raw_sensor), 'direction': direction, 'status': 'DRAFT'})
+                draft.update({endpoint: int(encoder.raw_sensor), 'status': 'DRAFT'})
                 pair = deepcopy(draft)
             if 'min' not in pair or 'max' not in pair:
                 status(f'{endpoint.title()} captured; other endpoint required')
@@ -896,7 +891,7 @@ class ApplicationActions(IdResetActions):
         with self._application_lock:
             pair = deepcopy(self._manual_drafts[joint])
         try:
-            validate_manual_pair(pair['min'], pair['max'], pair['direction'])
+            validate_manual_pair(pair['min'], pair['max'])
         except (ValueError, KeyError) as exc:
             with self._application_lock:
                 self._manual_drafts[joint]['status'] = 'VALIDATION_FAILED'
@@ -957,10 +952,8 @@ class ApplicationActions(IdResetActions):
             for j in joints:
                 if not state.manual_reference_valid_bitmap & (1 << j):
                     return OperationResult(False, None, f'J{j:02d} is missing Manual Min / Max')
-                direction = (state.manual_reference_encoder_directions[j] if state.has_manual_reference_encoder_directions
-                             else default_encoder_direction(j))
                 try:
-                    validate_manual_pair(state.manual_reference_min_raw[j], state.manual_reference_max_raw[j], direction)
+                    validate_manual_pair(state.manual_reference_min_raw[j], state.manual_reference_max_raw[j])
                 except ValueError as exc:
                     return OperationResult(False, None, f'J{j:02d}: {exc}')
             motors = sum(1 << m for j in joints for m in joint_motors(j))
@@ -1561,12 +1554,10 @@ class ApplicationActions(IdResetActions):
             for j, encoder in enumerate(state.encoders):
                 spec = get_spec(j)
                 draft = deepcopy(self._manual_drafts.get(j, {}))
-                direction = (state.manual_reference_encoder_directions[j] if state.has_manual_reference_encoder_directions
-                             else default_encoder_direction(j))
                 joints.append({'joint': j, 'name': spec.joint_name, 'angle': encoder.current_angle_deg if fresh and self._mapped_feedback_fresh(state) and not encoder.angle_error else None,
                                'raw': encoder.raw_sensor if fresh and state.has_encoder_raw_data and 0 <= now - state.encoder_raw_last_rx_ts <= 0.3 and not encoder.raw_error else None,
                                'target': encoder.target_angle_deg, 'min': spec.urdf_range_deg[0], 'max': spec.urdf_range_deg[1],
-                               'direction': direction, 'manual_min': state.manual_reference_min_raw[j],
+                               'manual_min': state.manual_reference_min_raw[j],
                                'manual_max': state.manual_reference_max_raw[j], 'manual_valid': bool(state.manual_reference_valid_bitmap & (1 << j)),
                                'auto_valid': bool(state.auto_calibration_valid_bitmap & (1 << j)), 'draft': draft})
             # 被取消的标定 worker 先收尾，然后释放应用操作门。

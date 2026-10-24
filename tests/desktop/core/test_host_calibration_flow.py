@@ -439,8 +439,6 @@ def test_begin_calibration_auto_includes_missing_aa_dependency(tmp_path, monkeyp
     monkeypatch.setattr(service._store, 'load', lambda: {'joint_calib_results': [None] * 21})
 
     baseline = HandModel()
-    baseline.has_manual_reference_encoder_directions = True
-    baseline.manual_reference_encoder_directions = [-1] * 21
     baseline.manual_reference_valid_bitmap = (1 << 21) - 1
     baseline.manual_reference_min_raw = [10000] * 21
     baseline.manual_reference_max_raw = [6000] * 21

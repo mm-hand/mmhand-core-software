@@ -5,6 +5,22 @@
 // 任务层使用的全局单例引用；实际对象由getInstance内的静态变量持有。
 HalEncoders &encoders = HalEncoders::getInstance();
 
+namespace {
+// S3 只发映射后的 raw：DIP 原始 raw 本来就随正方向增大，直接透传；
+// AA/MCP/PIP 原始 raw 随正方向减小，取 16384-raw。上位机看到的 raw 全部正方向增大。
+// 掩码是本手末端板的硬件事实，不是协议字段；换板或改链序必须同步改。
+// 拇指 J20 是根部，不在 DIP 集合。
+// ponytail: 固定掩码 0x88888；若末端板拓扑变化，改这里并重新验证 raw 方向。
+constexpr uint32_t kDipRawMask =
+    (1u << 3) | (1u << 7) | (1u << 11) | (1u << 15) | (1u << 19);
+constexpr uint16_t flip14(uint16_t raw) {
+    return static_cast<uint16_t>((16384u - (raw & 0x3FFFu)) & 0x3FFFu);
+}
+static_assert(flip14(0) == 0, "raw 0 must wrap to 0");
+static_assert(flip14(1) == 16383, "raw 1 must wrap to 16383");
+static_assert(flip14(16383) == 1, "raw 16383 must wrap to 1");
+} // namespace
+
 /** @brief 初始化21路状态机、命令流水线和错误锁存表。 */
 HalEncoders::HalEncoders() : _spi(nullptr) {
     for (int i = 0; i < ENCODER_TOTAL_NUM; i++) {
@@ -237,7 +253,8 @@ void HalEncoders::decodeFrame(
             outData.errorFlags[encoderId] = 1;
             _fsmStates[encoderId] = FSM_READ_ERRFL;
         } else {
-            outData.rawAngles[encoderId] = payload;
+            outData.rawAngles[encoderId] =
+                (kDipRawMask & (1u << encoderId)) ? payload : flip14(payload);
             outData.errorFlags[encoderId] = 0;
             _recoveryAttempts[encoderId] = 0;
             if (_latchedErrorCodes[encoderId] != ERR_CODE_LINK_LOST) {

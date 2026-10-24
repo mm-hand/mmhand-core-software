@@ -7,25 +7,21 @@ import zlib
 import pytest
 
 from desktop.core.host_calibration.config import (
-    AutoCalibrationParams, default_encoder_direction, kTendonRawSampleCapacity,
+    AutoCalibrationParams, kTendonRawSampleCapacity,
 )
 from desktop.core.host_calibration.math import (
     TendonRawFitBuffer, build_calibration_result, build_tendon_lut,
-    directed_encoder_delta, encoder_count_to_deg, f32,
-    manual_entry_crc, map_manual_scaled_encoder_to_urdf, orient_encoder_raw,
+    encoder_count_to_deg, f32,
+    forward_encoder_delta, manual_entry_crc, map_manual_scaled_encoder_to_urdf,
     round_to_int32, tendon_lut_sample_angle, tendon_motor_abs_limits,
     wrap_encoder_delta,
 )
 
 
 class MathIO:
-    def __init__(self, direction=1, limits=(0.0, 83.0), endpoints=(16000, 4000)):
-        self._direction = direction
+    def __init__(self, limits=(0.0, 83.0), endpoints=(16000, 4000)):
         self._limits = limits
         self.reference = {"valid": True, "minRaw": endpoints[0], "maxRaw": endpoints[1]}
-
-    def direction(self, joint):
-        return self._direction
 
     def urdf_limits(self, joint):
         return self._limits
@@ -37,25 +33,18 @@ class MathIO:
         return self.reference
 
 
-def test_original_default_parameters_and_fixed_direction_table():
+def test_original_default_parameters():
     assert vars(AutoCalibrationParams()) == {
         "tightenSpeedCountsPerSec": 400, "servoSpeed": 400, "servoAcc": 20,
         "loopMs": 20, "windowMs": 200, "traceMs": 200,
         "windowServoDeltaCounts": 50, "zeroReachAbsTolerance": 200,
         "stallActualDeg": 0.75, "tightLoadHigh": 250,
     }
-    assert tuple(default_encoder_direction(j) for j in range(21)) == (
-        -1, -1, -1, 1, -1, -1, -1, 1, -1, -1, -1, 1,
-        -1, -1, -1, 1, -1, -1, -1, 1, -1,
-    )
 
 
-@pytest.mark.parametrize("direction", [1, -1])
-def test_raw_orientation_is_self_inverse_and_cross_zero(direction):
-    for raw in (0, 1, 8000, 16383):
-        assert orient_encoder_raw(orient_encoder_raw(raw, direction), direction) == raw
-    assert directed_encoder_delta(16000, 400, 1) == 784
-    assert directed_encoder_delta(400, 16000, -1) == 784
+def test_forward_encoder_delta_cross_wrap():
+    assert forward_encoder_delta(16000, 400) == 784
+    assert forward_encoder_delta(400, 16000) == 15600
     assert wrap_encoder_delta(8192, 0) == 8192
     assert wrap_encoder_delta(0, 8192) == -8192
 
@@ -86,39 +75,18 @@ def test_full_manual_mapping_preserved_and_auto_endpoints_do_not_rescale():
     assert result["manualSpanCounts"] == 4384
     assert result["autoSpanCounts"] == 3684
     assert result["zeroEncoder"] != 0
-    at_min = map_manual_scaled_encoder_to_urdf(io, 1, result, 16000, 1)
-    at_max = map_manual_scaled_encoder_to_urdf(io, 1, result, 4000, 1)
+    at_min = map_manual_scaled_encoder_to_urdf(io, 1, result, 16000)
+    at_max = map_manual_scaled_encoder_to_urdf(io, 1, result, 4000)
     assert at_min["urdf_deg"] == 0.0
     assert at_max["urdf_deg"] == 83.0
-    below = map_manual_scaled_encoder_to_urdf(io, 1, result, 15990, 1)
-    above = map_manual_scaled_encoder_to_urdf(io, 1, result, 4010, 1)
+    below = map_manual_scaled_encoder_to_urdf(io, 1, result, 15990)
+    above = map_manual_scaled_encoder_to_urdf(io, 1, result, 4010)
     assert below["outside_counts"] == -10 and not below["feedback_ready"]
     assert above["outside_counts"] == 10 and above["feedback_ready"]
     assert below["urdf_deg"] == encoder_count_to_deg(-10)
     assert above["urdf_deg"] == f32(83.0 + encoder_count_to_deg(10))
     io.reference["maxRaw"] = 4001
-    assert map_manual_scaled_encoder_to_urdf(io, 1, result, 4000, 1) is None
-
-
-def test_negative_install_direction_physical_endpoints_and_fixed_lut_remainder():
-    io = MathIO(direction=-1, endpoints=(4000, 0))
-    # oriented raw 12384 -> 0 corresponds physical 4000 -> 0 across zero.
-    result = build_calibration_result(io, 1, 12384, 0, 0, -100, 400, 2000)
-    assert (result["autoMinRaw"], result["autoMaxRaw"]) == (4000, 0)
-    raw = TendonRawFitBuffer()
-    for encoder, primary, secondary in ((12384, 0, 1000), (14384, 1000, 500), (0, 2000, 0)):
-        assert raw.append(encoder, primary, secondary)
-    assert build_tendon_lut(io, 1, result, 2, 255, 1, raw)
-    # 完整 5° 表：0, 5, ..., 80, 83（末点按 angleMax 截断），不再压成 2 点。
-    assert result["tendonLutCount"] == 18
-    assert result["tendonLutAngleStepDeg"] == 5.0
-    assert result["tendonLutMotor"] == [2, 255]
-    assert result["tendonLutMotorAbs"][0][0] == 0
-    assert result["tendonLutMotorAbs"][0][8] == 964
-    assert result["tendonLutMotorAbs"][0][17] == 2000
-    assert result["tendonLutMotorAbs"][1] == [0] * 24
-    assert tendon_lut_sample_angle(result, 17) == 83.0
-    assert tendon_lut_sample_angle(result, 1) == 5.0
+    assert map_manual_scaled_encoder_to_urdf(io, 1, result, 4000) is None
 
 
 def test_buffer_capacity_sampling_threshold_and_duplicate_order():
@@ -141,7 +109,7 @@ def test_buffer_capacity_sampling_threshold_and_duplicate_order():
 
 
 def test_build_tendon_lut_keeps_the_full_5_degree_table():
-    io = MathIO(direction=1, limits=(0.0, 83.0), endpoints=(16000, 4000))
+    io = MathIO(limits=(0.0, 83.0), endpoints=(16000, 4000))
     result = build_calibration_result(io, 1, 16000, 0, 4000, 0, 1000, 2000)
     assert result
     raw = TendonRawFitBuffer()

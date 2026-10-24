@@ -28,8 +28,6 @@ from test_host_calibration_runtime import io
 def centered_io(io, monkeypatch):
     state = io.controller.current_state
     state.manual_reference_committed = True
-    state.has_manual_reference_encoder_directions = True
-    state.manual_reference_encoder_directions = [-1] * 21
     state.auto_calibration_valid_bitmap = sum(1 << aa for aa in range(0, 20, 4))
     state.motor_abs_limit_valid_bitmap = (1 << 27) - 1
     state.motor_abs_limit_min, state.motor_abs_limit_max = [-30000] * 27, [30000] * 27
@@ -39,7 +37,7 @@ def centered_io(io, monkeypatch):
         state.joint_calib_results[aa] = {
             'success': True, 'scaled': True, 'hasManualScaledV4Fields': True,
             'mappingVersion': 4, 'urdfConfigCrc': io.urdf_config_crc(),
-            'manualReferenceCrc': manual_encoder_reference_entry_crc(aa, 10000, 6000),
+            'manualReferenceCrc': manual_encoder_reference_entry_crc(aa, 6000, 10000),
             'manualSpanCounts': 4000,
             'currentMinDeg': lo, 'currentMaxDeg': hi, 'angleMin': lo, 'angleMax': hi,
             'tendonLutValid': True, 'tendonLutCount': count,

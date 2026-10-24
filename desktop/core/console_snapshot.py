@@ -11,7 +11,7 @@ measurements remain unknown; presentation labels never authorize motion.
 状态所有权：不拥有设备状态，不授权控制。
 禁止依赖：禁止依赖 UI 或改变硬件判据。
 """
-from .host_calibration.math import directed_encoder_delta, deg_to_encoder_count, f32
+from .host_calibration.math import forward_encoder_delta, deg_to_encoder_count, f32
 from .host_calibration.config import joint_motors
 from .motor_mapping import MOTOR_TO_JOINT_INDEX
 from .calibration_snapshot import parse_mask
@@ -100,7 +100,7 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
         row['collision_detected'] = bool(fresh and state.feedback_collision_hold_bitmap & (1 << j))
         result = state.joint_calib_results[j] or {}
         minimum, maximum = draft.get('min', row['manual_min']), draft.get('max', row['manual_max'])
-        span = directed_encoder_delta(minimum, maximum, row['direction']) if row['manual_valid'] or {'min', 'max'} <= draft.keys() else None
+        span = forward_encoder_delta(minimum, maximum) if row['manual_valid'] or {'min', 'max'} <= draft.keys() else None
         urdf_span = deg_to_encoder_count(f32(f32(row['max']) - f32(row['min'])))
         quality = joint_quality(row['manual_valid'] or draft.get('status') == 'SAVED', span, urdf_span, hand._joint_transactions.get(j, draft.get('status', '')), fresh)
         saved_pair = hand._manual_saved_pairs.get(j)

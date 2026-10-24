@@ -546,7 +546,6 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                             calib,
                             calibration.manual,
                             sensorData.encoderValues[i],
-                            calibration.encoderDirection,
                             &mapping);
                     if (!mapped) {
                         mappedData.angleValues[i] = 0;

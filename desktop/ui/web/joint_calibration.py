@@ -45,8 +45,7 @@ def build(hand, act, load_calibration, confirm):
                         with ui.row().classes('items-center gap-2 flex-nowrap'):
                             raw = label().classes('text-base font-bold text-slate-900 whitespace-nowrap')
                             with raw:
-                                ui.tooltip('Current raw encoder count. ↑ means raw increases with joint angle; ↓ means it decreases.')
-                            direction = label().classes('text-sm font-semibold text-slate-700 whitespace-nowrap')
+                                ui.tooltip('Current raw encoder count.')
                             min_value = ui.input('Manual Min', value='—').props('dense outlined readonly').classes('w-24')
                             min_button = maintenance_button(
                                 ui.button('Set Min', on_click=lambda j=j: act(lambda: hand.request_manual_capture(j, 'min'))).props('dense outline'))
@@ -55,7 +54,7 @@ def build(hand, act, load_calibration, confirm):
                                 ui.button('Set Max', on_click=lambda j=j: act(lambda: hand.request_manual_capture(j, 'max'))).props('dense outline'))
                             capture_status = label()
                         info = label().classes('text-xs leading-tight')
-                    def refresh(snapshot, j=j, badge=badge, info=info, raw=raw, direction=direction,
+                    def refresh(snapshot, j=j, badge=badge, info=info, raw=raw,
                                 min_value=min_value, max_value=max_value,
                                 min_button=min_button, max_button=max_button,
                                 capture_status=capture_status):
@@ -64,7 +63,6 @@ def build(hand, act, load_calibration, confirm):
                         min_button.set_enabled(allowed); max_button.set_enabled(allowed)
                         capture_status.set_text(row.get('capture_status', ''))
                         raw.set_text(f"Raw: {show(row.get('raw'))}")
-                        direction.set_text(f"Dir: {'↑' if row['direction'] > 0 else '↓'}")
                         min_value.set_value(show(row['manual_min']))
                         max_value.set_value(show(row['manual_max']))
                         if 'FAILED' in row['joint_quality']:

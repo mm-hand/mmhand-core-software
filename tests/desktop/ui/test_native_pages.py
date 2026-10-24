@@ -365,7 +365,7 @@ def test_joint_page_detail_is_manual_urdf_json_only_in_order(page):
     snapshot = idle_snapshot(hand)
     for row in snapshot['joints']:
         row.update(manual_min=-100, manual_max=200, span=300, urdf_span=310,
-                   min=-5.5, max=10.5, json_status='Saved', direction=1, raw=123)
+                   min=-5.5, max=10.5, json_status='Saved', raw=123)
     refresh(snapshot)
     details = [text for text in label_texts(client) if text.startswith('Manual Span:')]
     assert len(details) == 21
@@ -380,9 +380,6 @@ def test_joint_page_detail_is_manual_urdf_json_only_in_order(page):
     assert len(raw_labels) == 21
     assert raw_labels[0].text == 'Raw: 123'
     assert 'font-bold' in raw_labels[0].classes
-    direction_labels = [element for element in client.elements.values()
-                        if isinstance(element, ui.label) and (element.text or '').startswith('Dir:')]
-    assert len(direction_labels) == 21 and direction_labels[0].text == 'Dir: ↑'
     manual_inputs = [element for element in client.elements.values()
                      if isinstance(element, ui.input) and element.props.get('label') in ('Manual Min', 'Manual Max')]
     assert len(manual_inputs) == 42

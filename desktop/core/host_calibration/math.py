@@ -36,20 +36,9 @@ def wrap_encoder_count(value: int) -> int:
     return int(value) % kCalibrationEncoderModulo
 
 
-def orient_encoder_raw(raw: int, direction: int) -> int:
-    value = int(raw) & (kCalibrationEncoderModulo - 1)
-    return (-value if direction < 0 else value) & (kCalibrationEncoderModulo - 1)
-
-
 def forward_encoder_delta(start: int, end: int) -> int:
+    """S3 已发映射 raw；from -> to 的普通环形距离。"""
     return wrap_encoder_count(end - start)
-
-
-def directed_encoder_delta(start_raw: int, end_raw: int, direction: int) -> int:
-    if direction not in (-1, 1):
-        return -1
-    start, end = start_raw & 16383, end_raw & 16383
-    return wrap_encoder_count((end - start) if direction > 0 else (start - end))
 
 
 def wrap_encoder_delta(target: int, actual: int) -> int:
@@ -89,15 +78,14 @@ def _manual_endpoints(reference: dict) -> tuple[int, int]:
 
 
 def apply_manual_scaled_mapping(io, joint: int, result: dict,
-                                auto_min_raw: int, auto_max_raw: int,
-                                direction: int) -> bool:
+                                auto_min_raw: int, auto_max_raw: int) -> bool:
     manual = io.manual_reference(joint)
     lo, hi = _manual_endpoints(manual)
     if (not 0 <= joint < ENCODER_COUNT or not manual.get("valid", False)
             or not all(0 <= value < 16384 for value in (lo, hi, auto_min_raw, auto_max_raw))):
         return False
-    manual_span = directed_encoder_delta(lo, hi, direction)
-    auto_span = directed_encoder_delta(auto_min_raw, auto_max_raw, direction)
+    manual_span = forward_encoder_delta(lo, hi)
+    auto_span = forward_encoder_delta(auto_min_raw, auto_max_raw)
     if not 0 < manual_span < 16384 or not 0 < auto_span < 16384:
         return False
     urdf_min, urdf_max = (f32(v) for v in io.urdf_limits(joint))
@@ -110,12 +98,12 @@ def apply_manual_scaled_mapping(io, joint: int, result: dict,
                   manualSpanCounts=manual_span, autoSpanCounts=auto_span,
                   manualReferenceCrc=manual_entry_crc(joint, manual),
                   angleMin=urdf_min, angleMax=urdf_max,
-                  urdfConfigCrc=int(io.urdf_config_crc()), encoderDirection=direction)
+                  urdfConfigCrc=int(io.urdf_config_crc()))
     return True
 
 
 def map_manual_scaled_encoder_to_urdf(io, joint: int, result: dict,
-                                    raw: int, direction: int) -> dict | None:
+                                    raw: int) -> dict | None:
     """原 mapManualScaledEncoderToUrdf；Auto 不参与反馈角比例。"""
     if not 0 <= joint < ENCODER_COUNT:
         return None
@@ -138,10 +126,10 @@ def map_manual_scaled_encoder_to_urdf(io, joint: int, result: dict,
             or any(abs(f32(v - expected)) > f32(0.01)
                    for v, expected in zip(values, (urdf_min, urdf_max)))):
         return None
-    span = directed_encoder_delta(lo, hi, direction)
+    span = forward_encoder_delta(lo, hi)
     if not 0 < span < 16384 or span != stored_span:
         return None
-    forward = directed_encoder_delta(lo, raw, direction)
+    forward = forward_encoder_delta(lo, raw)
     coordinate = forward
     if forward > span:
         above, below = forward - span, 16384 - forward
@@ -225,10 +213,9 @@ def build_calibration_result(io, joint: int, taut_encoder: int,
               "zeroServoAbs": zero_abs, "startDeg": kLutStartDeg,
               "tightDeg": f32(kLutStartDeg + total_deg), "totalDeg": total_deg,
               "angleMax": f32(kLutStartDeg + total_deg)}
-    direction = io.direction(joint)
-    auto_min = orient_encoder_raw(wrap_encoder_count(taut_encoder), direction)
-    auto_max = orient_encoder_raw(wrap_encoder_count(tight_encoder), direction)
-    if not apply_manual_scaled_mapping(io, joint, result, auto_min, auto_max, direction):
+    auto_min = wrap_encoder_count(taut_encoder)
+    auto_max = wrap_encoder_count(tight_encoder)
+    if not apply_manual_scaled_mapping(io, joint, result, auto_min, auto_max):
         return None
     return result
 
@@ -310,8 +297,8 @@ def build_tendon_lut(io, joint: int, result: dict, primary: int,
         return False
     samples: list[tuple[float, int, int]] = []
     for sample in raw.samples:
-        physical_raw = orient_encoder_raw(wrap_encoder_count(sample.encoder), io.direction(joint))
-        mapped = map_manual_scaled_encoder_to_urdf(io, joint, result, physical_raw, io.direction(joint))
+        physical_raw = wrap_encoder_count(sample.encoder)
+        mapped = map_manual_scaled_encoder_to_urdf(io, joint, result, physical_raw)
         angle = mapped["urdf_deg"] if mapped else math.nan
         if (not math.isfinite(angle) or angle < f32(urdf_min - 180.0)
                 or angle > f32(urdf_max + 180.0) or len(samples) >= kTendonRawSampleCapacity):

@@ -245,8 +245,8 @@ def test_calibrate_selected_auto_releases_active_owner(hand, monkeypatch):
     state.control_enabled = True
     state.servo_target_owner = 1
     state.manual_reference_valid_bitmap |= 1 << 3
-    state.manual_reference_min_raw[3] = 10000
-    state.manual_reference_max_raw[3] = 6000
+    state.manual_reference_min_raw[3] = 6000
+    state.manual_reference_max_raw[3] = 10000
     hand._selected_joints = (3,)
     entered = threading.Event()
     monkeypatch.setattr(
@@ -440,19 +440,19 @@ def test_max_first_and_repeated_same_end_require_the_other_end(hand, monkeypatch
     for _ in range(2):
         assert wait_operation(hand, hand.request_manual_capture(0, 'max'))['status'] == 'SUCCESS'
     writer.assert_not_called()
-    hand._controller.current_state.encoders[0].raw_sensor = 13000
+    hand._controller.current_state.encoders[0].raw_sensor = 11000
     wait_operation(hand, hand.request_manual_capture(0, 'min'))
-    assert writer.call_count == 1 and writer.call_args.args == (0, 13000, 12000)
-    hand._controller.current_state.encoders[0].raw_sensor = 11500
+    assert writer.call_count == 1 and writer.call_args.args == (0, 11000, 12000)
+    hand._controller.current_state.encoders[0].raw_sensor = 12500
     wait_operation(hand, hand.request_manual_capture(0, 'max'))
-    assert writer.call_args.args == (0, 13000, 11500)
+    assert writer.call_args.args == (0, 11000, 12500)
 
 def test_save_failure_retains_pair_and_next_set_retries_once(hand, monkeypatch):
     writer = Mock(side_effect=[False, True])
     monkeypatch.setattr(hand, 'set_manual_encoder_reference', writer)
     hand._controller.last_manual_write_phase = 'INSTALLED_NOT_SAVED'
     wait_operation(hand, hand.request_manual_capture(0, 'min'))
-    hand._controller.current_state.encoders[0].raw_sensor = 11000
+    hand._controller.current_state.encoders[0].raw_sensor = 13000
     assert wait_operation(hand, hand.request_manual_capture(0, 'max'))['status'] == 'FAILED'
     assert hand.application_snapshot()['joints'][0]['joint_quality'] == ['FAILED']
     time.sleep(0.03)
@@ -472,7 +472,7 @@ def test_stop_bypasses_real_manual_backend_transaction_lock(hand, monkeypatch):
     monkeypatch.setattr(hand._controller, 'stop', Mock())
     monkeypatch.setattr(hand._controller, 'set_manual_encoder_reference', blocked)
     wait_operation(hand, hand.request_manual_capture(0, 'min'))
-    hand._controller.current_state.encoders[0].raw_sensor = 11000
+    hand._controller.current_state.encoders[0].raw_sensor = 13000
     result = hand.request_manual_capture(0, 'max')
     assert entered.wait(1)
     started = time.monotonic()

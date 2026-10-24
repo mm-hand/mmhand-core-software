@@ -602,7 +602,6 @@ class _DualMachine:
                        self.joint, -1, -1, 0)
             return None
         primary, secondary = motors
-        self.io.set_direction(self.joint, config.default_encoder_direction(self.joint))
         self.io.clear_limits(self.joint)
         initial = self._wait_initial_feedback(primary, secondary)
         if initial is None:
@@ -722,7 +721,7 @@ class _DualMachine:
         # Match firmware: lutBuilt is logged; valid mapping/result governs commit.
         lut_built = build_tendon_lut(self.io, self.joint, result, primary, secondary, 2, fit)
         ready_map = map_manual_scaled_encoder_to_urdf(self.io, self.joint, result,
-                                                     ready_raw, self.io.direction(self.joint))
+                                                     ready_raw)
         if not ready_map or not ready_map["valid"]:
             self._workspace_failed(self.joint, self.joint, POSE_NONE, STAGE_POST_CALIBRATION)
             return None

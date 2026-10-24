@@ -32,7 +32,6 @@ def _minimal_v4_result() -> dict:
         "tightDeg": 90.0,
         "totalDeg": 90.0,
         "scaled": True,
-        "encoderDirection": 1,
         "tendonLutValid": False,
         "tendonLutCount": 0,
         "tendonLutMotor": [0xFF, 0xFF],
@@ -51,9 +50,9 @@ def _minimal_v4_result() -> dict:
 def test_calib_load_joint_uses_only_v4_payload() -> None:
     frame = build_calib_load_joint_cmd(_minimal_v4_result())
 
-    assert COMMAND_PAYLOAD_LENGTHS[CMD_CALIB_LOAD_JOINT] == 189
-    assert len(frame) == 193
-    assert len(frame[3:-1]) == 189
+    assert COMMAND_PAYLOAD_LENGTHS[CMD_CALIB_LOAD_JOINT] == 188
+    assert len(frame) == 192
+    assert len(frame[3:-1]) == 188
 
 
 def test_snapshot_parser_rejects_removed_v2_lengths() -> None:
@@ -86,9 +85,9 @@ def test_full_5_degree_lut_round_trips_through_the_v4_load_frame() -> None:
         tendonLutMotorAbs=rows,
     )
     payload = build_calib_load_joint_cmd(result)[3:-1]
-    assert len(payload) == 189
-    # 布局：... scaled(1) direction(1) lutValid(1) count(1) motors(2) start(4) step(4)
-    count_offset = 1 + 1 + 4 + 4 * 4 + 3 * 4 + 3 * 4 + 1 + 1 + 1
+    assert len(payload) == 188
+    # 布局：... scaled(1) lutValid(1) count(1) motors(2) start(4) step(4)
+    count_offset = 1 + 1 + 4 + 4 * 4 + 3 * 4 + 3 * 4 + 1 + 1
     assert payload[count_offset] == 24
     assert payload[count_offset + 1] == 0 and payload[count_offset + 2] == 1
     # LUT 块 = 2 路 × (int32 anchor + 24 × int16 delta)，其后是 25 字节尾部。

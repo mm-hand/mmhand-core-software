@@ -255,7 +255,7 @@ selector=`finger_bus×3+pageID`，共0–14；手指顺序Little/Ring/Middle/Ind
 
 ### 4.4 S3 ↔ 传感器、P4 ↔ 舵机
 
-- 磁编AS5047P：独立SPI，10MHz、14位角度0–16383，21路按五指译码/链路组织；校验与诊断状态机在HalEncoders。采样无效在CAN中编码成0xFFFF。
+- 磁编AS5047P：独立SPI，10MHz、14位角度0–16383，21路按五指译码/链路组织；校验与诊断状态机在HalEncoders。S3已在raw源头把链末DIP通道归一化为统一方向（关节正方向raw递减），P4/上位机不再保存或传输磁编方向。采样无效在CAN中编码成0xFFFF。
 - PaXini触觉：独立SPI，1MHz，功能码/两字节小端寄存器地址/两字节小端长度/数据/CRC8，厂商CRC初值FF。解锁`7A 01 00 01 00 A1 CE`，改号`7E 23 00 01 00 dest_id CRC8`。目标片选号1/2/3对应尾部`01 22`、`02 23`、`03 E3`。采集和改号在同一触觉任务两轮之间串行执行。
 - 两型号：DP-S2015-Elite PXSR-STDDP03G为指尖52测点；IP-S1610-Elite PXSR-STDIP03B为指腹25测点。满配5×(52+25+25)×3=1530字节，当前实物只读到3个模块，不是15个满配验收。
 - P4飞特总线：四路1Mbaud UART，RX={21,23,27,33}、TX={20,22,26,32}。由FeetechServoDriver封装飞特寄存器读写、同步读/写、校验、EEPROM解锁/重锁；不是把上位机FE帧直接透传到舵机。
@@ -337,7 +337,7 @@ S3维护等待者→独立USB发送      S3 RX→触觉解析/维护token匹配
 
 | 主页面/子页 | 布局、按钮与功能 |
 |---|---|
-| Calibration / Joint Calibration | 五指卡片、手指/关节复选框、原始磁编及方向、Manual Min/Max、Span与URDF差值、Auto端点和RAM/JSON状态。Load Joint & Motor Calibration、Clear Manual Selected、Release Selected Tendons，每行Set Min/Set Max；采集/保存/验证状态显示。清除/释放操作有现存确认交互。 |
+| Calibration / Joint Calibration | 五指卡片、手指/关节复选框、原始磁编、Manual Min/Max、Span与URDF差值、Auto端点和RAM/JSON状态。Load Joint & Motor Calibration、Clear Manual Selected、Release Selected Tendons，每行Set Min/Set Max；采集/保存/验证状态显示。清除/释放操作有现存确认交互。 |
 | Calibration / Motor Calibration | 选择关节，展开相关电机表，显示BUS、路由、多圈、raw、ABS、load、关节角、ABS限位、回程偏差和行程不足。Load、Calibrate Selected；当前运行关节CALIBRATING，后续PENDING，完成后显示质量标签。自动标定算法由上位机执行。 |
 | Control / Feedback Control | 五指关节卡片、角度输入/滑条、单行Send、Manual允许范围、当前角、ROS2目标、raw和相关电机ABS。ENABLE Selected、Clear Faults、Send Selected、ROS2 INPUT。每个关节以P4状态确认ENABLED/DISABLED；仅该关节实际碰撞时追加红色COLLISION DETECTED。 |
 | Control / Direct Control | 按关节归组的电机卡片、BUS/route/turn、当前与保存raw、ABS、load、关联关节角、logical ABS范围和输入/滑条/±1/Send。ENABLE Selected、Clear Faults、Send Selected、Reset Motor Multi-turn Position；设零按实际执行回读，并使有关标定/锚点失效。 |

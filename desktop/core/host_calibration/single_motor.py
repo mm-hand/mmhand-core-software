@@ -16,7 +16,7 @@ from enum import IntEnum
 from .. import protocol as p
 from .config import (
     AutoCalibrationParams, ENCODER_COUNT, MOTOR_COUNT,
-    primary_motor, shorten_sign, default_encoder_direction, load_magnitude,
+    primary_motor, shorten_sign, load_magnitude,
     motor_apply_tendon_delta, single_tendon_release_counts,
     kInitialFeedbackWaitMs, kSingleTendonMaxReleaseCounts,
     kReverseMinFollowDeg, kAngleStallStableSamples,
@@ -145,7 +145,7 @@ def _initialize_tighten(ctx, io, params):
     ctx.state = AutoCalibState.TIGHTEN
     io.trace("AUTO_SAMPLE_RANGE_BEGIN", ctx.joint, ctx.motor, start_deg=kLutStartDeg)
     io.trace("START", ctx.joint, ctx.motor, abs=actual, raw=raw, oriented=encoder,
-             direction=io.direction(ctx.joint), baseline_load=ctx.baseline_load,
+             baseline_load=ctx.baseline_load,
              speed_cps=params.tightenSpeedCountsPerSec)
     return True
 
@@ -241,7 +241,6 @@ def _finish_release(ctx, io, params, targets, current_raw, encoder, actual,
               p.CALIB_DIAG_PHASE_RELEASE, a=result["encoderSpan"], b=release_encoder, c=max_encoder)
         return
     io.trace("ENCODER_RESULT", ctx.joint, ctx.motor,
-             default_direction=default_encoder_direction(ctx.joint), runtime_direction=io.direction(ctx.joint),
              tight_to_max=signed_tight_to_max, result_taut=taut_encoder,
              result_zero=zero_encoder, result_tight=tight_encoder)
     io.trace("SINGLE_LUT", ctx.joint, ctx.motor, raw_samples=ctx.fit_samples.count,
@@ -295,8 +294,6 @@ def step_single(ctx: JointCalibContext, io, params: AutoCalibrationParams,
         if not ctx.init_started:
             ctx.init_started = True
             ctx.state_begin_ms, ctx.last_command_ms, ctx.last_trace_ms = now, 0, 0
-            if hasattr(io, "set_direction"):
-                io.set_direction(ctx.joint, default_encoder_direction(ctx.joint))
             io.clear_limits(ctx.joint)
         unknown_mask = int(getattr(io, "multi_turn_unknown_bitmap", 0))
         if unknown_mask & (1 << ctx.motor):

@@ -425,8 +425,6 @@ class HandModel:
     has_manual_reference_status: bool = False
     manual_reference_min_raw: List[int] = field(default_factory=lambda: [0] * ENCODER_COUNT)
     manual_reference_max_raw: List[int] = field(default_factory=lambda: [0] * ENCODER_COUNT)
-    manual_reference_encoder_directions: List[int] = field(default_factory=lambda: [0] * ENCODER_COUNT)
-    has_manual_reference_encoder_directions: bool = False
     has_active_scope_status: bool = False
     active_motor_mask: int = 0
     active_joint_mask: int = 0

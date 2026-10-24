@@ -63,7 +63,6 @@ def test_joint_calibration_current_protocol_round_trip():
         "tightDeg": 69.7,
         "totalDeg": 74.7,
         "scaled": True,
-        "encoderDirection": 1,
         "tendonLutValid": True,
         "tendonLutCount": 3,
         "tendonLutMotor": [5, 6],
@@ -88,7 +87,7 @@ def test_joint_calibration_current_protocol_round_trip():
     assert frame[2] == CMD_CALIB_LOAD_JOINT
     assert frame[-1] == PROTOCOL_TAIL
     # currentMin/Max 已从 host 概念删除，但下行仍保留 8 字节槽位：wire 长度不变。
-    assert len(frame[3:-1]) == 189
+    assert len(frame[3:-1]) == 188
 
     parsed = parse_joint_calib_snapshot_packet(frame[3:-1] + bytes(13))
     assert parsed is not None
@@ -116,7 +115,6 @@ def test_joint_calibration_preserves_large_logical_abs():
     result = {
         "joint": 4,
         "success": True,
-        "encoderDirection": 1,
         "mappingVersion": mapping_version,
         "urdfConfigCrc": mapping_crc,
         "autoMinRaw": 100,
@@ -173,7 +171,6 @@ def test_joint_calibration_snapshot_parses_optional_warning_details():
         "tightDeg": 65.0,
         "totalDeg": 65.0,
         "scaled": True,
-        "encoderDirection": 1,
         "mappingVersion": mapping_version,
         "angleMin": 0.0,
         "urdfConfigCrc": mapping_crc,
@@ -226,7 +223,6 @@ def test_joint_calibration_snapshot_parses_p4_timestamped_uplink():
         "tightDeg": 90.647,
         "totalDeg": 95.647,
         "scaled": True,
-        "encoderDirection": -1,
         "tendonLutValid": True,
         "tendonLutCount": 1,
         "tendonLutMotor": [18, 0xFF],
@@ -234,8 +230,8 @@ def test_joint_calibration_snapshot_parses_p4_timestamped_uplink():
         "tendonLutAngleStepDeg": 5.0,
         "tendonLutMotorAbs": [[151], []],
         "urdfConfigCrc": mapping_crc,
-        "autoMinRaw": 1733,
-        "autoMaxRaw": 13764,
+        "autoMinRaw": 14651,
+        "autoMaxRaw": 2620,
         "manualReferenceCrc": 0x12345678,
         "currentMinDeg": -9.0,
         "currentMaxDeg": 89.0,
@@ -248,14 +244,14 @@ def test_joint_calibration_snapshot_parses_p4_timestamped_uplink():
     body, timestamp = split_p4_timestamp(PACKET_TYPE_JOINT_CALIB_SNAPSHOT, bytes(payload))
     parsed = parse_joint_calib_snapshot_packet(body)
 
-    assert len(payload) == 206
+    assert len(payload) == 205
     assert parsed is not None
     assert parsed["joint"] == 14
     assert parsed["hasAssemblyWarningFields"] is True
     assert timestamp == 0x1234ABCD
 
 
-def test_direction_negative_snapshot_requires_physical_raw_endpoints():
+def test_snapshot_requires_fixed_physical_raw_endpoints():
     mapping_version, mapping_crc = urdf_manual_scaled_mapping_metadata()
     result = {
         "joint": 14,
@@ -275,12 +271,11 @@ def test_direction_negative_snapshot_requires_physical_raw_endpoints():
         "tightDeg": 88.0,
         "totalDeg": 97.0,
         "scaled": True,
-        "encoderDirection": -1,
         "mappingVersion": mapping_version,
         "angleMin": -9.0,
         "urdfConfigCrc": mapping_crc,
-        "autoMinRaw": 9986,
-        "autoMaxRaw": 5786,
+        "autoMinRaw": 6398,
+        "autoMaxRaw": 10598,
         "manualReferenceCrc": 0x12345678,
         "currentMinDeg": -9.0,
         "currentMaxDeg": 88.0,
@@ -289,7 +284,7 @@ def test_direction_negative_snapshot_requires_physical_raw_endpoints():
     frame = build_calib_load_joint_cmd(result)
     assert frame[2] == CMD_CALIB_LOAD_JOINT
 
-    result["autoMinRaw"] = 6398
-    result["autoMaxRaw"] = 10598
+    result["autoMinRaw"] = 9986
+    result["autoMaxRaw"] = 5786
     with pytest.raises(ValueError, match="endpoint contract mismatch"):
         build_calib_load_joint_cmd(result)

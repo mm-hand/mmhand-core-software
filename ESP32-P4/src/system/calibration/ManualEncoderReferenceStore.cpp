@@ -113,8 +113,8 @@ bool manualEncoderReferencesCoverActiveMask(uint32_t requiredMask)
             reference.maxRaw >= kCalibrationEncoderModulo) {
             continue;
         }
-        const int32_t span = calibrationDirectedEncoderDelta(
-            reference.minRaw, reference.maxRaw, g_encoderDirection[joint]);
+        const int32_t span = calibrationForwardEncoderDelta(
+            reference.minRaw, reference.maxRaw);
         if (span > 0 && span < kCalibrationEncoderModulo) {
             usableMask |= 1UL << joint;
         }

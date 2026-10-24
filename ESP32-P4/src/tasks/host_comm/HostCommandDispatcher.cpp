@@ -658,7 +658,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                 result.tightDeg = readFloatBigEndian(p); p += 4;
                 result.totalDeg = readFloatBigEndian(p); p += 4;
                 result.scaled = (*p++ != 0);
-                const int8_t direction = ((int8_t)(*p++)) < 0 ? -1 : 1;
                 result.tendonLutValid = (*p++ != 0) ? 1 : 0;
                 result.tendonLutCount = *p++;
                 result.tendonLutMotor[0] = *p++;
@@ -684,7 +683,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                 const uint16_t autoMaxRaw = readU16BigEndian(p); p += 2;
                 const uint32_t incomingManualCrc = readU32BigEndian(p); p += 4;
                 // V4 工作区固定为生成的 URDF Min/Max；保留旧 current 双槽位
-                // 以维持 189-byte payload，仅跳过不保存。
+                // 以维持 188-byte payload，仅跳过不保存。
                 p += 8;
 
                 const uint32_t localManualEntryCrc =
@@ -692,18 +691,13 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                         jointIndex, g_manualEncoderReference[jointIndex]);
                 const uint32_t localValidMask =
                     sharedAtomicLoad(&sharedData->manual_reference_valid_bitmap);
-                // V4 Auto 端点必须是物理 14-bit raw；方向化标定坐标不能写入这些字段，
-                // 否则 direction=-1 关节会产生错误的补码跨度。
+                // S3 只发映射 raw；start/tight 就是 Auto 端点的 raw，P4 不再取反。
                 const uint16_t expectedAutoMinRaw =
-                    (uint16_t)calibrationOrientEncoderRaw(
-                        (uint16_t)calibrationWrapEncoderCount(
-                            result.startEncoder),
-                        direction);
+                    (uint16_t)calibrationWrapEncoderCount(
+                        result.startEncoder);
                 const uint16_t expectedAutoMaxRaw =
-                    (uint16_t)calibrationOrientEncoderRaw(
-                        (uint16_t)calibrationWrapEncoderCount(
-                            result.tightEncoder),
-                        direction);
+                    (uint16_t)calibrationWrapEncoderCount(
+                        result.tightEncoder);
                 if (incomingMappingVersion !=
                         kManualScaledUrdfFeedbackMappingVersion ||
                     incomingUrdfCrc != kManualScaledUrdfConfigCrc) {
@@ -716,21 +710,19 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                            autoMaxRaw != expectedAutoMaxRaw) {
                     FW_LOG_WARN_PRINTF(
                         "[UPPER] CALIB_LOAD reject J%02u raw endpoint "
-                        "contract: incoming=%u->%u expected=%u->%u dir=%d; "
+                        "contract: incoming=%u->%u expected=%u->%u; "
                         "recalibration required\r\n",
                         (unsigned)jointIndex,
                         (unsigned)autoMinRaw,
                         (unsigned)autoMaxRaw,
                         (unsigned)expectedAutoMinRaw,
-                        (unsigned)expectedAutoMaxRaw,
-                        (int)direction);
+                        (unsigned)expectedAutoMaxRaw);
                     status = PROTO_ACK_STATUS_INVALID_DATA;
                 } else if (!applyManualScaledUrdfMappingToCalibration(
                                jointIndex,
                                g_manualEncoderReference[jointIndex],
                                autoMinRaw,
                                autoMaxRaw,
-                               direction,
                                localManualEntryCrc,
                                &result)) {
                     status = PROTO_ACK_STATUS_INVALID_DATA;
@@ -752,7 +744,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                         (unsigned)jointIndex);
                 } else {
                     publishJointCalibrationResult(jointIndex, result);
-                    setRuntimeEncoderDirection(jointIndex, direction);
                     if (result.success) {
                         updateCalibrationAssemblyWarning(
                             sharedData, jointIndex, result);

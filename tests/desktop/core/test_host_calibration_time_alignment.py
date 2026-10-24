@@ -25,7 +25,7 @@ def linear_frames():
 
 
 def test_async_linear_motion_restores_same_time_pair_instead_of_latest_read():
-    result = align_feedback(linear_frames(), 0, (0, 1), 1)
+    result = align_feedback(linear_frames(), 0, (0, 1))
     assert [sample.timestamp_ms for sample in result.samples] == [50, 100, 150, 200, 250, 300]
     assert result.raw_point_count == result.abs_point_count == 4
     assert (result.overlap_start_ms, result.overlap_end_ms) == (50, 300)
@@ -42,17 +42,17 @@ def test_arrival_delay_and_packet_order_do_not_change_p4_time_fit():
     delayed = [frame(item.kind, item.p4_time_ms, item.values, item.sequence,
                      item.valid_mask, arrival=1000.0 - index)
                for index, item in enumerate(reversed(packets))]
-    assert align_feedback(delayed, 0, (0, 1), 1) == align_feedback(packets, 0, (0, 1), 1)
+    assert align_feedback(delayed, 0, (0, 1)) == align_feedback(packets, 0, (0, 1))
 
 
-def test_piecewise_fit_preserves_a_measured_direction_change_without_global_smoothing():
+def test_piecewise_fit_preserves_a_measured_motion_reversal_without_global_smoothing():
     packets = [frame("encoder_raw", 0, (1000,), 1),
                frame("encoder_raw", 100, (1500,), 2),
                frame("encoder_raw", 200, (1000,), 3),
                frame("servo_abs", 25, (100,), 4),
                frame("servo_abs", 125, (300,), 5),
                frame("servo_abs", 225, (500,), 6)]
-    result = align_feedback(packets, 0, (0,), 1)
+    result = align_feedback(packets, 0, (0,))
     assert [(sample.timestamp_ms, sample.encoder, sample.primary_abs)
             for sample in result.samples] == [
                 (25, 1125, 100), (100, 1500, 250),
@@ -60,17 +60,16 @@ def test_piecewise_fit_preserves_a_measured_direction_change_without_global_smoo
             ]
 
 
-@pytest.mark.parametrize("direction", [1, -1])
-def test_physical_encoder_wrap_is_unwrapped_before_interpolation(direction):
+def test_physical_encoder_wrap_is_unwrapped_before_interpolation():
     packets = [frame("encoder_raw", 0, (16380,), 1),
                frame("encoder_raw", 100, (4,), 2),
                frame("servo_abs", 25, (20,), 3),
                frame("servo_abs", 75, (60,), 4)]
-    result = align_feedback(packets, 0, (0,), direction)
+    result = align_feedback(packets, 0, (0,))
     assert [(sample.timestamp_ms, sample.encoder, sample.primary_abs)
             for sample in result.samples] == [
-                (25, (16382 * direction) % 16384, 20),
-                (75, (2 * direction) % 16384, 60),
+                (25, 16382, 20),
+                (75, 2, 60),
             ]
 
 
@@ -80,7 +79,7 @@ def test_p4_uint32_rollover_keeps_chronological_common_timestamps():
                frame("encoder_raw", base + 100, (300,), 2),
                frame("servo_abs", base + 25, (1000,), 3),
                frame("servo_abs", base + 75, (1500,), 4)]
-    result = align_feedback(packets, 0, (0,), 1)
+    result = align_feedback(packets, 0, (0,))
     assert [sample.timestamp_ms for sample in result.samples] == [0xFFFFFFD9, 11]
     assert [sample.encoder for sample in result.samples] == [150, 250]
     assert result.max_raw_gap_ms == 100
@@ -93,7 +92,7 @@ def test_abs_interpolation_rounds_half_away_from_zero():
                frame("encoder_raw", 2, (102,), 3),
                frame("servo_abs", 0, (0, 0), 4),
                frame("servo_abs", 2, (1, -1), 5)]
-    middle = align_feedback(packets, 0, (0, 1), 1).samples[1]
+    middle = align_feedback(packets, 0, (0, 1)).samples[1]
     assert (middle.primary_abs, middle.secondary_abs) == (1, -1)
 
 
@@ -104,7 +103,7 @@ def test_dual_abs_requires_both_motors_in_same_original_frame():
                frame("servo_abs", 50, (150, 250), 4, mask=2),
                frame("servo_abs", 100, (200, 300), 5, mask=1)]
     with pytest.raises(TimeAlignmentError, match="raw=2 ABS=0"):
-        align_feedback(packets, 0, (0, 1), 1)
+        align_feedback(packets, 0, (0, 1))
 
 
 def test_an_unselected_motor_losing_feedback_does_not_discard_the_selected_pair():
@@ -112,7 +111,7 @@ def test_an_unselected_motor_losing_feedback_does_not_discard_the_selected_pair(
                frame("encoder_raw", 100, (200,), 2),
                frame("servo_abs", 0, (300, 400, 0), 3, mask=3),
                frame("servo_abs", 100, (400, 500, 0), 4, mask=3)]
-    result = align_feedback(packets, 0, (0, 1), 1)
+    result = align_feedback(packets, 0, (0, 1))
     assert result.abs_point_count == 2
     assert len(result.samples) == 2
 
@@ -123,7 +122,7 @@ def test_nonoverlapping_measured_tables_are_not_extrapolated():
                frame("servo_abs", 200, (400,), 3),
                frame("servo_abs", 300, (500,), 4)]
     with pytest.raises(TimeAlignmentError, match="no common valid"):
-        align_feedback(packets, 0, (0,), 1)
+        align_feedback(packets, 0, (0,))
 
 
 @pytest.mark.parametrize("invalid_kind", ["encoder_raw", "servo_abs"])
@@ -134,7 +133,7 @@ def test_invalid_feedback_splits_the_function_and_is_never_bridged(invalid_kind)
             invalid = kind == invalid_kind and time_ms == 50
             packets.append(frame(kind, time_ms, (100 + time_ms,), len(packets) + 1,
                                  mask=0 if invalid else 1))
-    result = align_feedback(packets, 0, (0,), 1)
+    result = align_feedback(packets, 0, (0,))
     assert [sample.timestamp_ms for sample in result.samples] == [0, 25, 75, 100]
 
 
@@ -145,7 +144,7 @@ def test_excessive_source_gap_does_not_interpolate_through_missing_telemetry(lon
         times = (0, 10, 1000, 1010) if kind == long_kind else (0, 5, 10, 500, 1000, 1005, 1010)
         packets += [frame(kind, time_ms, (100 + time_ms,), len(packets) + index + 1)
                     for index, time_ms in enumerate(times)]
-    result = align_feedback(packets, 0, (0,), 1)
+    result = align_feedback(packets, 0, (0,))
     assert 500 not in [sample.timestamp_ms for sample in result.samples]
     assert result.max_raw_gap_ms <= 300
     assert result.max_abs_gap_ms <= 500
@@ -157,8 +156,8 @@ def test_a_source_gap_at_the_limit_is_accepted_but_above_it_is_split():
                frame("servo_abs", 0, (1000,), 3),
                frame("servo_abs", 150, (1300,), 4),
                frame("servo_abs", 300, (1600,), 5)]
-    accepted = align_feedback(packets, 0, (0,), 1)
-    rejected_gap = align_feedback(packets, 0, (0,), 1, raw_max_gap_ms=299)
+    accepted = align_feedback(packets, 0, (0,))
+    rejected_gap = align_feedback(packets, 0, (0,), raw_max_gap_ms=299)
     assert [sample.timestamp_ms for sample in accepted.samples] == [0, 150, 300]
     assert accepted.max_raw_gap_ms == 300
     assert [sample.timestamp_ms for sample in rejected_gap.samples] == [0, 300]
@@ -168,7 +167,7 @@ def test_duplicate_timestamps_use_latest_values_without_duplicate_samples():
     packets = linear_frames()
     packets.append(frame("servo_abs", 150, (1400, -800), 100))
     packets.reverse()
-    result = align_feedback(packets, 0, (0, 1), 1)
+    result = align_feedback(packets, 0, (0, 1))
     assert len(result.samples) == 6
     assert [sample.primary_abs for sample in result.samples if sample.timestamp_ms == 150] == [1400]
 
@@ -177,7 +176,7 @@ def test_invalid_duplicate_timestamp_cannot_be_hidden_by_later_valid_packet():
     packets = linear_frames()
     packets += [frame("encoder_raw", 100, (1200,), 100, mask=0),
                 frame("encoder_raw", 100, (1200,), 101)]
-    result = align_feedback(packets, 0, (0, 1), 1)
+    result = align_feedback(packets, 0, (0, 1))
     assert [sample.timestamp_ms for sample in result.samples] == [200, 250, 300]
 
 
@@ -253,6 +252,6 @@ def test_history_concurrent_sources_have_unique_ordered_sequences():
 
 def test_insufficient_valid_history_has_an_explicit_alignment_error():
     with pytest.raises(TimeAlignmentError, match="no feedback history"):
-        align_feedback([], 0, (0,), 1)
+        align_feedback([], 0, (0,))
     with pytest.raises(TimeAlignmentError, match="two valid timestamps"):
-        align_feedback([frame("encoder_raw", 0, (1,), 1)], 0, (0,), 1)
+        align_feedback([frame("encoder_raw", 0, (1,), 1)], 0, (0,))

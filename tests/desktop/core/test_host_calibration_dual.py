@@ -18,7 +18,6 @@ class FakeIO:
         self.values = {motor: 0 for motor in range(27)}
         self.loads = {motor: 190 for motor in range(27)}
         self.encoder_value = 5000
-        self.directions = {joint: config.default_encoder_direction(joint) for joint in range(21)}
         self.commands = []
         self.diags = []
         self.traces = []
@@ -48,7 +47,7 @@ class FakeIO:
 
     def encoder_raw(self, joint):
         value = self.encoder(joint)
-        return None if value is None else (-value if self.direction(joint) < 0 else value) % 16384
+        return None if value is None else value
 
     def servo_abs(self, motor):
         return self.values.get(motor) if self.online & (1 << motor) else None
@@ -97,15 +96,8 @@ class FakeIO:
     def set_limit(self, motor, minimum, maximum):
         self.limits[motor] = (minimum, maximum)
 
-    def direction(self, joint):
-        return self.directions[joint]
-
-    def set_direction(self, joint, direction):
-        self.directions[joint] = direction
-
     def manual_reference(self, joint):
-        return {"valid": True, "minRaw": (16384 - 3500) % 16384,
-                "maxRaw": (16384 - 5000) % 16384}
+        return {"valid": True, "minRaw": 3500, "maxRaw": 5000}
 
     def urdf_limits(self, joint):
         return 0.0, 90.0
@@ -369,7 +361,7 @@ def test_preload_accepts_load_without_encoder_stall_or_extra_motion():
     io = FakeIO()
     worker = machine(io)
     result = worker._find_secondary_preload(21, 0, 20, 120)
-    assert result == (0, 11384, 5000, 190)
+    assert result == (0, 5000, 5000, 190)
     assert io.t == 0
     assert io.commands[-1][1] == {21: 0, 20: 120}
 
@@ -527,8 +519,8 @@ def test_dual_result_rejects_zero_and_near_full_wrap_spans(monkeypatch, span, ex
     io = FakeIO()
     worker = machine(io)
     monkeypatch.setattr(worker, "_wait_motor_target", lambda *args: True)
-    monkeypatch.setattr(worker, "_find_tight", lambda *args: (120, 11384, 5000, 190))
-    monkeypatch.setattr(worker, "_find_secondary_preload", lambda *args: (20, 11384, 5000, 190))
+    monkeypatch.setattr(worker, "_find_tight", lambda *args: (120, 5000, 5000, 190))
+    monkeypatch.setattr(worker, "_find_secondary_preload", lambda *args: (20, 5000, 5000, 190))
     endpoint = (5000 - span) % 16384
 
     def exchange(*_args):
@@ -537,7 +529,7 @@ def test_dual_result_rejects_zero_and_near_full_wrap_spans(monkeypatch, span, ex
         for moved in range(4000, span, 4000):
             worker._result_travel.observe((5000 - moved) % 16384)
         worker._result_travel.observe(endpoint)
-        return 80, -60, (-endpoint) % 16384, endpoint, 250
+        return 80, -60, endpoint, endpoint, 250
 
     monkeypatch.setattr(worker, "_find_exchange", exchange)
     result = worker.calibrate()
@@ -563,8 +555,8 @@ def test_dual_orders_result_endpoints_without_flipping_manual_or_lut_samples(
     primary, secondary = config.joint_motors(joint)
     signed_travel = wrap_encoder_delta(limit, tight)
     start, end = (tight, limit) if signed_travel > 0 else (limit, tight)
-    manual = {"valid": True, "minRaw": (-start) % 16384,
-              "maxRaw": (-(start + manual_span)) % 16384}
+    manual = {"valid": True, "minRaw": start % 16384,
+              "maxRaw": (start + manual_span) % 16384}
     io.manual_reference = lambda _joint: dict(manual)
     manual_crc = manual_entry_crc(joint, manual)
     fit = TendonRawFitBuffer()
@@ -576,11 +568,11 @@ def test_dual_orders_result_endpoints_without_flipping_manual_or_lut_samples(
     io.begin_lut_sampling = lambda *_args: window
     io.finish_lut_sampling = lambda value: fit if value is window else pytest.fail("wrong window")
     monkeypatch.setattr(worker, "_wait_motor_target", lambda *_args: True)
-    monkeypatch.setattr(worker, "_find_tight", lambda *_args: (120, (-tight) % 16384, tight, 190))
+    monkeypatch.setattr(worker, "_find_tight", lambda *_args: (120, tight, tight, 190))
     monkeypatch.setattr(worker, "_find_secondary_preload",
-                        lambda *_args: (20, (-tight) % 16384, tight, 190))
+                        lambda *_args: (20, tight, tight, 190))
     monkeypatch.setattr(worker, "_find_exchange",
-                        lambda *_args: (80, -60, (-limit) % 16384, limit, 250))
+                        lambda *_args: (80, -60, limit, limit, 250))
     original_builder = dual.build_tendon_lut
 
     def build(calib_io, result_joint, result, p, s, count, raw):
@@ -596,9 +588,9 @@ def test_dual_orders_result_endpoints_without_flipping_manual_or_lut_samples(
     assert result["encoderSpan"] == abs(signed_travel)
     assert result["autoSpanCounts"] == abs(signed_travel)
     assert result["totalDeg"] == pytest.approx(abs(signed_travel) * 360 / 16384)
-    assert (result["autoMinRaw"], result["autoMaxRaw"]) == ((-start) % 16384, (-end) % 16384)
+    assert (result["autoMinRaw"], result["autoMaxRaw"]) == (start % 16384, end % 16384)
     assert result["zeroEncoder"] == (start + 228) % 16384
-    assert result["encoderDirection"] == io.direction(joint) == -1
+    assert "encoderDirection" not in result
     assert result["manualSpanCounts"] == manual_span
     assert result["manualReferenceCrc"] == manual_crc
     assert result["tendonLutValid"]
@@ -618,15 +610,15 @@ def test_dual_keeps_primary_endpoint_when_preload_moves_joint(monkeypatch, limit
     io = FakeIO()
     worker = machine(io)
     monkeypatch.setattr(worker, "_wait_motor_target", lambda *_args: True)
-    monkeypatch.setattr(worker, "_find_tight", lambda *_args: (120, 11384, 5000, 190))
+    monkeypatch.setattr(worker, "_find_tight", lambda *_args: (120, 5000, 5000, 190))
 
     def preload(*_args):
         io.encoder_value = 5600
-        return 20, 10784, 5600, 190
+        return 20, 5600, 5600, 190
 
     monkeypatch.setattr(worker, "_find_secondary_preload", preload)
     monkeypatch.setattr(worker, "_find_exchange",
-                        lambda *_args: (80, -60, (-limit) % 16384, limit, 250))
+                        lambda *_args: (80, -60, limit, limit, 250))
     outcome = worker.calibrate()
     checks = [details for values, details in io.traces if values[0] == "DUAL_SPAN_CHECK"]
     assert len(checks) == 1
@@ -649,8 +641,8 @@ def test_dual_rejects_observed_near_full_turn_even_if_motion_returns(
     io = FakeIO()
     worker = machine(io)
     monkeypatch.setattr(worker, "_wait_motor_target", lambda *_args: True)
-    monkeypatch.setattr(worker, "_find_tight", lambda *_args: (120, 11384, 5000, 190))
-    monkeypatch.setattr(worker, "_find_secondary_preload", lambda *_args: (20, 11384, 5000, 190))
+    monkeypatch.setattr(worker, "_find_tight", lambda *_args: (120, 5000, 5000, 190))
+    monkeypatch.setattr(worker, "_find_secondary_preload", lambda *_args: (20, 5000, 5000, 190))
 
     def exchange(*_args):
         for moved in [4000, 8000, 12000, 15360]:
@@ -659,7 +651,7 @@ def test_dual_rejects_observed_near_full_turn_even_if_motion_returns(
             for moved in [12000, 8000, 4000, final_travel]:
                 worker._result_travel.observe((5000 + direction * moved) % 16384)
         endpoint = (5000 + direction * final_travel) % 16384
-        return 80, -60, (-endpoint) % 16384, endpoint, 250
+        return 80, -60, endpoint, endpoint, 250
 
     monkeypatch.setattr(worker, "_find_exchange", exchange)
     assert worker.calibrate() is None
@@ -690,9 +682,9 @@ def test_outside_ready_result_is_retained_but_only_in_window_pose_is_cached(monk
     io = FakeIO(joint=0)
     worker = machine(io, 0)
     monkeypatch.setattr(worker, "_wait_motor_target", lambda *args: True)
-    monkeypatch.setattr(worker, "_find_tight", lambda *args: (120, 11384, 5000, 190))
-    monkeypatch.setattr(worker, "_find_secondary_preload", lambda *args: (20, 11384, 5000, 190))
-    monkeypatch.setattr(worker, "_find_exchange", lambda *args: (80, -60, 12084, 4300, 250))
+    monkeypatch.setattr(worker, "_find_tight", lambda *args: (120, 5000, 5000, 190))
+    monkeypatch.setattr(worker, "_find_secondary_preload", lambda *args: (20, 5000, 5000, 190))
+    monkeypatch.setattr(worker, "_find_exchange", lambda *args: (80, -60, 4300, 4300, 250))
     monkeypatch.setattr(dual, "map_manual_scaled_encoder_to_urdf",
                         lambda *args: {"valid": True, "outside_counts": outside,
                                        "urdf_deg": -0.5, "feedback_ready": False})
@@ -710,9 +702,9 @@ def test_ready_map_invalid_rejects_result_before_any_limit_commit(monkeypatch):
     io = FakeIO(joint=0)
     worker = machine(io, 0)
     monkeypatch.setattr(worker, "_wait_motor_target", lambda *args: True)
-    monkeypatch.setattr(worker, "_find_tight", lambda *args: (120, 11384, 5000, 190))
-    monkeypatch.setattr(worker, "_find_secondary_preload", lambda *args: (20, 11384, 5000, 190))
-    monkeypatch.setattr(worker, "_find_exchange", lambda *args: (80, -60, 12084, 4300, 250))
+    monkeypatch.setattr(worker, "_find_tight", lambda *args: (120, 5000, 5000, 190))
+    monkeypatch.setattr(worker, "_find_secondary_preload", lambda *args: (20, 5000, 5000, 190))
+    monkeypatch.setattr(worker, "_find_exchange", lambda *args: (80, -60, 4300, 4300, 250))
     monkeypatch.setattr(dual, "map_manual_scaled_encoder_to_urdf", lambda *args: None)
     assert worker.calibrate() is None
     assert worker.reason == protocol.CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED
@@ -723,9 +715,9 @@ def test_dual_lut_build_failure_keeps_original_mechanical_commit_branch(monkeypa
     io = FakeIO(joint=0)
     worker = machine(io, 0)
     monkeypatch.setattr(worker, '_wait_motor_target', lambda *args: True)
-    monkeypatch.setattr(worker, '_find_tight', lambda *args: (120, 11384, 5000, 190))
-    monkeypatch.setattr(worker, '_find_secondary_preload', lambda *args: (20, 11384, 5000, 190))
-    monkeypatch.setattr(worker, '_find_exchange', lambda *args: (80, -60, 12084, 4300, 250))
+    monkeypatch.setattr(worker, '_find_tight', lambda *args: (120, 5000, 5000, 190))
+    monkeypatch.setattr(worker, '_find_secondary_preload', lambda *args: (20, 5000, 5000, 190))
+    monkeypatch.setattr(worker, '_find_exchange', lambda *args: (80, -60, 4300, 4300, 250))
     original_builder = dual.build_tendon_lut
     monkeypatch.setattr(dual, 'build_tendon_lut',
                         lambda calib_io, joint, result, primary, secondary, count, raw:
@@ -752,11 +744,11 @@ def test_dual_exchange_replaces_complete_fit_and_rejects_alignment_failure(monke
     for sample in ((4300, 700, 200), (4650, 800, 150), (5000, 900, 100)):
         fit.append(*sample)
     monkeypatch.setattr(worker, '_wait_motor_target', lambda *_: True)
-    monkeypatch.setattr(worker, '_find_tight', lambda *_: (120, 11384, 5000, 190))
+    monkeypatch.setattr(worker, '_find_tight', lambda *_: (120, 5000, 5000, 190))
 
     def preload(*_args):
         events.append('preload')
-        return 20, 11384, 5000, 190
+        return 20, 5000, 5000, 190
 
     def begin(joint, motors):
         assert (joint, motors) == (16, (20, 21))
@@ -766,7 +758,7 @@ def test_dual_exchange_replaces_complete_fit_and_rejects_alignment_failure(monke
     def exchange(*args):
         assert args[-1] is None  # Independent getters cannot enter the buffer.
         events.append('exchange')
-        return 80, -60, 12084, 4300, 250
+        return 80, -60, 4300, 4300, 250
 
     def finish(value):
         assert value is window

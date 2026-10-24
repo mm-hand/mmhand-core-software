@@ -118,11 +118,11 @@ CALIBRATION_DIAGNOSTICS: Dict[int, CalibrationDiagnosticSpec] = {
     ),
     protocol.CALIB_DIAG_REASON_ZERO_CROSS_INVALID: _spec(
         "Invalid zero-position estimate", ("taut", "zero", "tight", "motor_mask"),
-        "Check encoder direction, the calibration start pose, and tendon preload.",
+        "Check the encoder installation and magnet mounting, the calibration start pose, and tendon preload.",
     ),
     protocol.CALIB_DIAG_REASON_WRAP_TOO_LARGE: _spec(
         "Encoder span is near a full turn", ("encoder_span", "tight", "max", "motor_mask"),
-        "Check magnetic encoder direction, mapping, and the multi-turn anchor.",
+        "Check the magnetic encoder installation and magnet mounting, mapping, and the multi-turn anchor.",
     ),
     protocol.CALIB_DIAG_REASON_ABS_LIMIT_INVALID: _spec(
         "Servo target exceeds the safe absolute range", ("command_abs", "min", "max", "motor_mask"),
@@ -186,7 +186,7 @@ CALIBRATION_DIAGNOSTICS: Dict[int, CalibrationDiagnosticSpec] = {
     ),
     protocol.CALIB_DIAG_REASON_RESULT_SPAN_INVALID: _spec(
         "Invalid magnetic encoder travel", ("encoder_span", "endpoint_a", "endpoint_b", "motor_mask"),
-        "Check encoder direction, mechanical endpoints, and whether SPI/CAN data updates in real time.",
+        "Check the encoder installation and magnet mounting, mechanical endpoints, and whether SPI/CAN data updates in real time.",
     ),
     protocol.CALIB_DIAG_REASON_RESULT_BUILD_FAILED: _spec(
         "Calibration result or LUT build failed", ("sample_count", "encoder_span", "lut_count", "motor_mask"),

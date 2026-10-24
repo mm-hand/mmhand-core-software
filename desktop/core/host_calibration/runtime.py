@@ -44,7 +44,7 @@ from ..protocol import (
 from ..session_log import log_session
 from .config import (
     default_auto_calibration_params,
-    default_encoder_direction, joint_motors, finger_aa_joint, shorten_sign,
+    joint_motors, finger_aa_joint, shorten_sign,
     motor_apply_tendon_delta, kEncoderRecoveryStableSamples,
     kEncoderRecoveryTimeoutMs, kEncoderTrustedSampleMaxAgeMs,
     kFeedbackReadyServoTimeoutMs, kServoRecoveryStableSamples,
@@ -67,7 +67,6 @@ class LutSamplingWindow:
     cursor: FeedbackCursor
     joint: int
     motors: tuple[int, ...]
-    direction: int
 
 
 class HostCalibrationIO:
@@ -96,7 +95,6 @@ class HostCalibrationIO:
         self._lut_sampling_windows = {}
         self._lut_sampling_diagnostics = {}
         self.lut_sampling_error = ''
-        self._directions = [default_encoder_direction(j) for j in range(ENCODER_COUNT)]
         self._manual = None
         self._last_diag = None
         self.feedback_recovery_error = ''
@@ -218,8 +216,7 @@ class HostCalibrationIO:
         return int(state.encoders[joint].raw_sensor) % 16384
 
     def encoder(self, joint):
-        raw = self.encoder_raw(joint)
-        return None if raw is None else (raw * self.direction(joint)) % 16384
+        return self.encoder_raw(joint)
 
     def servo_abs(self, motor):
         state = self._state()
@@ -259,8 +256,7 @@ class HostCalibrationIO:
         if not isinstance(history, TimestampedFeedbackHistory):
             self.lut_sampling_error = 'time-aligned LUT sampling requires P4 packet history'
             raise TimeAlignmentError(self.lut_sampling_error)
-        window = LutSamplingWindow(history, history.mark(), joint, motors,
-                                   self.direction(joint))
+        window = LutSamplingWindow(history, history.mark(), joint, motors)
         self._lut_sampling_windows[joint] = window
         return window
 
@@ -276,12 +272,11 @@ class HostCalibrationIO:
                     self._lut_sampling_windows.get(window.joint) is not window):
                 raise TimeAlignmentError('time-aligned LUT sampling window is not active')
             self._lut_sampling_windows.pop(window.joint)
-            if (getattr(self.controller.comm, 'feedback_history', None) is not window.history or
-                    self.direction(window.joint) != window.direction):
-                raise TimeAlignmentError('time-aligned LUT sampling source or direction changed')
+            if getattr(self.controller.comm, 'feedback_history', None) is not window.history:
+                raise TimeAlignmentError('time-aligned LUT sampling source changed')
             aligned = align_feedback(
                 window.history.read(window.cursor), window.joint, window.motors,
-                window.direction, raw_max_gap_ms=kEncoderTrustedSampleMaxAgeMs,
+                raw_max_gap_ms=kEncoderTrustedSampleMaxAgeMs,
                 abs_max_gap_ms=kFeedbackReadyServoTimeoutMs)
             fit = TendonRawFitBuffer()
             first = aligned.samples[0]
@@ -326,12 +321,6 @@ class HostCalibrationIO:
         except (FeedbackHistoryError, TimeAlignmentError) as exc:
             self.lut_sampling_error = str(exc)
             raise TimeAlignmentError(str(exc)) from exc
-
-    def direction(self, joint):
-        return self._directions[joint]
-
-    def set_direction(self, joint, direction):
-        self._directions[joint] = -1 if direction < 0 else 1
 
     def manual_reference(self, joint):
         if self._manual is None:
@@ -417,15 +406,14 @@ class HostCalibrationIO:
     def _aa_mapping_usable(self, aa, result) -> bool:
         """Validate the AA encoder mapping without requiring fresh feedback."""
         state = self._state()
-        if not state.has_encoder_raw_data or not state.has_manual_reference_encoder_directions:
+        if not state.has_encoder_raw_data:
             return False
         if not state.encoder_online_bitmap & (1 << aa) or state.encoder_fault_bitmap & (1 << aa):
             return False
         if not state.manual_reference_valid_bitmap & (1 << aa):
             return False
-        direction = int(state.manual_reference_encoder_directions[aa])
         return map_manual_scaled_encoder_to_urdf(
-            self, aa, result, int(state.encoders[aa].raw_sensor), direction
+            self, aa, result, int(state.encoders[aa].raw_sensor)
         ) is not None
 
     def _finger_aa_plan(self, aa):
@@ -452,8 +440,6 @@ class HostCalibrationIO:
                                                   4, self.urdf_config_crc())
         if not workspace.ready:
             raise ValueError(f'load or calibrate AA first: {workspace.reason}')
-        if not state.has_manual_reference_encoder_directions:
-            raise ValueError('AA encoder installation direction is unavailable')
         motors = joint_motors(aa)
         mask = sum(1 << m for m in motors)
         if (not state.has_servo_route_status or mask & ~state.servo_route_controllable_bitmap
@@ -509,8 +495,7 @@ class HostCalibrationIO:
                              state.received_at('encoder_raw_last_rx_ts')) > kEncoderTrustedSampleMaxAgeMs):
             raise ValueError('AA feedback is stale, offline or untrusted')
         mapped = map_manual_scaled_encoder_to_urdf(
-            self, aa, result, state.encoders[aa].raw_sensor,
-            state.manual_reference_encoder_directions[aa])
+            self, aa, result, state.encoders[aa].raw_sensor)
         if mapped is None or not mapped['valid']:
             raise ValueError('AA encoder mapping is invalid')
         return state, mapped['urdf_deg']

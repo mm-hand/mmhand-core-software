@@ -11,7 +11,8 @@
 
 // 标定公共数据与接口。
 // 标定生命周期由上位机管理；本模块只保存上传结果，并提供
-// 编码器方向、装配告警和运行期映射所需的公共算法。
+// 装配告警和运行期映射所需的公共算法。
+// S3 已在 raw 源头统一方向，P4 不再保存或传输磁编方向。
 // 三项装配告警阈值，单位均为磁编码器 counts。
 // 告警不影响标定结果可用性，只用于提示机械装配或人工端点录入偏差。
 #define TENDON_LUT_ACTUATOR_COUNT 2  // 每个关节最多两路腱绳执行器。
@@ -19,7 +20,7 @@
 
 // 操作员在 Device Check 页面录入的磁编码器机械端点。
 // minRaw 为人工松端，maxRaw 为人工紧端；两者都是 0..16383 原始值，允许跨零。
-// 正方向由 g_encoderDirection 单独定义，避免在运行期 Manual 表中重复保存方向。
+// 固定正向：关节正方向对应 raw 递减。
 struct ManualEncoderReference {
     uint8_t valid;   // 1 表示该关节的人工端点已写入 P4 RAM 并通过 CRC 校验。
     uint16_t minRaw; // 人工松端原始磁编值。
@@ -48,16 +49,16 @@ struct JointCalibrationResult {
     uint32_t urdfConfigCrc;   // 标定结果绑定的 URDF/映射契约 CRC。
 
     // Manual 全行程映射 V4。修改某一关节 Manual 后，只使该关节 Auto 失效。
-    uint16_t autoMinRaw;       // 自动标定松端原始磁编值。
-    uint16_t autoMaxRaw;       // 自动标定紧端原始磁编值。
+    uint16_t autoMinRaw;       // 自动标定松端物理 14-bit raw。
+    uint16_t autoMaxRaw;       // 自动标定紧端物理 14-bit raw。
     int32_t manualSpanCounts;  // 沿安装正方向计算的 Manual Span。
     int32_t autoSpanCounts;    // 沿安装正方向计算的 Auto Span。
     uint32_t manualReferenceCrc; // 该关节 Manual Min/Max 的条目 CRC。
 
     // 标定内部轨迹坐标仅用于诊断和原始采样定位；V4 Tendon LUT 横轴使用 URDF 角。
-    int32_t startEncoder;  // 搜索起点磁编方向坐标，对应 startDeg。
-    int32_t tightEncoder;  // 紧端磁编方向坐标，对应 tightDeg。
-    int32_t zeroEncoder;   // 内部 0° 参考磁编方向坐标。
+    int32_t startEncoder;  // 搜索起点正向坐标，对应 startDeg。
+    int32_t tightEncoder;  // 紧端正向坐标，对应 tightDeg。
+    int32_t zeroEncoder;   // 内部 0° 参考正向坐标。
     int32_t encoderSpan;   // startEncoder 到 tightEncoder 的正向跨度。
     int32_t startServoAbs; // 搜索起点舵机多圈 ABS。
     int32_t tightServoAbs; // 紧端舵机多圈 ABS。
@@ -79,20 +80,15 @@ struct JointCalibrationResult {
 };
 
 // 控制、状态机和上行任务读取的单关节一致快照。
-// Auto 结果、Manual 端点和方向必须来自同一次发布，不能跨核直接拼读全局数组。
+// Auto 结果和 Manual 端点必须来自同一次发布，不能跨核直接拼读全局数组。
 struct JointCalibrationRuntimeSnapshot {
     JointCalibrationResult result;
     ManualEncoderReference manual;
-    int8_t encoderDirection;
 };
 
 // 21 路运行期 Auto 结果和 Manual 端点表。
 extern JointCalibrationResult g_jointCalibResult[ENCODER_TOTAL_NUM];
 extern ManualEncoderReference g_manualEncoderReference[ENCODER_TOTAL_NUM];
-
-// 运行期方向表默认采用固定安装方向，上位机可通过现有数据同步协议设置方向。
-extern int8_t g_encoderDirection[ENCODER_TOTAL_NUM];
-bool setRuntimeEncoderDirection(uint8_t jointIndex, int8_t direction);
 
 // 使用统一短临界区发布和读取标定运行数据；整组读取只加锁一次。
 bool readJointCalibrationRuntimeSnapshot(
