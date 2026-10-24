@@ -133,14 +133,17 @@ def classify_dual_workspace_pair(io, joint):
 
 
 def build_dynamic_workspace_motor_mask(io, active_joints):
-    """Exclude fully offline helpers; reject partial/unknown/stale helpers."""
+    """Exclude fully offline helpers; reject partial/unknown/stale helpers.
+
+    AA 邻指让位是 AA 行程搜索的机械前提，与本次标定选了哪些关节无关：
+    未选中的邻指仍要纳入让位范围（原 P4 固件总是准备全部四指），
+    只有完全离线才跳过。
+    """
     mask = 0
     for target in active_joints:
         if target not in WORKSPACE_DUAL_JOINTS:
             continue
         for candidate in WORKSPACE_DUAL_JOINTS:
-            if not getattr(io, 'selected_joint_mask', (1 << 21) - 1) & (1 << candidate):
-                continue
             motors = _dual_motors(candidate)
             pair_mask = sum(1 << motor for motor in motors) if motors else 0
             availability = classify_dual_workspace_pair(io, candidate)
@@ -178,8 +181,6 @@ def build_dual_workspace_plan(io, target):
     candidates += [(joint, POSE_B) for joint in reversed(WORKSPACE_DUAL_JOINTS) if joint > target]
     steps = []
     for joint, pose in candidates:
-        if not getattr(io, 'selected_joint_mask', (1 << 21) - 1) & (1 << joint):
-            continue
         availability = classify_dual_workspace_pair(io, joint)
         if availability == PAIR_ALL_OFFLINE:
             io.trace("WORKSPACE_PLAN_SKIP", target, helper=joint, reason=availability)

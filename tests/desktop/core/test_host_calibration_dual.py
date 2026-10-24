@@ -170,14 +170,37 @@ def test_thumb_scope_has_no_four_finger_read_mask():
     assert dual.build_dynamic_workspace_motor_mask(io, [16, 20]) == 0
 
 
-def test_unselected_online_unknown_finger_is_neither_required_nor_moved():
+def test_unselected_finger_still_yields_and_is_still_required():
     io = FakeIO()
     io.selected_joint_mask = 1 << 8
-    io.unknown = sum(1 << motor for motor in config.joint_motors(12))
-    assert dual.build_dynamic_workspace_motor_mask(io, [8]) == sum(
-        1 << motor for motor in config.joint_motors(8))
-    assert dual.build_dual_workspace_plan(io, 8) == []
+    io.selected_motor_mask = sum(1 << m for m in config.joint_motors(8))
+    expected_mask = sum(1 << motor for joint in (0, 4, 8, 12)
+                        for motor in config.joint_motors(joint))
+    assert dual.build_dynamic_workspace_motor_mask(io, [8]) == expected_mask
+    assert dual.build_dual_workspace_plan(io, 8) == [
+        (0, dual.POSE_A), (4, dual.POSE_A), (12, dual.POSE_B)]
     assert not io.commands
+
+
+def test_unselected_helper_with_unknown_turns_rejects_workspace_prep():
+    io = FakeIO()
+    io.selected_joint_mask = 1 << 8
+    io.selected_motor_mask = sum(1 << m for m in config.joint_motors(8))
+    io.unknown = sum(1 << motor for motor in config.joint_motors(12))
+    assert dual.build_dynamic_workspace_motor_mask(io, [8]) is None
+    assert dual.build_dual_workspace_plan(io, 8) is None
+    assert not io.commands
+
+
+@pytest.mark.parametrize("target,selected_bit,expected", [
+    (12, 1 << 12, [(0, dual.POSE_A), (4, dual.POSE_A), (8, dual.POSE_A)]),
+    (8, 1 << 8, [(0, dual.POSE_A), (4, dual.POSE_A), (12, dual.POSE_B)]),
+])
+def test_partial_selection_yields_all_other_fingers(target, selected_bit, expected):
+    io = FakeIO()
+    io.selected_joint_mask = selected_bit
+    io.selected_motor_mask = sum(1 << m for m in config.joint_motors(target))
+    assert dual.build_dual_workspace_plan(io, target) == expected
 
 
 @pytest.mark.parametrize("joint", [joint for joint in range(21)
