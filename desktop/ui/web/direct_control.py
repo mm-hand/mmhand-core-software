@@ -18,16 +18,34 @@ ZERO_PROMPT = (
     'the saved calibration file. Motor Calibration zeroes the motors again when it starts.')
 
 
-def build(hand, act, confirm):
+def build(hand, act, confirm, leave=None):
     drafts, refreshers, initialized = {}, [], set()
     answered = [False]
+
+    def cancel_zero():
+        """未归零就不允许留在 Direct：关窗并回上一个页面。"""
+        zero_dialog.close()
+        answered[0] = False
+        if leave is not None:
+            leave()
+
+    def confirm_zero():
+        zero_dialog.close()
+
+        def zero():
+            result = hand.request_direct_zero_all()
+            if not result.accepted:
+                answered[0] = False  # 归零没开始：下次进来重新拦
+            return result
+        act(zero)
+
     # 弹窗只在建页时创建一次：渲染回调里只 open/close，沿用标定告警弹窗的写法。
-    with ui.dialog() as zero_dialog, ui.card().classes('w-[600px] max-w-full'):
+    # persistent：ESC / 点遮罩都不能绕过，只能 Cancel（离开）或 Confirm（归零）。
+    with ui.dialog().props('persistent') as zero_dialog, ui.card().classes('w-[600px] max-w-full'):
         ui.label(ZERO_PROMPT).classes('text-sm whitespace-pre-wrap')
         with ui.row():
-            ui.button('Cancel', on_click=zero_dialog.close).props('flat dense')
-            ui.button('Set All Motors to ABS 0', on_click=lambda: (
-                zero_dialog.close(), act(hand.request_direct_zero_all))).props('dense color=primary')
+            ui.button('Cancel', on_click=cancel_zero).props('flat dense')
+            ui.button('Set All Motors to ABS 0', on_click=confirm_zero).props('dense color=primary')
 
     def prompt_zero(snapshot):
         """缺电机坐标时提示：载入标定文件，或把所有在线电机设为当前 ABS 0。"""

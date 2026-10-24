@@ -328,29 +328,70 @@ def click(button):
          if listener.type == 'click').handler(None)
 
 
-def test_direct_control_prompts_once_when_no_motor_coordinates_exist(page):
+def test_direct_control_prompt_blocks_the_page_until_zeroing(page):
     hand, client = page
     hand.request_direct_zero_all = Mock()
+    leave = Mock()
     act = Mock(side_effect=lambda callback: callback())
-    refresh = direct_control.build(hand, act, Mock())
+    refresh = direct_control.build(hand, act, Mock(), leave)
     dialog, buttons = direct_zero_dialog(client)
+    assert dialog._props.get('persistent')  # ESC / 遮罩都不能绕过
     assert not dialog.value
     snapshot = idle_snapshot(hand)
     snapshot['direct_zero_required'] = True
     refresh(snapshot)
     assert dialog.value
-    click(buttons['Cancel'])  # Cancel 只关窗；同一状态不再自动打扰
+    # Cancel：关窗 + 回原页面，并且下次进来仍然先拦。
+    click(buttons['Cancel'])
     assert not dialog.value
-    refresh(snapshot)
-    assert not dialog.value
-    snapshot['direct_zero_required'] = False  # 标定载入/归零成功
-    refresh(snapshot)
-    snapshot['direct_zero_required'] = True   # 之后再次缺坐标：重新提示
+    leave.assert_called_once_with()
     refresh(snapshot)
     assert dialog.value
+    # Confirm：发起全部归零，留在页面，不再重复弹。
     click(buttons['Set All Motors to ABS 0'])
     hand.request_direct_zero_all.assert_called_once_with()
-    assert dialog.value is False
+    assert not dialog.value
+    refresh(snapshot)
+    assert not dialog.value
+
+
+def zero_prompt_dialog(client):
+    for element in client.elements.values():
+        if not isinstance(element, ui.dialog):
+            continue
+        card = next((child for child in element.default_slot.children if isinstance(child, ui.card)), None)
+        if card is None or not any(getattr(child, 'text', '') == direct_control.ZERO_PROMPT
+                                  for child in card.default_slot.children):
+            continue
+        row = next(child for child in card.default_slot.children if isinstance(child, ui.row))
+        return element, {child.text: child for child in row.default_slot.children
+                         if isinstance(child, ui.button)}
+    raise AssertionError('direct zero prompt was not built')
+
+
+def test_cancelling_the_zero_prompt_returns_to_the_previous_page(page):
+    from desktop.ui.browser_view import build_page
+    hand, client = page
+    build_page(hand)
+    tabs = [element for element in client.elements.values() if isinstance(element, ui.tabs)]
+    main = next(element for element in tabs if element.value == 'Calibration')
+    calibration = next(element for element in tabs if element.value == 'Joint Calibration')
+    control = next(element for element in tabs if element.value == 'Feedback Control')
+    calibration.set_value('Motor Calibration')
+    main.set_value('Control')            # 进入 Control 组后停在 Feedback Control
+    control.set_value('Direct Control')
+    snapshot = hand.application_snapshot(include_curves=False)
+    snapshot['direct_zero_required'] = True
+    hand.application_snapshot = lambda **_: snapshot
+    heavy = next(element for element in client.elements.values() if isinstance(element, ui.timer)
+                 and getattr(element.callback, '__qualname__', '') == 'build_page.<locals>.refresh_heavy')
+    heavy.callback()
+    dialog, buttons = zero_prompt_dialog(client)
+    assert dialog.value
+    click(buttons['Cancel'])
+    assert not dialog.value
+    # 回到进入 Direct Control 之前停留的页面，不再是 Direct Control。
+    assert main.value == 'Control' and control.value == 'Feedback Control'
 
 
 def test_direct_control_does_not_prompt_without_fresh_motor_state(page):

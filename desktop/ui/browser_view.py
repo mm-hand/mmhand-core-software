@@ -324,6 +324,17 @@ def build_page(hand):
             badges = {name: ui.label().classes('status-chip text-xs cursor-pointer') for name in ['System', 'Calibration', 'Mode', 'Overload', 'Collision', 'Multi-turn']}
         with ui.tabs(value=TABS[0]).classes('console-tabs w-full').props('dense no-caps active-color=primary outside-arrows mobile-arrows') as tabs:
             for name in TABS: ui.tab(name)
+        page_origin = {'previous': 'Joint Calibration'}
+
+        def leave_direct_control():
+            """没有电机坐标时取消 Direct 的归零提示：回到进入前的页面。"""
+            target = page_origin['previous']
+            for group, options in SUBTABS.items():
+                if target in options:
+                    tabs.set_value(group)
+                    subtabs[group].set_value(target)
+                    return
+            tabs.set_value(target if target in TABS else 'Joint Calibration')
         for badge in badges.values(): badge.on('click', lambda: tabs.set_value('Settings'))
         refreshers = {}
         subtabs = {}
@@ -344,7 +355,7 @@ def build_page(hand):
                                         if name == 'Joint Calibration': refreshers[name] = joint_calibration.build(hand, act, open_import, confirm)
                                         elif name == 'Motor Calibration': refreshers[name] = motor_calibration.build(hand, act, open_import)
                                         elif name == 'Feedback Control': refreshers[name] = feedback_control.build(hand, act)
-                                        elif name == 'Direct Control': refreshers[name] = direct_control.build(hand, act, confirm)
+                                        elif name == 'Direct Control': refreshers[name] = direct_control.build(hand, act, confirm, leave_direct_control)
                                         elif name == 'Curves & Recordings': refreshers[name] = plots.build(hand, act)
                                         elif name == 'Tactile': refreshers[name] = tactile.build(hand)
                                         elif name == 'Renumber Motor': refreshers[name] = renumber_motors.build(hand, act)
@@ -373,9 +384,18 @@ def build_page(hand):
         elif mode == 'DIRECT' and leaf != 'Direct Control':
             ui.notify('Direct control is active; changing pages does not stop motion. Press STOP to stop.', type='warning')
 
-    tabs.on_value_change(warn_control_page_switch)
+    def remember_previous_leaf(*_args):
+        leaf = current_leaf()
+        if leaf != 'Direct Control':
+            page_origin['previous'] = leaf
+
+    def handle_page_change(*_args):
+        warn_control_page_switch()
+        remember_previous_leaf()
+
+    tabs.on_value_change(handle_page_change)
     for child_tabs in subtabs.values():
-        child_tabs.on_value_change(warn_control_page_switch)
+        child_tabs.on_value_change(handle_page_change)
 
     # Display caches: NiceGUI values are only written when they actually changed.
     text_cache, enabled_cache, style_cache = {}, {}, {}
