@@ -219,7 +219,7 @@ def test_midpoint_failures_never_enter_single_search(centered_io, monkeypatch, f
         io.set_workspace_read_mask(io.finger_aa_motor_mask((1,)))
         io.publish.side_effect = lambda *args: HostCalibrationIO.publish(io, *args)
     elif fault == 'limit':
-        io.controller.current_state.motor_abs_limit_max[0] = 1
+        io.controller.current_state.motor_abs_limit_max[0] = -40000
     else:
         io.cancel()
     monkeypatch.setattr(single_motor, 'step_single', Mock(side_effect=AssertionError('search started')))
@@ -238,7 +238,7 @@ def test_midpoint_failures_never_enter_single_search(centered_io, monkeypatch, f
 
 
 @pytest.mark.parametrize('aa', range(0, 20, 4))
-@pytest.mark.parametrize('start_raw', [10000, 6000])
+@pytest.mark.parametrize('start_raw', [6384, 10384])
 def test_encoder_driven_midpoint_handles_slack_from_either_side(centered_io, aa, start_raw):
     io = centered_io
     state = io.controller.current_state
@@ -257,7 +257,7 @@ def test_encoder_driven_midpoint_handles_slack_from_either_side(centered_io, aa,
         takeup = min(slack[0], abs(delta))
         slack[0] -= takeup
         motion = (abs(delta) - takeup) * (1 if delta >= 0 else -1)
-        state.encoders[aa].raw_sensor -= motion * 5
+        state.encoders[aa].raw_sensor = (state.encoders[aa].raw_sensor + motion * 5) % 16384
         return True
 
     io.publish.side_effect = move
@@ -376,6 +376,7 @@ def test_midpoint_may_start_outside_the_trusted_window_and_move_inward(centered_
     # 向窗口内运动必须允许，否则第一次目标下发就中止。
     io = centered_io
     state = io.controller.current_state
+    state.encoders[0].raw_sensor = 7600
     primary, secondary = joint_motors(0)
     state.servo_angles[primary], state.servo_angles[secondary] = -120, 120
     state.motor_abs_limit_min[primary], state.motor_abs_limit_max[primary] = -60, 400
@@ -386,6 +387,7 @@ def test_midpoint_may_start_outside_the_trusted_window_and_move_inward(centered_
 def test_midpoint_still_aborts_when_the_next_target_moves_further_outside(centered_io):
     io = centered_io
     state = io.controller.current_state
+    state.encoders[0].raw_sensor = 7600
     primary, secondary = joint_motors(0)
     state.servo_angles[primary], state.servo_angles[secondary] = 120, -120
     state.motor_abs_limit_min[primary], state.motor_abs_limit_max[primary] = -400, 60
