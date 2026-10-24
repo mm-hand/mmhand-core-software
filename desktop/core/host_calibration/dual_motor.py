@@ -25,6 +25,7 @@ from .math import (
     TendonRawFitBuffer,
     build_calibration_result,
     build_tendon_lut,
+    deg_to_encoder_count,
     encoder_count_to_deg,
     forward_encoder_delta,
     f32,
@@ -710,6 +711,18 @@ class _DualMachine:
                        span, limit_encoder, tight_encoder, (1 << primary) | (1 << secondary))
             return None
         total_deg = encoder_count_to_deg(span)
+        if self.joint in WORKSPACE_DUAL_JOINTS:
+            # 邻指没让位（或电机编号接错）时 AA 会被挡住，扫不满量程；截断的
+            # LUT 还会被同指其它关节当依赖，直接拒绝比写回一个假结果好。
+            low, high = self.io.urdf_limits(self.joint)
+            required = deg_to_encoder_count(
+                f32(config.kMinAaTravelFractionOfRange * f32(high - low)))
+            if span < required:
+                self._diag(protocol.CALIB_DIAG_REASON_RESULT_SPAN_INVALID,
+                           protocol.CALIB_DIAG_PHASE_DUAL_EXCHANGE, self.joint, primary,
+                           span, required, int(total_deg),
+                           (1 << primary) | (1 << secondary))
+                return None
         fraction = f32(f32(config.kLutZeroDeg - config.kLutStartDeg) / total_deg) if total_deg > 0 else 0
         zero_encoder = wrap_encoder_count(start_encoder + round_to_int32(f32(f32(span) * fraction)))
         result = build_calibration_result(self.io, self.joint, start_encoder, zero_encoder,

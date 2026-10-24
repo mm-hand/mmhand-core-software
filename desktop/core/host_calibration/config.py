@@ -26,6 +26,10 @@ kEncoderRecoveryStableSamples = 3
 kServoRecoveryTimeoutMs = 5000
 kServoRecoveryStableSamples = 3
 kMinTravelDeg = 10.0
+# 四指 AA 的行程会被没让位（或电机编号接错）的邻指挡住。合格件历史实测是
+# URDF 量程的 56%~109%，2026-10-24 被挡住那次只有 26%。低于这个比例直接
+# 判失败，不把截断的 LUT 写回。
+kMinAaTravelFractionOfRange = 0.45
 kMaxTravelDeg = 359.0
 kRejectNearFullWrapSpanCounts = 15360
 kLutStartDeg = -5.0

@@ -562,6 +562,32 @@ def test_dual_result_rejects_zero_and_near_full_wrap_spans(monkeypatch, span, ex
         assert io.limits == {}
 
 
+@pytest.mark.parametrize("joint,span,success", [
+    (0, 700, False),    # 被挡住：700 counts = 15 deg，低于 45% URDF 量程
+    (0, 3400, True),    # 正常 AA 行程（75 deg）
+    (16, 700, True),    # 拇指不参与四指 AA 行程门禁
+])
+def test_side_sway_result_requires_most_of_the_urdf_range(monkeypatch, joint, span, success):
+    io = FakeIO(joint)
+    worker = machine(io, joint)
+    monkeypatch.setattr(worker, "_wait_motor_target", lambda *args: True)
+    monkeypatch.setattr(worker, "_find_tight", lambda *args: (120, 5000, 5000, 190))
+    monkeypatch.setattr(worker, "_find_secondary_preload", lambda *args: (20, 5000, 5000, 190))
+    endpoint = (5000 - span) % 16384
+
+    def exchange(*_args):
+        for moved in range(4000, span, 4000):
+            worker._result_travel.observe((5000 - moved) % 16384)
+        worker._result_travel.observe(endpoint)
+        return 80, -60, endpoint, endpoint, 250
+
+    monkeypatch.setattr(worker, "_find_exchange", exchange)
+    result = worker.calibrate()
+    assert (result is not None) is success
+    if not success:
+        assert worker.reason == protocol.CALIB_DIAG_REASON_RESULT_SPAN_INVALID
+
+
 @pytest.mark.parametrize("joint,tight,limit,manual_span", [
     (16, 9688, 10962, 4108),  # Supplied J16 log: formerly 15110 / 332 degrees.
     (20, 5595, 8307, 1476),  # Supplied J20 log: formerly 13672 / 300 degrees.
@@ -707,7 +733,7 @@ def test_outside_ready_result_is_retained_but_only_in_window_pose_is_cached(monk
     monkeypatch.setattr(worker, "_wait_motor_target", lambda *args: True)
     monkeypatch.setattr(worker, "_find_tight", lambda *args: (120, 5000, 5000, 190))
     monkeypatch.setattr(worker, "_find_secondary_preload", lambda *args: (20, 5000, 5000, 190))
-    monkeypatch.setattr(worker, "_find_exchange", lambda *args: (80, -60, 4300, 4300, 250))
+    monkeypatch.setattr(worker, "_find_exchange", lambda *args: (80, -60, 1600, 1600, 250))
     monkeypatch.setattr(dual, "map_manual_scaled_encoder_to_urdf",
                         lambda *args: {"valid": True, "outside_counts": outside,
                                        "urdf_deg": -0.5, "feedback_ready": False})
@@ -727,7 +753,7 @@ def test_ready_map_invalid_rejects_result_before_any_limit_commit(monkeypatch):
     monkeypatch.setattr(worker, "_wait_motor_target", lambda *args: True)
     monkeypatch.setattr(worker, "_find_tight", lambda *args: (120, 5000, 5000, 190))
     monkeypatch.setattr(worker, "_find_secondary_preload", lambda *args: (20, 5000, 5000, 190))
-    monkeypatch.setattr(worker, "_find_exchange", lambda *args: (80, -60, 4300, 4300, 250))
+    monkeypatch.setattr(worker, "_find_exchange", lambda *args: (80, -60, 1600, 1600, 250))
     monkeypatch.setattr(dual, "map_manual_scaled_encoder_to_urdf", lambda *args: None)
     assert worker.calibrate() is None
     assert worker.reason == protocol.CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED
@@ -740,7 +766,7 @@ def test_dual_lut_build_failure_keeps_original_mechanical_commit_branch(monkeypa
     monkeypatch.setattr(worker, '_wait_motor_target', lambda *args: True)
     monkeypatch.setattr(worker, '_find_tight', lambda *args: (120, 5000, 5000, 190))
     monkeypatch.setattr(worker, '_find_secondary_preload', lambda *args: (20, 5000, 5000, 190))
-    monkeypatch.setattr(worker, '_find_exchange', lambda *args: (80, -60, 4300, 4300, 250))
+    monkeypatch.setattr(worker, '_find_exchange', lambda *args: (80, -60, 1600, 1600, 250))
     original_builder = dual.build_tendon_lut
     monkeypatch.setattr(dual, 'build_tendon_lut',
                         lambda calib_io, joint, result, primary, secondary, count, raw:
