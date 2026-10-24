@@ -83,6 +83,20 @@ def calibration_status_badge(state, fresh=True):
     return f'NEED CALIBRATION {auto_count}/{known_count}'
 
 
+def direct_zero_required(state, fresh=False):
+    """Direct 页没有可用电机坐标：没有一台在线可路由电机知道自己的 ABS。
+
+    用「全部在线电机 Turn Unknown」而不是「没有 motor calibration」当判据：
+    归零本身会清掉 motor calibration，用后者会无限重弹。
+    """
+    if not fresh:
+        return False
+    online = int(getattr(state, 'servo_online_bitmap', 0) or 0) & int(
+        getattr(state, 'servo_route_controllable_bitmap', 0) or 0)
+    unknown = int(getattr(state, 'multi_turn_unknown_bitmap', 0) or 0)
+    return bool(online and not (online & ~unknown))
+
+
 def enrich_snapshot(hand, state, snapshot, now, fresh):
     control_known = fresh and state.has_active_scope_status
     control_active = state.control_enabled and state.servo_target_owner == SERVO_TARGET_OWNER_CONTROL
@@ -182,6 +196,7 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
         'Overload': 'ACTIVE' if fault_fresh and any(state.servo_overload_fault) or fresh and state.has_servo_route_status and state.servo_bus_overload_mask else 'CLEAR' if fault_fresh and state.has_servo_route_status else 'UNKNOWN',
         'Collision': 'HOLD' if fresh and state.feedback_collision_hold_bitmap else 'ARMED' if fresh and state.feedback_collision_armed_bitmap else 'OFF' if fresh and state.has_feedback_collision_status else 'UNKNOWN',
         'Multi-turn': 'UNKNOWN' if not fresh or not state.has_connectivity_status or not state.servo_online_bitmap else 'MISSING' if state.multi_turn_unknown_bitmap & state.servo_online_bitmap else 'KNOWN'}
+    snapshot['direct_zero_required'] = direct_zero_required(state, fresh)
     snapshot['import_preview'] = None
     for token, preview in hand._import_previews.items():
         payload = preview['payload']

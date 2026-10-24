@@ -34,6 +34,7 @@ from .id_actions import IdResetActions
 from .control_parameters import ControlParameterStore
 from .protocol import (
     ControlMode, ENCODER_COUNT, MOTOR_COUNT, DUAL_TENDON_JOINT_INDICES, SYSTEM_STATE_UNCONTROLLABLE,
+    VALID_MOTOR_MASK,
     SYSTEM_STATE_IDLE, SYSTEM_STATE_READY, SYSTEM_STATE_RUN_DIRECT,
     SYSTEM_STATE_RUN_FEEDBACK, SYSTEM_STATE_ROPE_INIT_RUNNING,
     SYSTEM_STATE_RECOVERY_REQUIRED,
@@ -1237,6 +1238,16 @@ class ApplicationActions(IdResetActions):
         return self.submit_operation('Set Motor ABS Zero', zero,
                                      scope=' / '.join(f'M{m:02d}' for m in chosen))
 
+
+    def request_direct_zero_all(self):
+        """Direct 页无标定入口：把所有在线可路由电机设为当前 ABS 0。"""
+        state = self.get_state_snapshot()
+        mask = (state.servo_online_bitmap & state.servo_route_controllable_bitmap
+                & VALID_MOTOR_MASK & ~state.servo_route_conflict_bitmap)
+        motors = tuple(m for m in range(MOTOR_COUNT) if mask & (1 << m))
+        if not motors:
+            return OperationResult(False, None, 'No online, routable motors to zero')
+        return self.request_direct_zero(motors=motors)
 
     def request_tendon_step(self, tighten):
         from .motor_mapping import motor_abs_after_tendon_action

@@ -2,7 +2,8 @@
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
-from desktop.core.console_snapshot import calibration_status_badge, joint_quality, motor_quality
+from desktop.core.console_snapshot import (calibration_status_badge, direct_zero_required,
+                                      joint_quality, motor_quality)
 from desktop.core.protocol import DUAL_TENDON_JOINT_INDICES
 
 @pytest.mark.parametrize('difference,status', [(360, 'READY'), (361, 'OFFSET')])
@@ -64,6 +65,27 @@ def _badge_state(**overrides):
     )
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+def _direct_zero_state(**overrides):
+    values = dict(
+        servo_online_bitmap=0b111,
+        servo_route_controllable_bitmap=0b111,
+        multi_turn_unknown_bitmap=0b111,
+    )
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def test_direct_zero_required_only_when_no_online_motor_knows_its_abs():
+    assert direct_zero_required(_direct_zero_state(), fresh=True)
+    assert not direct_zero_required(_direct_zero_state(), fresh=False)
+    # 有一台已经知道 ABS：Direct 页能对那台工作，不再自动引导归零。
+    assert not direct_zero_required(_direct_zero_state(multi_turn_unknown_bitmap=0b110), fresh=True)
+    # 没有在线可路由电机：没有可归零的对象。
+    assert not direct_zero_required(_direct_zero_state(servo_online_bitmap=0), fresh=True)
+    assert not direct_zero_required(
+        _direct_zero_state(servo_route_controllable_bitmap=0), fresh=True)
 
 
 def test_calibration_badge_denominator_is_stable_not_encoder_online():

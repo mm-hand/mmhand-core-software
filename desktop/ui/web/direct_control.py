@@ -11,8 +11,33 @@ from nicegui import ui
 from .common import (FINGERS, finger_cards, selection, target_editor, label, show, quality,
                      maintenance_allowed, control_note)
 
+ZERO_PROMPT = (
+    'No motor calibration is loaded, so Direct Control has no motor coordinates. '
+    'Load a calibration file that includes motor calibration, or continue to set every '
+    "online motor's current position as ABS 0. Continuing clears motor calibration from "
+    'the saved calibration file. Motor Calibration zeroes the motors again when it starts.')
+
+
 def build(hand, act, confirm):
     drafts, refreshers, initialized = {}, [], set()
+    answered = [False]
+    # 弹窗只在建页时创建一次：渲染回调里只 open/close，沿用标定告警弹窗的写法。
+    with ui.dialog() as zero_dialog, ui.card().classes('w-[600px] max-w-full'):
+        ui.label(ZERO_PROMPT).classes('text-sm whitespace-pre-wrap')
+        with ui.row():
+            ui.button('Cancel', on_click=zero_dialog.close).props('flat dense')
+            ui.button('Set All Motors to ABS 0', on_click=lambda: (
+                zero_dialog.close(), act(hand.request_direct_zero_all))).props('dense color=primary')
+
+    def prompt_zero(snapshot):
+        """缺电机坐标时提示：载入标定文件，或把所有在线电机设为当前 ABS 0。"""
+        if not snapshot.get('direct_zero_required'):
+            answered[0] = False
+            return
+        if answered[0] or zero_dialog.value:
+            return
+        answered[0] = True
+        zero_dialog.open()
     initial = hand.application_snapshot(include_curves=False)
     zero_generations = {row['motor']: row.get('abs_zero_generation', 0) for row in initial['motors']}
     def send_selected():
@@ -74,4 +99,5 @@ def build(hand, act, confirm):
                                   and all(snapshot['motors'][m]['online'] for m in selected))
         for update in refreshers:
             update(snapshot)
+        prompt_zero(snapshot)
     return refresh

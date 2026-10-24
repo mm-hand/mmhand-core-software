@@ -301,6 +301,25 @@ def test_direct_zero_only_selected_motor_without_expanding_joint_scope(hand, mon
     assert hand.application_snapshot()['motors'][9]['abs_zero_generation'] == 1
 
 
+def test_direct_zero_all_zeros_every_online_routable_motor(hand, monkeypatch):
+    writer = direct_zero_device(hand, monkeypatch)
+    state = hand._controller.current_state
+    state.servo_online_bitmap &= ~((1 << 3) | (1 << 4))
+    state.servo_route_controllable_bitmap &= ~(1 << 5)
+    state.servo_route_conflict_bitmap = 1 << 6
+    assert wait_operation(hand, hand.request_direct_zero_all())['status'] == 'SUCCESS'
+    expected = ((1 << 27) - 1) & ~((1 << 3) | (1 << 4) | (1 << 5) | (1 << 6))
+    assert writer.call_args.args == (expected,)
+
+
+def test_direct_zero_all_rejects_when_no_motor_is_eligible(hand, monkeypatch):
+    writer = direct_zero_device(hand, monkeypatch)
+    hand._controller.current_state.servo_online_bitmap = 0
+    result = hand.request_direct_zero_all()
+    assert not result.accepted and 'No online, routable motors' in result.message
+    writer.assert_not_called()
+
+
 def test_direct_zero_real_backend_sync_wrapper_waits_for_feedback_anchor_save(hand, monkeypatch):
     hand._selected_motors = (9,)
     direct_zero_device(hand, monkeypatch, fault='save_pending')

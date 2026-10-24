@@ -46,6 +46,7 @@ def test_every_native_page_builds_and_refreshes_unknown_feedback(page, name):
     snapshot = hand.application_snapshot()
     for _ in range(3): refresh(snapshot)
     act.assert_not_called()
+    confirm.assert_not_called()
     assert client.elements
 
 def test_adaptive_kp_is_one_expansion_after_kd_with_one_enable_button(page):
@@ -357,6 +358,53 @@ def idle_snapshot(hand):
     snapshot = hand.application_snapshot()
     snapshot.update(communication='Online', busy=False, control_mode='IDLE', stop_latched=False, device='Ready')
     return snapshot
+
+
+def direct_zero_dialog(client):
+    dialog = next(element for element in client.elements.values() if isinstance(element, ui.dialog))
+    card = next(child for child in dialog.default_slot.children if isinstance(child, ui.card))
+    row = next(child for child in card.default_slot.children if isinstance(child, ui.row))
+    return dialog, {child.text: child for child in row.default_slot.children
+                    if isinstance(child, ui.button)}
+
+
+def click(button):
+    next(listener for listener in button._event_listeners.values()
+         if listener.type == 'click').handler(None)
+
+
+def test_direct_control_prompts_once_when_no_motor_coordinates_exist(page):
+    hand, client = page
+    hand.request_direct_zero_all = Mock()
+    act = Mock(side_effect=lambda callback: callback())
+    refresh = direct_control.build(hand, act, Mock())
+    dialog, buttons = direct_zero_dialog(client)
+    assert not dialog.value
+    snapshot = idle_snapshot(hand)
+    snapshot['direct_zero_required'] = True
+    refresh(snapshot)
+    assert dialog.value
+    click(buttons['Cancel'])  # Cancel 只关窗；同一状态不再自动打扰
+    assert not dialog.value
+    refresh(snapshot)
+    assert not dialog.value
+    snapshot['direct_zero_required'] = False  # 标定载入/归零成功
+    refresh(snapshot)
+    snapshot['direct_zero_required'] = True   # 之后再次缺坐标：重新提示
+    refresh(snapshot)
+    assert dialog.value
+    click(buttons['Set All Motors to ABS 0'])
+    hand.request_direct_zero_all.assert_called_once_with()
+    assert dialog.value is False
+
+
+def test_direct_control_does_not_prompt_without_fresh_motor_state(page):
+    hand, client = page
+    refresh = direct_control.build(hand, Mock(), Mock())
+    dialog, _buttons = direct_zero_dialog(client)
+    for _ in range(3):
+        refresh(hand.application_snapshot())
+    assert not dialog.value
 
 
 def test_joint_page_detail_is_manual_urdf_json_only_in_order(page):
