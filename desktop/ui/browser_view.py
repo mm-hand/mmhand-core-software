@@ -324,17 +324,10 @@ def build_page(hand):
             badges = {name: ui.label().classes('status-chip text-xs cursor-pointer') for name in ['System', 'Calibration', 'Mode', 'Overload', 'Collision', 'Multi-turn']}
         with ui.tabs(value=TABS[0]).classes('console-tabs w-full').props('dense no-caps active-color=primary outside-arrows mobile-arrows') as tabs:
             for name in TABS: ui.tab(name)
-        page_origin = {'previous': 'Joint Calibration'}
-
         def leave_direct_control():
-            """没有电机坐标时取消 Direct 的归零提示：回到进入前的页面。"""
-            target = page_origin['previous']
-            for group, options in SUBTABS.items():
-                if target in options:
-                    tabs.set_value(group)
-                    subtabs[group].set_value(target)
-                    return
-            tabs.set_value(target if target in TABS else 'Joint Calibration')
+            """没有电机坐标时取消 Direct 的归零提示：回到 Joint Calibration。"""
+            tabs.set_value('Calibration')
+            subtabs['Calibration'].set_value('Joint Calibration')
         for badge in badges.values(): badge.on('click', lambda: tabs.set_value('Settings'))
         refreshers = {}
         subtabs = {}
@@ -384,18 +377,9 @@ def build_page(hand):
         elif mode == 'DIRECT' and leaf != 'Direct Control':
             ui.notify('Direct control is active; changing pages does not stop motion. Press STOP to stop.', type='warning')
 
-    def remember_previous_leaf(*_args):
-        leaf = current_leaf()
-        if leaf != 'Direct Control':
-            page_origin['previous'] = leaf
-
-    def handle_page_change(*_args):
-        warn_control_page_switch()
-        remember_previous_leaf()
-
-    tabs.on_value_change(handle_page_change)
+    tabs.on_value_change(warn_control_page_switch)
     for child_tabs in subtabs.values():
-        child_tabs.on_value_change(handle_page_change)
+        child_tabs.on_value_change(warn_control_page_switch)
 
     # Display caches: NiceGUI values are only written when they actually changed.
     text_cache, enabled_cache, style_cache = {}, {}, {}

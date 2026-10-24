@@ -369,7 +369,7 @@ def zero_prompt_dialog(client):
     raise AssertionError('direct zero prompt was not built')
 
 
-def test_cancelling_the_zero_prompt_returns_to_the_previous_page(page):
+def test_cancelling_the_zero_prompt_returns_to_joint_calibration(page):
     from desktop.ui.browser_view import build_page
     hand, client = page
     build_page(hand)
@@ -390,8 +390,8 @@ def test_cancelling_the_zero_prompt_returns_to_the_previous_page(page):
     assert dialog.value
     click(buttons['Cancel'])
     assert not dialog.value
-    # 回到进入 Direct Control 之前停留的页面，不再是 Direct Control。
-    assert main.value == 'Control' and control.value == 'Feedback Control'
+    # Cancel 固定回到 Joint Calibration，不能留在 Direct Control。
+    assert main.value == 'Calibration' and calibration.value == 'Joint Calibration'
 
 
 def test_direct_control_does_not_prompt_without_fresh_motor_state(page):
