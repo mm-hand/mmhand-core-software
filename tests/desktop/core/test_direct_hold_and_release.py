@@ -50,7 +50,8 @@ def test_direct_enable_holds_exact_abs_and_ignores_unselected_unknown():
     assert ok and targets[3] == 3000
     controller.comm.invalidate_pending_direct_commands.assert_called_once()
     assert controller.comm.send_command.call_args_list == [
-        call("start"), call(("motor_pos_abs", 1, 8, targets, 400, 20)),
+        call("start"), call(("motor_pos_abs", 1, 8, targets,
+                             core_logic.DIRECT_SERVO_SPEED, core_logic.DIRECT_SERVO_ACC)),
     ]
 
 

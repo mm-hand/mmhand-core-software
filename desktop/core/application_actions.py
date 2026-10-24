@@ -33,6 +33,7 @@ from .console_snapshot import enrich_snapshot, motor_quality
 from .id_actions import IdResetActions
 from .control_parameters import ControlParameterStore
 from .protocol import (
+    DIRECT_SERVO_SPEED, DIRECT_SERVO_ACC,
     ControlMode, ENCODER_COUNT, MOTOR_COUNT, DUAL_TENDON_JOINT_INDICES, SYSTEM_STATE_UNCONTROLLABLE,
     VALID_MOTOR_MASK,
     SYSTEM_STATE_IDLE, SYSTEM_STATE_READY, SYSTEM_STATE_RUN_DIRECT,
@@ -1396,7 +1397,8 @@ class ApplicationActions(IdResetActions):
             self._direct_sequence = (max(self._direct_sequence, state.direct_target_token) + 1) & 0xffffffff or 1
             token = self._direct_sequence
             sent_at = time.monotonic()
-            if not self.comm.send_command(('motor_pos_abs', token, mask, values, 400, 20)):
+            if not self.comm.send_command(
+                    ('motor_pos_abs', token, mask, values, DIRECT_SERVO_SPEED, DIRECT_SERVO_ACC)):
                 return False, 'Motor target send failed'
         ok = self._wait_application(lambda s: s.direct_target_token == token
                                     and s.received_at('direct_target_result_rx_ts') >= sent_at, epoch, 1)

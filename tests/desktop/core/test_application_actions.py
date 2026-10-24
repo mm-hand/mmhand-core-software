@@ -137,7 +137,8 @@ def direct_target_device(hand, monkeypatch, *, load=0):
     def execution_reply(command):
         assert command[0] == 'motor_pos_abs'
         _, token, mask, values, speed, acceleration = command
-        assert (speed, acceleration) == (400, 20)
+        from desktop.core.protocol import DIRECT_SERVO_SPEED, DIRECT_SERVO_ACC
+        assert (speed, acceleration) == (DIRECT_SERVO_SPEED, DIRECT_SERVO_ACC)
         state.direct_target_token = token
         state.direct_target_applied_mask = mask
         state.direct_target_rejected_mask = 0

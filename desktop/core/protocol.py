@@ -164,6 +164,10 @@ def tendon_lut_field(result: dict, field_name: str, default=None):
     return result.get(field_name, default)
 HAND_PROFILE = "v2"
 VALID_MOTOR_MASK = (1 << MOTOR_COUNT) - 1
+# 直控目标下发的舵机速度/加速度：1200 格/秒≈舵机轴 105°/s，加速度满量程 254。
+# 标定/反馈模式另有自己的速度，不要共用这两个值。
+DIRECT_SERVO_SPEED = 1200
+DIRECT_SERVO_ACC = 100
 
 
 

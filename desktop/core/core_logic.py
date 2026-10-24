@@ -45,6 +45,8 @@ from .device_state_store import (
 from .motor_mapping import MOTOR_TO_JOINT_INDEX, motor_abs_after_tendon_action
 from desktop.paths import CALIB_ACTIVE_SNAPSHOT_PATH, CONFIG_DIR
 from .protocol import (
+    DIRECT_SERVO_SPEED,
+    DIRECT_SERVO_ACC,
     HOST_PROTOCOL_VERSION,
     CMD_ACTIVE_SCOPE,
     CMD_CLEAR_CALIBRATION_SCOPE,
@@ -503,7 +505,8 @@ class HandController:
                 token = (state.direct_target_token + 1) & 0xffffffff or 1
                 submitted_at = time.monotonic()
                 self.start()
-                if not self.comm.send_command(('motor_pos_abs', token, mask, targets, 400, 20)):
+                if not self.comm.send_command((
+                        'motor_pos_abs', token, mask, targets, DIRECT_SERVO_SPEED, DIRECT_SERVO_ACC)):
                     return False, 'Current-position hold was not queued', targets
             deadline = time.monotonic() + 3
             while time.monotonic() < deadline and generation == self._coordinate_cancel_generation:
