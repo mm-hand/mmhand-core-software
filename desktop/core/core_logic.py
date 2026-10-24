@@ -486,7 +486,7 @@ class HandController:
             reason = "selected motor offline, unroutable or Turn Unknown"
         if not reason:
             if (state.system_state == SYSTEM_STATE_RUN_DIRECT and state.control_enabled
-                    and state.servo_target_owner == 1 and state.active_motor_mask == mask):
+                    and state.servo_target_owner == 1 and mask & ~state.active_motor_mask == 0):
                 return True, 'Direct control is already enabled', targets
             self.invalidate_direct_commands()
             self.set_control_mode(ControlMode.DIRECT_MOTOR)
@@ -2084,8 +2084,10 @@ class HandController:
                 and state.control_enabled
                 and state.servo_target_owner == SERVO_TARGET_OWNER_CONTROL
                 and state.control_mode == ControlMode.DIRECT_MOTOR.value
-                and state.active_motor_mask == motor_mask
-                and state.active_joint_mask == joint_mask
+                # 已在更大范围内启用时，子集目标沿用现有 scope：P4 只在停机时
+                # 接受 scope 重写，运行中重写会被拒（表现为 "Motor scope setup failed"）。
+                and motor_mask & ~state.active_motor_mask == 0
+                and joint_mask & ~state.active_joint_mask == 0
                 and not state.require_can_feedback
             ):
                 return True

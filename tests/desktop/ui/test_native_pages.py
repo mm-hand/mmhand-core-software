@@ -204,62 +204,17 @@ def test_number_edit_and_clear_never_submit_slider_motion(page, direct):
     act.assert_not_called()
 
 
-def direct_controls(page):
-    hand, client = page
-    action = Mock()
-    hand.request_direct_zero = action
-    act = Mock(side_effect=lambda callback: callback())
-    refresh = direct_control.build(hand, act, Mock())
-    snapshot = hand.application_snapshot()
-    order = [row['motor'] for _, joints in FINGERS for row in snapshot['motors'] if row['joint'] in joints]
-    numbers = [e for e in client.elements.values() if isinstance(e, ui.number)]
-    selected = next(e for e in client.elements.values() if isinstance(e, ui.button) and e.text == 'Reset Motor Multi-turn Position')
-    return refresh, snapshot, dict(zip(order, numbers)), selected, action, act
-
-
 def click(button):
     next(event for event in button._event_listeners.values() if event.type == 'click').handler(None)
 
 
-def test_direct_zero_uses_backend_motor_selection_without_per_motor_buttons(page):
-    refresh, snapshot, numbers, selected, action, act = direct_controls(page)
-    hand, client = page
-    assert not selected.enabled
-    assert not any(isinstance(e, ui.button) and e.text == 'Set ABS Zero' for e in client.elements.values())
-    snapshot.update(communication='Online', busy=False, control_mode='IDLE', stop_latched=False, selected_motors=[9, 10])
-    for motor in (9, 10):
-        snapshot['motors'][motor]['online'] = True
-    refresh(snapshot)
-    assert selected.enabled
-    click(selected)
-    action.assert_called_once_with()
-
-
-@pytest.mark.parametrize('communication,busy,online', [('Disconnected', False, True), ('Stale data', False, True), ('Online', True, True), ('Online', False, False)])
-def test_direct_zero_is_disabled_without_idle_fresh_online_motor(page, communication, busy, online):
-    refresh, snapshot, numbers, selected, action, act = direct_controls(page)
-    snapshot.update(communication=communication, busy=busy, selected_motors=[9])
-    snapshot['motors'][9]['online'] = online
-    refresh(snapshot)
-    assert not selected.enabled
-    action.assert_not_called()
-
-
-def test_direct_zero_requires_nonempty_selection_and_every_selected_motor_online(page):
-    refresh, snapshot, numbers, selected, action, act = direct_controls(page)
-    snapshot.update(communication='Online', busy=False, selected_motors=[])
-    refresh(snapshot)
-    assert not selected.enabled
-    snapshot['selected_motors'] = [9, 10]
-    snapshot['motors'][9]['online'] = True
-    snapshot['motors'][10]['online'] = False
-    refresh(snapshot)
-    assert not selected.enabled
-    action.assert_not_called()
-
-
 def test_direct_draft_resets_only_after_confirmed_zero_generation(page):
-    refresh, snapshot, numbers, selected, action, act = direct_controls(page)
+    hand, client = page
+    refresh = direct_control.build(hand, Mock(), Mock())
+    snapshot = hand.application_snapshot()
+    motors = [row['motor'] for _, joints in FINGERS for row in snapshot['motors']
+              if row['joint'] in joints]
+    numbers = dict(zip(motors, [e for e in client.elements.values() if isinstance(e, ui.number)]))
     snapshot.update(communication='Online', busy=False)
     row = snapshot['motors'][9]
     row.update(online=True, abs=125, limits=(-30719, 30719), abs_zero_generation=0)
@@ -274,7 +229,7 @@ def test_direct_draft_resets_only_after_confirmed_zero_generation(page):
     numbers[9].set_value(66)
     refresh(snapshot)
     assert numbers[9].value == 66
-    action.assert_not_called()
+
 
 def test_joint_page_has_no_manual_save_buttons_or_progress_panels(page):
     hand, client = page
@@ -519,21 +474,3 @@ def test_control_pages_drop_duplicate_clear_faults_and_explain_handover(page):
     assert len(notes) == 2
     assert all('Clear Faults must be pressed before enabling again' in text for text in notes)
 
-
-def test_direct_zero_disabled_while_controlling_or_stop_latched(page):
-    hand, client = page
-    hand.request_direct_zero = Mock()
-    refresh = direct_control.build(hand, Mock(), Mock())
-    snapshot = idle_snapshot(hand)
-    snapshot['selected_motors'] = [9]
-    snapshot['motors'][9].update(online=True)
-    refresh(snapshot)
-    zero = button(client, 'Reset Motor Multi-turn Position')
-    assert zero.enabled
-    snapshot['control_mode'] = 'DIRECT'
-    refresh(snapshot)
-    assert not zero.enabled
-    snapshot['control_mode'] = 'IDLE'
-    snapshot['stop_latched'] = True
-    refresh(snapshot)
-    assert not zero.enabled

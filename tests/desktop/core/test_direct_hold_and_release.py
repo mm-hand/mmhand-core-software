@@ -54,6 +54,30 @@ def test_direct_enable_holds_exact_abs_and_ignores_unselected_unknown():
     ]
 
 
+def test_enabled_scope_reuses_a_superset_for_subset_targets():
+    """运行中 P4 拒绝 scope 重写；子集目标必须沿用已启用的 scope。"""
+    from desktop.core.motor_mapping import MOTOR_TO_JOINT_INDEX
+    from desktop.core.protocol import (ControlMode, SERVO_TARGET_OWNER_CONTROL,
+                                       SYSTEM_STATE_RUN_DIRECT)
+    controller = controller_with_motor()
+    state = controller.current_state
+    state.has_system_status_data = state.has_active_scope_status = True
+    state.system_state = SYSTEM_STATE_RUN_DIRECT
+    state.control_enabled = True
+    state.servo_target_owner = SERVO_TARGET_OWNER_CONTROL
+    state.control_mode = ControlMode.DIRECT_MOTOR.value
+    state.active_motor_mask = 8 | 16
+    state.active_joint_mask = (1 << MOTOR_TO_JOINT_INDEX[3]) | (1 << MOTOR_TO_JOINT_INDEX[4])
+    state.require_can_feedback = 0
+    state.system_status_last_rx_ts = time.time()
+    stamp(state, 'system_status_last_rx_ts')
+    joint_mask = 1 << MOTOR_TO_JOINT_INDEX[3]
+    assert controller.set_active_scope(8, joint_mask, False)
+    ok, message, _targets = controller.enable_direct_hold(8)
+    assert ok and message == 'Direct control is already enabled'
+    controller.comm.send_command.assert_not_called()
+
+
 @pytest.mark.parametrize("fault", ["stale", "unknown", "route", "raw_only"])
 def test_direct_enable_rejects_untrusted_or_clamped_hold(fault):
     controller = controller_with_motor()

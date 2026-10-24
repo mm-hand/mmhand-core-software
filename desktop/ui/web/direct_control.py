@@ -9,7 +9,7 @@
 """
 from nicegui import ui
 from .common import (FINGERS, finger_cards, selection, target_editor, label, show, quality,
-                     maintenance_allowed, control_note)
+                     control_note)
 
 ZERO_PROMPT = (
     'No motor calibration is loaded, so Direct Control has no motor coordinates. '
@@ -46,10 +46,6 @@ def build(hand, act, confirm):
     with ui.row().classes('page-toolbar'):
         ui.button('ENABLE Selected', on_click=lambda: act(hand.request_direct_enable))
         ui.button('Send Selected', on_click=send_selected)
-        zero_selected = ui.button('Reset Motor Multi-turn Position', on_click=lambda: act(hand.request_direct_zero))
-        zero_selected.set_enabled(False)
-        with zero_selected:
-            ui.tooltip('Set the current positions as ABS 0. Related motor calibration will be cleared. Press STOP first; Clear Faults before re-enable.')
         ui.label('Logical ABS (counts)').classes('text-sm text-slate-600')
     control_note()
     with finger_cards():
@@ -94,9 +90,6 @@ def build(hand, act, confirm):
                         limits.set_text(f"ABS Limits: {show(row['limits'])}")
                     refreshers.append(refresh)
     def refresh(snapshot):
-        selected = snapshot['selected_motors']
-        zero_selected.set_enabled(maintenance_allowed(snapshot) and bool(selected)
-                                  and all(snapshot['motors'][m]['online'] for m in selected))
         for update in refreshers:
             update(snapshot)
         prompt_zero(snapshot)

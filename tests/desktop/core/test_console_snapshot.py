@@ -68,24 +68,19 @@ def _badge_state(**overrides):
 
 
 def _direct_zero_state(**overrides):
-    values = dict(
-        servo_online_bitmap=0b111,
-        servo_route_controllable_bitmap=0b111,
-        multi_turn_unknown_bitmap=0b111,
-    )
+    values = dict(servo_online_bitmap=0b111, motor_abs_limit_valid_bitmap=0)
     values.update(overrides)
     return SimpleNamespace(**values)
 
 
-def test_direct_zero_required_only_when_no_online_motor_knows_its_abs():
+def test_direct_zero_required_only_without_any_motor_calibration():
     assert direct_zero_required(_direct_zero_state(), fresh=True)
     assert not direct_zero_required(_direct_zero_state(), fresh=False)
-    # 有一台已经知道 ABS：Direct 页能对那台工作，不再自动引导归零。
-    assert not direct_zero_required(_direct_zero_state(multi_turn_unknown_bitmap=0b110), fresh=True)
-    # 没有在线可路由电机：没有可归零的对象。
-    assert not direct_zero_required(_direct_zero_state(servo_online_bitmap=0), fresh=True)
+    # 载入过 motor calibration（有 ABS 限位）：不再引导归零。
     assert not direct_zero_required(
-        _direct_zero_state(servo_route_controllable_bitmap=0), fresh=True)
+        _direct_zero_state(motor_abs_limit_valid_bitmap=0b011), fresh=True)
+    # 没有在线电机：没有可归零的对象。
+    assert not direct_zero_required(_direct_zero_state(servo_online_bitmap=0), fresh=True)
 
 
 def test_calibration_badge_denominator_is_stable_not_encoder_online():

@@ -84,17 +84,16 @@ def calibration_status_badge(state, fresh=True):
 
 
 def direct_zero_required(state, fresh=False):
-    """Direct 页没有可用电机坐标：没有一台在线可路由电机知道自己的 ABS。
+    """Direct 页没有 motor calibration：没有任何电机 ABS 限位。
 
-    用「全部在线电机 Turn Unknown」而不是「没有 motor calibration」当判据：
-    归零本身会清掉 motor calibration，用后者会无限重弹。
+    用「没有 ABS 限位」而不是「全部电机 Turn Unknown」：P4 会按 JSON 锚点把
+    部分电机恢复成已知，整手未标定时也常是「有的已知、有的未知」，按 Unknown
+    判会漏掉真正缺标定的情况。归零后限位仍为空，弹窗由页面自己记「已提示」，
+    标定载入（限位重新出现）后才会再次提示。
     """
-    if not fresh:
+    if not fresh or not int(getattr(state, 'servo_online_bitmap', 0) or 0):
         return False
-    online = int(getattr(state, 'servo_online_bitmap', 0) or 0) & int(
-        getattr(state, 'servo_route_controllable_bitmap', 0) or 0)
-    unknown = int(getattr(state, 'multi_turn_unknown_bitmap', 0) or 0)
-    return bool(online and not (online & ~unknown))
+    return not int(getattr(state, 'motor_abs_limit_valid_bitmap', 0) or 0)
 
 
 def enrich_snapshot(hand, state, snapshot, now, fresh):
