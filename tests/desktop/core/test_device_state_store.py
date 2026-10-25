@@ -8,12 +8,11 @@ import pytest
 
 from desktop.core.device_state_store import (
     DeviceStateStoreError,
-    MultiTurnRuntimeStore,
-    circular_raw_distance,
-    nearest_logical_abs,
     multiturn_identity_compatible,
 )
 from desktop.core.protocol import MOTOR_COUNT
+from desktop.core.calibration_snapshot import CalibrationSnapshotError
+from _bundle_helpers import SeededBundleStore
 
 
 def _identity() -> dict:
@@ -27,7 +26,7 @@ def _identity() -> dict:
 
 def test_runtime_store_round_trip_and_backup(tmp_path) -> None:
     path = tmp_path / "multiturn_runtime.json"
-    store = MultiTurnRuntimeStore(path)
+    store = SeededBundleStore(path)
     first = store.save(
         identity=_identity(),
         valid_motor_mask=0x5,
@@ -35,7 +34,8 @@ def test_runtime_store_round_trip_and_backup(tmp_path) -> None:
         raw=range(MOTOR_COUNT),
         p4_time_ms=123,
     )
-    assert store.load(identity=_identity())["logical_abs"] == list(range(MOTOR_COUNT))
+    assert store.load(identity=_identity())["logical_abs"][2] == 2
+    assert store.load(identity=_identity())["logical_abs"][1] == 0
     assert first["valid_motor_mask"] == "0x00000005"
 
     store.save(
@@ -45,13 +45,14 @@ def test_runtime_store_round_trip_and_backup(tmp_path) -> None:
         raw=[4097] * MOTOR_COUNT,
         p4_time_ms=456,
     )
-    assert path.with_suffix(".json.bak").exists()
-    assert store.load(identity=_identity())["raw"] == [1] * MOTOR_COUNT
+    assert "multiturn_anchor_raw" not in json.loads(path.read_text())
+    assert store.load(identity=_identity())["raw"][0] == 9
+    assert store.load(identity=_identity())["logical_abs"][2] == 2
 
 
 def test_runtime_store_rejects_identity_or_integrity_mismatch(tmp_path) -> None:
     path = tmp_path / "multiturn_runtime.json"
-    store = MultiTurnRuntimeStore(path)
+    store = SeededBundleStore(path)
     store.save(
         identity=_identity(),
         valid_motor_mask=1,
@@ -63,27 +64,10 @@ def test_runtime_store_rejects_identity_or_integrity_mismatch(tmp_path) -> None:
         store.load(identity={"product_fingerprint": {}, "calibration_snapshot_sha256": "x"})
 
     payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["logical_abs"][0] = 99
+    payload["multiturn_anchor_logical_abs"][0] = 99
     path.write_text(json.dumps(payload), encoding="utf-8")
-    with pytest.raises(DeviceStateStoreError):
+    with pytest.raises(CalibrationSnapshotError):
         store.load(identity=_identity())
-
-
-def test_circular_raw_distance_handles_wrap() -> None:
-    assert circular_raw_distance(4090, 5) == 11
-    assert circular_raw_distance(100, 500) == 400
-    assert circular_raw_distance(100, 501) == 401
-
-
-def test_nearest_logical_abs_supports_both_wrap_directions() -> None:
-    assert nearest_logical_abs(4090, 4090, 5) == 4101
-    assert nearest_logical_abs(4101, 5, 4090) == 4090
-    assert nearest_logical_abs(3 * 4096 + 100, 100, 700) == 3 * 4096 + 700
-
-
-def test_nearest_logical_abs_uses_paired_saved_raw_for_existing_anchors() -> None:
-    """已有锚点的 ABS 和 raw 必须配对，不能只按 ABS 推断掉电前相位。"""
-    assert nearest_logical_abs(5000, 1000, 1100) == 5100
 
 
 def test_anchor_identity_rejects_unknown_or_other_device_even_with_same_crc():

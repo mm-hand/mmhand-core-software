@@ -51,12 +51,11 @@ def test_servo_telemetry_packet_includes_signed_current_without_online_array() -
     )
 
 
-def test_servo_position_packet_contains_raw_and_abs_in_one_frame() -> None:
+def test_servo_position_packet_contains_only_native_abs() -> None:
     raw = [12, 4090] + [0] * 25
     angles = list(range(MOTOR_COUNT))
-    payload = b"".join(struct.pack(">h", value) for value in raw)
-    payload += b"".join(struct.pack(">i", value) for value in angles)
-    assert parse_servo_position_packet(payload) == (raw, angles)
+    payload = b"".join(struct.pack(">i", value) for value in angles)
+    assert parse_servo_position_packet(payload) == angles
     assert parse_servo_position_packet(payload[:-1]) is None
 
 

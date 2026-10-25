@@ -42,7 +42,6 @@ TOPIC_FIELDNAMES: Dict[str, List[str]] = {
         "auto_calibration_valid_mask",
         "has_sensor_data",
         "has_servo_angle_data",
-        "has_servo_raw_data",
         "has_system_status_data",
         "has_fault_status_data",
     ],
@@ -137,10 +136,7 @@ def _wide_servo_fields() -> List[str]:
         fields.extend([
             f"{label}_joint_index",
             f"{label}_target_abs",
-            f"{label}_raw",
             f"{label}_abs",
-            f"{label}_saved_raw",
-            f"{label}_saved_raw_diff",
             f"{label}_load",
             f"{label}_load_mag",
             f"{label}_load_dir",
@@ -149,7 +145,6 @@ def _wide_servo_fields() -> List[str]:
             f"{label}_voltage",
             f"{label}_temperature",
             f"{label}_online",
-            f"{label}_raw_online",
             f"{label}_telem_online",
             f"{label}_active",
         ])

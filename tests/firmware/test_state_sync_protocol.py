@@ -26,7 +26,7 @@ def test_state_sync_request_encodes_big_endian_mask() -> None:
 
 def test_state_sync_request_rejects_unknown_bits() -> None:
     with pytest.raises(ValueError):
-        build_state_sync_request_cmd(STATE_SYNC_ALL | 0x80)
+        build_state_sync_request_cmd(STATE_SYNC_ALL | 0x100)
 
 
 def test_task_diag_subscription_has_explicit_on_off_payload() -> None:

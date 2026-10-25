@@ -9,12 +9,20 @@
 """
 import struct
 import json
-from enum import Enum
+from enum import Enum, IntEnum
 from typing import List, Optional, Sequence, Tuple
 
 # 协议编号、21/27 维度、固定 payload 长度和时间戳规则均由唯一 schema 生成。
 # 本文件只保留字段编解码和业务数据模型，禁止重新定义同名协议常量。
 from .generated_upper_protocol import *  # noqa: F403
+
+
+class ServoOnlineCheck(IntEnum):
+    PENDING = 0
+    READY = 1
+    UNSUPPORTED_FIRMWARE = 2
+    VERSION_READ_FAILED = 3
+    CONFIGURATION_FAILED = 4
 
 
 class ControlMode(Enum):
@@ -250,7 +258,7 @@ def parse_proto_ack(payload: bytes) -> Optional[Tuple[int, int, int]]:
 
 
 def parse_system_status_packet(payload: bytes) -> Optional[tuple]:
-    if len(payload) != 173:
+    if len(payload) != 152:
         return None
     system_state = payload[0]
     control_enabled = payload[1]
@@ -291,12 +299,6 @@ def parse_system_status_packet(payload: bytes) -> Optional[tuple]:
     feedback_collision_transition_count = struct.unpack('>I', payload[140:144])[0]
     feedback_collision_armed_bitmap = struct.unpack('>I', payload[144:148])[0]
     servo_turn_overflow_bitmap = struct.unpack('>I', payload[148:152])[0]
-    servo_reset_zero_request_token = struct.unpack('>I', payload[152:156])[0]
-    servo_reset_zero_result_token = struct.unpack('>I', payload[156:160])[0]
-    servo_reset_zero_success_mask = struct.unpack('>I', payload[160:164])[0]
-    servo_reset_zero_failed_mask = struct.unpack('>I', payload[164:168])[0]
-    servo_reset_zero_invalidated_joint_mask = struct.unpack('>I', payload[168:172])[0]
-    servo_reset_zero_status = payload[172]
     return (
         system_state,
         control_enabled,
@@ -335,13 +337,6 @@ def parse_system_status_packet(payload: bytes) -> Optional[tuple]:
         direct_reject_reason,
         True,
         servo_turn_overflow_bitmap,
-        servo_reset_zero_request_token,
-        servo_reset_zero_result_token,
-        servo_reset_zero_success_mask,
-        servo_reset_zero_failed_mask,
-        servo_reset_zero_invalidated_joint_mask,
-        servo_reset_zero_status,
-        True,
         feedback_admission_sequence,
         feedback_admission_status,
         feedback_reject_reason,
@@ -739,20 +734,11 @@ def parse_servo_telem_packet(
     return speeds, loads, currents, volts, temps
 
 
-def parse_servo_position_packet(payload: bytes) -> Optional[Tuple[List[int], List[int]]]:
-    """Parse one merged packet: 27 raw int16 first, then 27 logical ABS int32."""
-    if len(payload) != MOTOR_COUNT * 6:
+def parse_servo_position_packet(payload: bytes) -> Optional[List[int]]:
+    """Protocol v5: 27 native signed ABS values, without a duplicate single-turn array."""
+    if len(payload) != MOTOR_COUNT * 4:
         return None
-    raw_positions = [
-        struct.unpack(">h", payload[2 * i:2 * i + 2])[0]
-        for i in range(MOTOR_COUNT)
-    ]
-    base = MOTOR_COUNT * 2
-    angles = [
-        struct.unpack(">i", payload[base + 4 * i:base + 4 * i + 4])[0]
-        for i in range(MOTOR_COUNT)
-    ]
-    return raw_positions, angles
+    return list(struct.unpack(f">{MOTOR_COUNT}i", payload))
 
 
 def parse_multiturn_restore_result_packet(payload: bytes) -> Optional[Tuple[int, int, int]]:
@@ -1099,17 +1085,6 @@ def build_clear_calibration_scope_cmd(motor_mask: int) -> bytes:
     )
 
 
-def build_servo_reset_zero_cmd(motor_mask: int) -> bytes:
-    """标定前请求 P4 归零所选舵机的硬件圈计数。"""
-    motor_mask = int(motor_mask) & ((1 << MOTOR_COUNT) - 1)
-    if motor_mask == 0:
-        raise ValueError("calibration turn reset requires a non-zero motor mask")
-    return _build_command_frame(
-        CMD_SERVO_RESET_ZERO,
-        struct.pack(">I", motor_mask),
-    )
-
-
 def build_servo_rebase_zero_cmd(motor_mask: int) -> bytes:
     """Calibration-page alias of the one motor ABS zero command."""
     return build_motor_abs_zero_cmd(motor_mask)
@@ -1282,3 +1257,13 @@ def build_motor_pos_abs_one_cmd(motor_index: int, motor_abs: int) -> bytes:
     values = [0] * MOTOR_COUNT
     values[idx] = int(motor_abs)
     return build_motor_pos_abs_cmd(values, motor_mask=1 << idx)
+
+
+def parse_servo_online_status_packet(payload: bytes):
+    """Per motor: online generation (u32), firmware major/minor, check status."""
+    if len(payload) != MOTOR_COUNT * 7:
+        return None
+    rows = [struct.unpack_from('>IBBB', payload, i * 7) for i in range(MOTOR_COUNT)]
+    if any(row[3] not in ServoOnlineCheck._value2member_map_ for row in rows):
+        return None
+    return rows

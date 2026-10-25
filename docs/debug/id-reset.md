@@ -14,9 +14,9 @@ The host orders moves, including exchanges and cycles, and journals each intent
 before sending one step to P4. A timeout stops the batch without blindly
 repeating an EEPROM write. Rescan to reconcile actual addresses before recovery.
 
-Renumber All also sets registers84/85/86 to254/254/0 for every scanned motor,
-including unchanged IDs: maximum speed, maximum acceleration, acceleration
-multiplier. ID and profile readback must all pass before success is reported.
+Firmware/configuration checks run automatically when a motor comes online.
+Renumber All only changes and verifies IDs. It does not read or write registers
+84/85/86. After maintenance ends, rediscovery performs the common online check.
 Affected Auto/LUT, ABS limits and multiturn anchors become invalid. Manual
 joint endpoints remain. Recalibrate before control; fixed product bindings do
 not change.

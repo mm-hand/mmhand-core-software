@@ -12,7 +12,7 @@ from desktop.core.comm_layer import LowerComputerComm
 from desktop.core.core_logic import HandController
 from desktop.core.calibration_snapshot import atomic_write_snapshot, read_snapshot
 from desktop.core.data_models import HandModel
-from desktop.core.device_state_store import MultiTurnRuntimeStore
+from _bundle_helpers import SeededBundleStore
 from desktop.core.protocol import (
     CMD_MOTOR_ABS_ZERO,
     HOST_PROTOCOL_VERSION,
@@ -250,11 +250,10 @@ def test_direct_zero_anchor_saved_requires_runtime_validity_without_pending_capt
 
 def _fresh_zero_feedback(controller):
     state = controller.current_state
-    state.has_servo_angle_data = state.has_servo_raw_data = True
+    state.has_servo_angle_data = True
     state.has_servo_route_status = True
     state.servo_route_controllable_bitmap = 3
-    state.servo_raw_online[:2] = [True, True]
-    state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = 1001
+    state.servo_feedback_p4_time_ms = 1001
     if not state.has_product_fingerprint:
         state.has_product_fingerprint = True
         state.product_fingerprint = {"protocol_version": HOST_PROTOCOL_VERSION, "device_id": "0000123456789ABC"}
@@ -310,7 +309,7 @@ def test_direct_zero_generation_waits_for_save_and_does_not_repeat_on_more_feedb
     assert controller._servo_rebase_zero_capture_mask == 3
     controller._service_servo_rebase_zero_capture(state)
     assert controller.get_servo_abs_zero_generations()[:2] == (1, 1)
-    state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = 1002
+    state.servo_feedback_p4_time_ms = 1002
     controller._service_servo_rebase_zero_capture(state)
     assert controller.get_servo_abs_zero_generations()[:2] == (1, 1)
     assert controller._persist_multiturn_state.call_count == 2
@@ -433,7 +432,7 @@ def test_api_requires_stopped_state_without_target_owner(monkeypatch, state, ena
     controller.comm.send_command.assert_not_called()
 
 
-def test_new_anchor_uses_fresh_matching_abs_and_raw_after_final_result(monkeypatch):
+def test_new_anchor_uses_fresh_native_abs_after_final_result(monkeypatch):
     controller = _controller(monkeypatch)
     controller._servo_rebase_zero_unresolved_mask = 3
     controller._servo_rebase_zero_baseline_token = 7
@@ -442,18 +441,11 @@ def test_new_anchor_uses_fresh_matching_abs_and_raw_after_final_result(monkeypat
     _publish_final_result(controller)
     state = controller.current_state
     state.has_servo_angle_data = True
-    state.has_servo_raw_data = True
-    state.servo_raw_online[:2] = [True, True]
     state.servo_feedback_p4_time_ms = 999
-    state.servo_raw_p4_time_ms = 999
     controller._service_servo_rebase_zero_capture(state)
     assert controller._multiturn_anchor_capture_blocked_mask == 3
     controller._persist_multiturn_state.assert_not_called()
     state.servo_feedback_p4_time_ms = 1001
-    state.servo_raw_p4_time_ms = 1002
-    controller._service_servo_rebase_zero_capture(state)
-    controller._persist_multiturn_state.assert_not_called()
-    state.servo_raw_p4_time_ms = 1001
     controller._service_servo_rebase_zero_capture(state)
     assert controller._multiturn_anchor_capture_blocked_mask == 0
     assert controller._multiturn_anchor_capture_pending_mask == 0
@@ -467,7 +459,6 @@ def test_blocked_rebase_scope_cannot_restore_old_json_anchor(monkeypatch):
     )
     state = controller.current_state
     state.multi_turn_unknown_bitmap = 3
-    state.servo_raw_online[:2] = [True, True]
     controller._block_multiturn_anchor_capture(3)
     controller._service_multiturn_restore(state)
     controller.comm.send_command.assert_not_called()
@@ -487,10 +478,8 @@ def test_new_anchor_save_failure_keeps_scope_blocked_and_retries(monkeypatch):
     controller._servo_rebase_zero_rebased_mask = 3
     controller._block_multiturn_anchor_capture(3)
     state = controller.current_state
-    state.has_servo_angle_data = state.has_servo_raw_data = True
-    state.servo_raw_online[:2] = [True, True]
-    state.servo_raw_positions[:2] = [64, 4095]
-    state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = 1001
+    state.has_servo_angle_data = True
+    state.servo_feedback_p4_time_ms = 1001
 
     controller._service_servo_rebase_zero_capture(state)
     assert state.host_multiturn_status == "save failed: disk full"
@@ -498,13 +487,13 @@ def test_new_anchor_save_failure_keeps_scope_blocked_and_retries(monkeypatch):
     assert controller._multiturn_anchor_capture_blocked_mask == 3
 
     controller._multiturn_store.save.side_effect = None
-    controller._multiturn_store.save.return_value = {"raw": list(state.servo_raw_positions)}
+    controller._multiturn_store.save.return_value = {"logical_abs": list(state.servo_angles)}
     controller._service_servo_rebase_zero_capture(state)
     assert controller._servo_rebase_zero_capture_mask == 0
     assert controller._multiturn_anchor_capture_blocked_mask == 0
     assert controller._multiturn_store.save.call_count == 2
     assert controller._multiturn_store.save.call_args.kwargs["logical_abs"][:2] == [0, 0]
-    assert controller._multiturn_store.save.call_args.kwargs["raw"][:2] == [64, 4095]
+    assert "raw" not in controller._multiturn_store.save.call_args.kwargs
 
 
 @pytest.mark.parametrize("waiting_for_result", [True, False])
@@ -533,7 +522,6 @@ def test_reconnect_preserves_pending_rebase_and_blocks_old_anchor_restore(
     )
     state = controller.current_state
     state.servo_online_bitmap = state.multi_turn_unknown_bitmap = 3
-    state.servo_raw_online[:2] = [True, True]
     controller._service_multiturn_restore(state)
     controller.comm.send_command.assert_not_called()
 
@@ -542,7 +530,7 @@ def test_rebase_invalidates_only_old_scope_and_captures_runtime_before_new_auto(
     tmp_path, monkeypatch,
 ):
     controller = HandController()
-    controller._multiturn_store = MultiTurnRuntimeStore(tmp_path / "runtime.json")
+    controller._multiturn_store = SeededBundleStore(tmp_path / "runtime.json")
     identity = {
         "device_id": "0000123456789ABC",
         "urdf_repo_path": "model/hand.urdf",
@@ -555,7 +543,7 @@ def test_rebase_invalidates_only_old_scope_and_captures_runtime_before_new_auto(
     controller._multiturn_identity = lambda _state: identity
     other = 1 << 26
     old_abs = [5000, 6000] + [0] * (MOTOR_COUNT - 3) + [9000]
-    old_raw = [100, 200] + [0] * (MOTOR_COUNT - 3) + [320]
+    old_raw = [value % 4096 for value in old_abs]
     controller._multiturn_store_payload = controller._multiturn_store.save(
         identity=identity, valid_motor_mask=3 | other,
         logical_abs=old_abs, raw=old_raw, p4_time_ms=99,
@@ -593,14 +581,12 @@ def test_rebase_invalidates_only_old_scope_and_captures_runtime_before_new_auto(
     assert int(snapshot["multiturn_anchor_valid_bitmap"], 0) == other
 
     state = controller.current_state
-    state.has_servo_angle_data = state.has_servo_raw_data = True
+    state.has_servo_angle_data = True
     state.servo_online_bitmap = 3
     state.has_product_fingerprint = True
     state.product_fingerprint = {"protocol_version": HOST_PROTOCOL_VERSION, "device_id": identity["device_id"]}
     controller._servo_rebase_zero_device_id = identity["device_id"]
-    state.servo_raw_online[:2] = [True, True]
-    state.servo_raw_positions[:2] = [64, 4095]
-    state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = 101
+    state.servo_feedback_p4_time_ms = 101
     state.p4_time_ms = 101
     controller._servo_rebase_zero_capture_mask = 3
     controller._servo_rebase_zero_capture_after_ms = 100
@@ -609,7 +595,7 @@ def test_rebase_invalidates_only_old_scope_and_captures_runtime_before_new_auto(
     runtime = controller._multiturn_store.load(identity=identity)
     assert int(runtime["valid_motor_mask"], 0) == 3 | other
     assert runtime["logical_abs"][:2] == [0, 0]
-    assert runtime["raw"][:2] == [64, 4095]
+    assert runtime["raw"][:2] == [0, 0]
     assert runtime["logical_abs"][26] == 9000
     # 新 Auto 尚未生成，不提前把运行原点写成有效 Auto/LUT 快照。
     assert int(read_snapshot(snapshot_path)["multiturn_anchor_valid_bitmap"], 0) == other
@@ -617,9 +603,8 @@ def test_rebase_invalidates_only_old_scope_and_captures_runtime_before_new_auto(
     stale = HandModel()
     stale.copy_state_from(state)
     stale.servo_angles[:2] = [5000, 6000]
-    stale.servo_raw_positions[:2] = [100, 200]
-    stale.servo_feedback_p4_time_ms = stale.servo_raw_p4_time_ms = 99
+    stale.servo_feedback_p4_time_ms = 99
     controller._persist_multiturn_state(stale, force=True)
     runtime = controller._multiturn_store.load(identity=identity)
     assert runtime["logical_abs"][:2] == [0, 0]
-    assert runtime["raw"][:2] == [64, 4095]
+    assert runtime["raw"][:2] == [0, 0]

@@ -1,12 +1,13 @@
 {
   "schema_version": 1,
-  "protocol_version": 4,
+  "protocol_version": 6,
   "retired_command_values": [
     202,
     217,
     222,
     231,
     234,
+    236,
     239,
     240,
     245,
@@ -50,7 +51,7 @@
       "name": "PACKET_TYPE_SERVO_POSITION",
       "value": 3,
       "timestamp": true,
-      "description": "27 路单圈 raw + 27 路 logical ABS，同一时间戳"
+      "description": "27路原生有符号ABS，不携带独立单圈数组"
     },
     {
       "name": "PACKET_TYPE_SERVO_TELEM",
@@ -183,6 +184,12 @@
       "value": 31,
       "timestamp": false,
       "description": "21 路自适应 Kp 倍率与实际 Kp"
+    },
+    {
+      "name": "PACKET_TYPE_SERVO_ONLINE_STATUS",
+      "value": 32,
+      "timestamp": true,
+      "description": "27路上线会话、固件主次版本和配置检查结果"
     }
   ],
   "commands": [
@@ -244,7 +251,7 @@
       "requires_handshake": true,
       "value": 218,
       "payload_bytes": 112,
-      "description": "按位图恢复 27 路 logical ABS 多圈快照"
+      "description": "按位图提交27路原生ABS恢复锚点；P4统一计算最近圈并执行"
     },
     {
       "name": "CMD_HOST_HEARTBEAT",
@@ -298,13 +305,6 @@
       "value": 235,
       "payload_bytes": 4,
       "description": "按电机位图清除关联关节 Auto/LUT"
-    },
-    {
-      "name": "CMD_SERVO_RESET_ZERO",
-      "requires_handshake": true,
-      "value": 236,
-      "payload_bytes": 4,
-      "description": "标定前归零所选舵机硬件圈数并清除对应多圈锚点"
     },
     {
       "name": "CMD_STATE_SYNC_REQUEST",
@@ -404,7 +404,8 @@
     "STATE_SYNC_SERVO_ROUTE": 16,
     "STATE_SYNC_PRODUCT_FINGERPRINT": 32,
     "STATE_SYNC_MULTITURN_STATE": 64,
-    "STATE_SYNC_ALL": 127
+    "STATE_SYNC_ALL": 255,
+    "STATE_SYNC_SERVO_ONLINE_STATUS": 128
   },
   "state_sync_masks_descriptions": {
     "STATE_SYNC_MANUAL_REFERENCE": "同步 21 路 Manual Min/Max",
@@ -414,7 +415,8 @@
     "STATE_SYNC_SERVO_ROUTE": "同步动态舵机 BUS 路由",
     "STATE_SYNC_PRODUCT_FINGERPRINT": "同步产品配置指纹",
     "STATE_SYNC_MULTITURN_STATE": "同步多圈恢复、logical ABS设零及上位机标定目标的最终结果",
-    "STATE_SYNC_ALL": "同步全部静态运行契约"
+    "STATE_SYNC_ALL": "同步全部静态运行契约",
+    "STATE_SYNC_SERVO_ONLINE_STATUS": "同步电机上线检查结果"
   },
   "p4_runtime": {
     "serial_rx_buffer_size": 1024,

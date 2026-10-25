@@ -41,7 +41,7 @@ inline constexpr uint8_t kOfflineInvalidateMisses = 3; ///< 连续读失败达�
  * 短暂调度抖动，又能避免快速掉电重启长期沿用旧 hardware ABS 会话。
  */
 inline constexpr uint32_t kFeedbackStaleTimeoutMs = 80;
-// Reset Zero 会在 ServoBusTask 内同步执行 RESET、EEPROM 配置和反馈确认。
+// 坐标维护可能占用UART；正常反馈恢复前保留一个stale周期的宽限。
 // 事务结束后预留一个 stale 周期，使四条 BUS 先各完成一次正常同步读，避免
 // 把维护操作自身造成的轮询间隔误判为舵机掉电。
 inline constexpr uint32_t kFeedbackMaintenanceGraceMs =
@@ -58,15 +58,6 @@ inline constexpr uint32_t kOfflineRouteRescanIntervalMs = 500;
 inline constexpr uint16_t kRecoveryProbeTimeoutMs = 5;
 inline constexpr uint8_t kRecoveryMaxAttempts = 3; ///< 单次上线恢复最大尝试次数。
 inline constexpr uint32_t kRecoveryRetryIntervalMs = 100; ///< 上线恢复重试间隔。
-/** 单台舵机 RESET Zero 完整事务的最大尝试次数；每次都必须收到单播响应。 */
-inline constexpr uint8_t kResetZeroTransactionAttempts = 3;
-/** RESET 后重新读取反馈的最大次数，用于确认新 turn0 已经真实建立。 */
-inline constexpr uint8_t kResetZeroFeedbackAttempts = 3;
-
-static_assert(kResetZeroTransactionAttempts > 0 &&
-                  kResetZeroFeedbackAttempts > 0,
-              "servo reset-zero attempts must not be zero");
-
 } // namespace mmhand::config::servo
 
 #endif // MMHAND_SERVO_CONFIG_H

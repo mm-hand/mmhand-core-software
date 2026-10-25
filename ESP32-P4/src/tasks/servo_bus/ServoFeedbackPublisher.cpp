@@ -56,7 +56,7 @@ uint32_t collectTurnOverflowMask()
 
         // 业务反馈与舵机使用相同 ABS，越界时立即关闭力矩。
         const int32_t hardwareAbs =
-            driver->getHardwareAbsolutePosition(id);
+            driver->getAbsolutePosition(id);
         if (hardwareAbs < kServoResetZeroTriggerMin ||
             hardwareAbs > kServoResetZeroTriggerMax) {
             overflowMask |= (1UL << ch);
@@ -152,7 +152,7 @@ void publishTurnOverflowState(SystemRuntimeContext* sharedData)
     }
 }
 
-// 每周期生成同一时刻的逻辑位置、物理位置和负载视图。
+// 每周期发布同一轮次的原生ABS与遥测。
 void publishFeedback(SystemRuntimeContext* sharedData,
                      const ServoFeedbackCycleMeta_t& cycleMeta)
 {
@@ -161,13 +161,10 @@ void publishFeedback(SystemRuntimeContext* sharedData,
     }
 
     ServoAngleData_t servoData = {};
-    ServoAngleData_t servoRawData = {};
     ServoTelemetryData_t telemetryData = {};
     servoData.timestamp = p4::platform::time::monotonicMillis();
-    servoRawData.timestamp = servoData.timestamp;
     telemetryData.timestamp = servoData.timestamp;
     servoData.cycle = cycleMeta;
-    servoRawData.cycle = cycleMeta;
     telemetryData.cycle = cycleMeta;
 
     uint32_t onlineMask = 0;
@@ -184,14 +181,13 @@ void publishFeedback(SystemRuntimeContext* sharedData,
         if (driver && driver->isOnline(id)) {
             const ServoFeedbackInternal& feedback =
                 driver->getFeedback(id);
+            telemetryData.onlineCheck.generation[ch] = feedback.onlineSessionGeneration;
+            telemetryData.onlineCheck.major[ch] = feedback.firmwareMajor;
+            telemetryData.onlineCheck.minor[ch] = feedback.firmwareMinor;
+            telemetryData.onlineCheck.status[ch] = static_cast<uint8_t>(feedback.onlineCheck);
             servoData.servoAngles[ch] =
                 driver->getAbsolutePosition(id);
-            servoData.servoRawPositions[ch] =
-                driver->getRawPosition(id);
-            servoRawData.servoRawPositions[ch] =
-                driver->getRawPosition(id);
             servoData.onlineStatus[ch] = 1;
-            servoRawData.onlineStatus[ch] = 1;
             onlineMask |= bit;
 
             telemetryData.speed[ch] = feedback.speed;
@@ -218,10 +214,9 @@ void publishFeedback(SystemRuntimeContext* sharedData,
                     &sharedData->multi_turn_unknown_bitmap, ~bit);
                 FW_LOG_INFO_PRINTF(
                     "[SERVO RESTORE] M%02u absolute feedback trusted "
-                    "abs=%ld raw=%d unknown=0x%08lX\r\n",
+                    "abs=%ld unknown=0x%08lX\r\n",
                     (unsigned)ch,
                     (long)servoData.servoAngles[ch],
-                    (int)servoData.servoRawPositions[ch],
                     (unsigned long)sharedAtomicLoad(
                         &sharedData->multi_turn_unknown_bitmap));
             }
@@ -260,7 +255,6 @@ void publishFeedback(SystemRuntimeContext* sharedData,
 
     // 三类数据各保留一个“最新值邮箱”；多个消费者使用 peek() 共读，不复制队列。
     sharedData->servoFeedbackQueue.overwrite(servoData);
-    sharedData->servoRawQueue.overwrite(servoRawData);
     sharedData->servoTelemetryQueue.overwrite(telemetryData);
 }
 

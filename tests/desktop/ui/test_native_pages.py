@@ -476,7 +476,7 @@ def test_motor_page_has_compact_motor_columns_and_auto_fields(page):
     refresh(snapshot)
     tables = [element for element in client.elements.values() if isinstance(element, ui.table)]
     assert len(tables) == 21
-    assert [column['label'] for column in tables[0].columns] == ['Motor', 'RawNow', 'AbsNow', 'Load']
+    assert [column['label'] for column in tables[0].columns] == ['Motor', 'ABS', 'Load']
     details = [text for text in label_texts(client) if text.startswith('Auto Min:')]
     assert len(details) == 21
     lines = details[0].splitlines()
@@ -515,3 +515,36 @@ def test_control_pages_drop_duplicate_clear_faults_and_explain_handover(page):
     assert len(notes) == 2
     assert all('Clear Faults must be pressed before enabling again' in text for text in notes)
 
+
+
+def test_firmware_error_popup_is_global_and_once_per_online_session(page):
+    hand, client = page
+    build_page(hand)
+    snapshot = hand.application_snapshot()
+    snapshot['connections']['p4']['connected'] = True
+    snapshot['motor_firmware_device'] = '0000123456789ABC'
+    snapshot['motor_firmware_alerts'] = [dict(motor=2, generation=1, version='3.9', bus=0),
+                                         dict(motor=3, generation=1, version='3.8', bus=1)]
+    hand.application_snapshot = lambda **_: snapshot
+    tick = next(e for e in client.elements.values() if isinstance(e, ui.timer)
+                and getattr(e.callback, '__qualname__', '') == 'build_page.<locals>.refresh')
+    dialog = next(e for e in client.elements.values() if isinstance(e, ui.dialog)
+                  and any(isinstance(child, ui.label) and child.text == 'Motor firmware is too old'
+                          for card in e.default_slot.children for child in card.default_slot.children))
+    tick.callback()
+    assert dialog.value
+    assert any('M02 / BUS0 / ID2: 3.9' in text and 'M03 / BUS1 / ID3: 3.8' in text for text in label_texts(client))
+    dialog.close()
+    tick.callback()
+    assert not dialog.value
+    snapshot['motor_firmware_alerts'][0]['generation'] = 2
+    tick.callback()
+    assert dialog.value
+    dialog.close()
+    snapshot['connections']['p4']['connected'] = False
+    snapshot['motor_firmware_alerts'] = []
+    tick.callback()
+    snapshot['connections']['p4']['connected'] = True
+    snapshot['motor_firmware_alerts'] = [dict(motor=2, generation=2, version='3.9', bus=0)]
+    tick.callback()
+    assert dialog.value

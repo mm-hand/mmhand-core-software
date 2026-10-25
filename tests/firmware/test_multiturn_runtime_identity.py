@@ -2,7 +2,8 @@
 
 import pytest
 
-from desktop.core.device_state_store import DeviceStateStoreError, MultiTurnRuntimeStore
+from desktop.core.device_state_store import DeviceStateStoreError
+from _bundle_helpers import SeededBundleStore
 
 
 def _identity(*, hardware_map_crc: int, firmware_crc: int, snapshot: str) -> dict:
@@ -25,7 +26,7 @@ def _identity(*, hardware_map_crc: int, firmware_crc: int, snapshot: str) -> dic
 
 
 def test_multiturn_anchor_survives_firmware_and_calibration_update(tmp_path):
-    store = MultiTurnRuntimeStore(tmp_path / "multiturn_runtime.json")
+    store = SeededBundleStore(tmp_path / "multiturn_runtime.json")
     saved_identity = _identity(
         hardware_map_crc=0x12345678,
         firmware_crc=0x11111111,
@@ -49,7 +50,7 @@ def test_multiturn_anchor_survives_firmware_and_calibration_update(tmp_path):
 
 
 def test_multiturn_anchor_rejects_different_hardware_map(tmp_path):
-    store = MultiTurnRuntimeStore(tmp_path / "multiturn_runtime.json")
+    store = SeededBundleStore(tmp_path / "multiturn_runtime.json")
     store.save(
         identity=_identity(
             hardware_map_crc=0x12345678,

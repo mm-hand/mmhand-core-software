@@ -131,9 +131,7 @@ bool upperApplyMotorTargets(SystemRuntimeContext* sharedData,
         sharedData->servo_rebase_zero_request_token !=
             sharedData->servo_rebase_zero_result_token ||
         sharedData->restore_multi_turn_request_token !=
-            sharedData->restore_multi_turn_result_token ||
-        sharedData->servo_reset_zero_request_token !=
-            sharedData->servo_reset_zero_result_token;
+            sharedData->restore_multi_turn_result_token;
     if (rejected) {
         if (lock) xSemaphoreGive(lock);
         return false;

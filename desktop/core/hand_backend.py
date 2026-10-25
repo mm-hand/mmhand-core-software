@@ -928,7 +928,6 @@ class HandBackend(ApplicationActions):
         *,
         joint_mask: int,
         motor_mask: int,
-        reset_motor_mask: int,
     ) -> bool:
         # ROS2 发送持有 ROS2 -> Replay 两把锁；用相同顺序封住撤权到
         # 标定事务建立之间的空档，旧帧和新 Replay claim 均不能穿插。
@@ -941,7 +940,6 @@ class HandBackend(ApplicationActions):
                 return self._calibration_workflow.begin_calibration(
                     joint_mask=joint_mask,
                     motor_mask=motor_mask,
-                    reset_motor_mask=reset_motor_mask,
                     baseline_state=self.get_state_snapshot(),
                 )
 

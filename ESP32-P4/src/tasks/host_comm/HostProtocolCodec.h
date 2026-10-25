@@ -43,10 +43,14 @@ bool parseInt32ArrayBigEndian(const uint8_t* payload,
 // 返回 command 对应固定 payload 长度；未知命令返回 SIZE_MAX。
 size_t getCommandPayloadLength(uint8_t command);
 
-/** 将同一位置快照编码为一帧 RAW+ABS；容量不足返回 0，不写半帧。 */
+/** 将原生ABS位置快照编码为一帧；容量不足返回 0，不写半帧。 */
 size_t encodeServoPositionPacket(uint8_t* buffer,
                                  size_t capacity,
                                  const ServoAngleData_t& position);
+
+/** 编码上线检查缓存；容量不足时不写半帧。 */
+size_t encodeServoOnlineStatusPacket(uint8_t* buffer, size_t capacity,
+                                    const ServoTelemetryData_t& telemetry);
 
 } // namespace p4::host
 

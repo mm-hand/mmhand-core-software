@@ -66,12 +66,12 @@ def test_channel_accepts_only_matching_token_and_fields():
     channel = MaintenanceChannel()
     def send(frame):
         assert frame[1] == 14 and len(frame)==16 and frame[-1]==255
-        channel.feed(frame[3:-1]+bytes((0,1,2,0,0,0,0)))
+        channel.feed(frame[3:-1]+bytes((0,1,3,0)))
         return True
     reply = channel.request(send,244,7,PROBE,2,18)
     assert reply['present']==1 and reply['bus']==2
     def wrong(frame):
-        channel.feed(frame[3:-1][:8]+bytes((RENAME,2,18,0,0,1,2,0,0,0,0)))
+        channel.feed(frame[3:-1][:8]+bytes((RENAME,2,18,0,0,1,3,0)))
         return True
     with pytest.raises(ValueError,match='match'): channel.request(wrong,244,7,PROBE,2,18)
 

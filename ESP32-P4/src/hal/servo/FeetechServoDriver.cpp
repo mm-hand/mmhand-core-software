@@ -19,11 +19,7 @@ FeetechServoDriver::FeetechServoDriver()
       _syncReadFeedbackLen(0),
       _syncReadSequence(0),
       _syncReadStartedUs(0),
-      _syncReadDeadlineUs(0),
-      _multiTurnConfigId(0xFF),
-      _multiTurnConfigPhase(ServoMultiTurnConfigPhase::Idle),
-      _multiTurnConfigNotBeforeMs(0),
-      _multiTurnConfigFailed(false)
+      _syncReadDeadlineUs(0)
 {
     memset(_feedback, 0, sizeof(_feedback));
     memset(_torqueDisabled, 0, sizeof(_torqueDisabled));
@@ -54,25 +50,63 @@ void FeetechServoDriver::begin(uint8_t busIndex, int rxPin, int txPin, uint32_t 
     _sms.pSerial = _serial;
 }
 
-/* bool FeetechServoDriver::configureMultiTurnMode */
-bool FeetechServoDriver::configureMultiTurnMode(uint8_t id)
+bool FeetechServoDriver::checkOnlineConfiguration(uint8_t id)
 {
-    if (!_serial || id > MAX_SERVO_ID) {
+    if (!_serial || id > MAX_SERVO_ID) return false;
+    if (_multiTurnConfigured[id]) return true;
+    auto& feedback = _feedback[id];
+    uint8_t version[2] = {};
+    if (_sms.Read(id, 0, version, sizeof(version)) != sizeof(version) || _sms.getState()) {
+        feedback.onlineCheck = ServoOnlineCheck::VersionReadFailed;
         return false;
     }
-
-    uint8_t zeroLimits[4] = {0, 0, 0, 0};
-    bool ok = true;
-    ok = (_sms.unLockEprom(id) >= 0) && ok;
-    delay(kMultiTurnConfigDelayMs);
-    ok = (_sms.genWrite(id, SMS_STS_MIN_ANGLE_LIMIT_L, zeroLimits, sizeof(zeroLimits)) >= 0) && ok;
-    delay(kMultiTurnConfigDelayMs);
-    ok = (_sms.LockEprom(id) >= 0) && ok;
-    delay(kMultiTurnConfigDelayMs);
-    if (ok) {
-        _multiTurnConfigured[id] = true;
+    feedback.firmwareMajor = version[0];
+    feedback.firmwareMinor = version[1];
+    if (version[0] < 3 || (version[0] == 3 && version[1] < 10)) {
+        feedback.onlineCheck = ServoOnlineCheck::UnsupportedFirmware;
+        return false;
     }
-    return ok;
+    feedback.onlineCheck = ServoOnlineCheck::ConfigurationFailed;
+    uint8_t config[11] = {}, profile[3] = {};
+    if (_sms.Read(id, 8, config, sizeof(config)) != sizeof(config) || _sms.getState() ||
+        _sms.Read(id, 84, profile, sizeof(profile)) != sizeof(profile) || _sms.getState()) return false;
+    const uint8_t phase = config[10] | 0x10;
+    const uint8_t desired[3] = {254, 254, 0};
+    const bool limitsDiffer = config[1] || config[2] || config[3] || config[4];
+    const int initialLock = _sms.readByte(id, SMS_STS_LOCK);
+    if (initialLock < 0 || _sms.getState()) return false;
+    const bool different = initialLock != 1 || config[0] != 1 || phase != config[10] || limitsDiffer ||
+        memcmp(profile, desired, sizeof(profile));
+    if (different) {
+        if (!setTorqueEnabled(id, false)) {
+            // A reply-level 0 motor may have applied torque-off without ACK.
+            if (_sms.readByte(id, SMS_STS_TORQUE_ENABLE) != 0 || _sms.getState()) return false;
+            _torqueDisabled[id] = true;
+        }
+        _sms.unLockEprom(id);
+        if (_sms.readByte(id, SMS_STS_LOCK) != 0 || _sms.getState()) {
+            _sms.LockEprom(id);
+            return false;
+        }
+        if (config[0] != 1) _sms.writeByte(id, 8, 1);
+        uint8_t limits[4] = {};
+        if (limitsDiffer) _sms.genWrite(id, SMS_STS_MIN_ANGLE_LIMIT_L, limits, sizeof(limits));
+        if (phase != config[10]) _sms.writeByte(id, 18, phase);
+        for (uint8_t i = 0; i < 3; ++i) {
+            if (profile[i] != desired[i]) _sms.writeByte(id, 84 + i, desired[i]);
+        }
+        delay(kMultiTurnConfigDelayMs);
+        _sms.LockEprom(id);
+        delay(kMultiTurnConfigDelayMs);
+        if (_sms.readByte(id, SMS_STS_LOCK) != 1 || _sms.getState() ||
+            _sms.Read(id, 8, config, sizeof(config)) != sizeof(config) || _sms.getState() ||
+            _sms.Read(id, 84, profile, sizeof(profile)) != sizeof(profile) || _sms.getState() ||
+            config[0] != 1 || config[10] != phase || config[1] || config[2] || config[3] || config[4] ||
+            memcmp(profile, desired, sizeof(profile))) return false;
+    }
+    feedback.onlineCheck = ServoOnlineCheck::Ready;
+    _multiTurnConfigured[id] = true;
+    return true;
 }
 
 /* bool FeetechServoDriver::setTarget */
@@ -132,7 +166,7 @@ ServoSyncReadResult FeetechServoDriver::collectSyncRead(uint64_t nowUs)
         if (id > MAX_SERVO_ID) {
             continue;
         }
-        if (rxLen == _syncReadFeedbackLen) {
+        if (rxLen == _syncReadFeedbackLen && _sms.getState() == 0) {
             const int16_t current = _syncReadIncludeCurrent
                 ? decodeSigned(rxBuf[13], rxBuf[14])
                 : _feedback[id].current;

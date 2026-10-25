@@ -395,7 +395,7 @@ def test_manual_transaction_blocks_other_motion_owners(hand):
     hand._manual_transaction_active = True
     assert not hand.begin_replay_motion()[0]
     assert not hand.begin_calibration_import({})
-    assert not hand.begin_calibration_workflow(joint_mask=1, motor_mask=3, reset_motor_mask=3)
+    assert not hand.begin_calibration_workflow(joint_mask=1, motor_mask=3)
     assert not hand.set_active_scope(3, 1, True)
     hand._manual_transaction_active = False
 
@@ -423,6 +423,7 @@ def test_stop_does_not_wait_for_scope_ack(hand, monkeypatch):
     assert hand.get_control_mode() == ControlMode.DIRECT_MOTOR
 
 def test_import_full_manual_scope_resets_confirmations_outside_auto_scope(hand, monkeypatch):
+    monkeypatch.setattr(hand._controller, 'wait_for_multiturn_recovery', Mock(return_value=(True, 'recovered')))
     monkeypatch.setattr('desktop.core.calibration_workflow.validate_calibration_snapshot_for_load', lambda _: None)
     monkeypatch.setattr(hand._calibration_workflow._store, 'activate', Mock())
     monkeypatch.setattr(hand._controller, 'load_calibration_snapshot', lambda _: (True, 'readback OK'))
@@ -499,6 +500,7 @@ def test_preview_only_validates_and_bad_new_file_clears_old_token(hand, monkeypa
 
 @pytest.mark.parametrize('ok', [False, True])
 def test_import_activates_only_after_readback_and_resets_only_file_scope(hand, monkeypatch, ok):
+    monkeypatch.setattr(hand._controller, 'wait_for_multiturn_recovery', Mock(return_value=(True, 'recovered')))
     monkeypatch.setattr('desktop.core.calibration_workflow.validate_calibration_snapshot_for_load', lambda _: None)
     activate = Mock()
     monkeypatch.setattr(hand._calibration_workflow._store, 'activate', activate)

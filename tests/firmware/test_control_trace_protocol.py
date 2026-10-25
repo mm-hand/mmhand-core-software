@@ -91,7 +91,7 @@ def test_control_trace_reducer_keeps_dedicated_p4_timestamps() -> None:
 def test_servo_abs_reducer_keeps_its_own_p4_timestamp(monkeypatch) -> None:
     import desktop.core.communication.state_reducer as state_reducer
     monkeypatch.setattr(state_reducer, "parse_servo_position_packet",
-                        lambda _payload: ([0] * 27, [1000 + index for index in range(27)]))
+                        lambda _payload: [1000 + index for index in range(27)])
     """后到的其他状态包不能篡改舵机 ABS 的真实采样时间。"""
 
     class Owner:

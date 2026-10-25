@@ -52,7 +52,7 @@ def _abs_packet(first: int, timestamp_ms: int) -> tuple:
     values = [first] * 27
     return (
         PACKET_TYPE_SERVO_POSITION,
-        struct.pack(">27h", *values) + struct.pack(">27i", *values) + struct.pack(">I", timestamp_ms),
+        struct.pack(">27i", *values) + struct.pack(">I", timestamp_ms),
     )
 
 
@@ -76,7 +76,7 @@ def _direct_result_packet(timestamp_ms: int = 1) -> tuple:
 
 
 def _system_status_packet(timestamp_ms: int = 1) -> tuple:
-    payload = bytearray(173)
+    payload = bytearray(152)
     struct.pack_into(">I", payload, 26, (1 << 27) - 1)  # servo online mask
     struct.pack_into(">I", payload, 30, (1 << 21) - 1)  # encoder online mask
     payload[34] = 1  # CAN link online

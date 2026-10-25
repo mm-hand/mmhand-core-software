@@ -14,16 +14,16 @@ from desktop.core.calibration_snapshot import (
     multiturn_anchor_fields,
     seal_snapshot,
 )
-from desktop.core.core_logic import HandController
+from desktop.core.core_logic import HandController, ServoRebaseZeroResult
 from desktop.core.data_models import HandModel
-from desktop.core.device_state_store import MultiTurnRuntimeStore
+from desktop.core.device_state_store import BundleMultiTurnStore
+from _bundle_helpers import SeededBundleStore
 from desktop.core.protocol import (
     CMD_ACTIVE_SCOPE,
     CMD_CALIB_LOAD_JOINT,
     CMD_CALIB_LOAD_LIMITS,
     CMD_MANUAL_ENCODER_REFERENCE,
     CMD_RESET,
-    CMD_SERVO_RESET_ZERO,
     ControlMode,
     ENCODER_COUNT,
     MOTOR_COUNT,
@@ -47,13 +47,8 @@ def _trusted_multiturn_state(motor_idx: int) -> HandModel:
     state.servo_route_controllable_bitmap = bit
     state.multi_turn_unknown_bitmap = 0
     state.has_servo_angle_data = True
-    state.has_servo_raw_data = True
     state.servo_angles = [0] * MOTOR_COUNT
-    state.servo_raw_positions = [0] * MOTOR_COUNT
-    state.servo_raw_online = [False] * MOTOR_COUNT
     state.servo_angles[motor_idx] = 8192
-    state.servo_raw_positions[motor_idx] = 0
-    state.servo_raw_online[motor_idx] = True
     return state
 
 
@@ -61,7 +56,7 @@ def test_calibrated_anchor_is_saved_only_after_explicit_capture_request(
     tmp_path, monkeypatch
 ):
     controller = HandController()
-    controller._multiturn_store = MultiTurnRuntimeStore(
+    controller._multiturn_store = SeededBundleStore(
         tmp_path / "multiturn_runtime.json"
     )
     identity = {
@@ -91,6 +86,7 @@ def test_calibrated_anchor_is_saved_only_after_explicit_capture_request(
         merge_snapshot(
             None,
             {
+                **identity,
                 "active_joint_mask": 1 << 14,
                 "active_motor_mask": bit,
                 "motor_abs_limit_valid_bitmap": bit,
@@ -105,6 +101,7 @@ def test_calibrated_anchor_is_saved_only_after_explicit_capture_request(
         ),
     )
     monkeypatch.setattr(HandController, "calibration_snapshot_path", property(lambda _controller: snapshot_path))
+    controller._multiturn_store = BundleMultiTurnStore(snapshot_path)
     state = _trusted_multiturn_state(motor_idx)
 
     controller._block_multiturn_anchor_capture(bit)
@@ -128,7 +125,7 @@ def test_calibrated_anchor_is_saved_only_after_explicit_capture_request(
 
 def test_calibrated_anchors_are_saved_per_eligible_motor(tmp_path, monkeypatch):
     controller = HandController()
-    controller._multiturn_store = MultiTurnRuntimeStore(
+    controller._multiturn_store = SeededBundleStore(
         tmp_path / "multiturn_runtime.json"
     )
     identity = {
@@ -158,6 +155,7 @@ def test_calibrated_anchors_are_saved_per_eligible_motor(tmp_path, monkeypatch):
         merge_snapshot(
             None,
             {
+                **identity,
                 "active_joint_mask": (1 << 14) | (1 << 15),
                 "active_motor_mask": motor_mask,
                 "motor_abs_limit_valid_bitmap": motor_mask,
@@ -172,6 +170,7 @@ def test_calibrated_anchors_are_saved_per_eligible_motor(tmp_path, monkeypatch):
         ),
     )
     monkeypatch.setattr(HandController, "calibration_snapshot_path", property(lambda _controller: snapshot_path))
+    controller._multiturn_store = BundleMultiTurnStore(snapshot_path)
     state = _trusted_multiturn_state(18)
 
     assert controller.request_multiturn_anchor_capture(motor_mask)
@@ -181,8 +180,6 @@ def test_calibrated_anchors_are_saved_per_eligible_motor(tmp_path, monkeypatch):
     state.servo_online_bitmap = motor_mask
     state.servo_route_controllable_bitmap = motor_mask
     state.servo_angles[19] = 12288
-    state.servo_raw_positions[19] = 0
-    state.servo_raw_online[19] = True
     controller._service_multiturn_anchor_capture(state)
 
     assert controller._multiturn_anchor_capture_pending_mask == 0
@@ -205,7 +202,6 @@ def test_startup_multiturn_recovery_defers_motor_offline_after_route_scan():
     controller = HandController()
     state = HandModel()
     state.has_servo_angle_data = True
-    state.has_servo_raw_data = True
     state.has_servo_route_status = True
     state.servo_route_scan_state = 0
     state.servo_route_scan_progress = 100
@@ -527,7 +523,7 @@ class TestAsyncPersistenceAck:
         controller._verify_manual_encoder_readback.assert_called_once()
         save_json.assert_called_once()
 
-def test_host_multiturn_restore_uses_nearest_circle_for_each_motor(tmp_path):
+def test_host_multiturn_restore_submits_native_anchors_to_p4(tmp_path):
     """固定 400-count 门禁已删除，正反向跨圈都应按最近圈独立恢复。"""
     controller = HandController()
     controller.comm = MagicMock()
@@ -538,7 +534,7 @@ def test_host_multiturn_restore_uses_nearest_circle_for_each_motor(tmp_path):
         "calibration_snapshot_sha256": "abc",
     }
     controller._multiturn_identity = MagicMock(return_value=identity)
-    controller._multiturn_store = MultiTurnRuntimeStore(
+    controller._multiturn_store = SeededBundleStore(
         tmp_path / "multiturn_runtime.json"
     )
     controller._multiturn_store.save(
@@ -556,6 +552,8 @@ def test_host_multiturn_restore_uses_nearest_circle_for_each_motor(tmp_path):
     stamp(state, 'system_status_last_rx_ts')
     state.has_product_fingerprint = True
     state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": HOST_PROTOCOL_VERSION}
+    state.has_servo_online_status = True
+    state.servo_online_check = [1] * MOTOR_COUNT
     state.has_multiturn_restore_result = True
     state.has_servo_angle_data = True
     state.servo_abs_last_rx_ts = core_logic.time.time()
@@ -564,92 +562,23 @@ def test_host_multiturn_restore_uses_nearest_circle_for_each_motor(tmp_path):
     state.servo_online_bitmap = (1 << 0) | (1 << 1)
     state.has_servo_route_status = True
     state.servo_route_controllable_bitmap = (1 << 0) | (1 << 1)
-    state.has_servo_raw_data = True
-    state.servo_raw_online[0] = True
-    state.servo_raw_online[1] = True
-    state.servo_raw_positions[0] = 6
-    state.servo_raw_positions[1] = 4090
 
     controller._service_multiturn_restore(state)
 
     command = controller.comm.send_command.call_args.args[0]
     assert command[0] == "restore_multiturn"
     assert command[1] == (1 << 0) | (1 << 1)
-    assert command[2][0] == 8194
-    assert command[2][1] == 4090
+    assert command[2][0] == 8182
+    assert command[2][1] == 4106
     assert controller._multiturn_pending_restore_mask == command[1]
 
 
-class TestPrepareCalibrationTurnZero:
-    def test_invalidates_only_successful_selected_motor_anchors(self, tmp_path, monkeypatch):
-        """Calibrate 私有归零事务只清理成功电机，不能破坏其余 JSON 锚点。"""
-        controller = HandController()
-        controller.comm = MagicMock()
-        controller._multiturn_store = MultiTurnRuntimeStore(
-            tmp_path / "multiturn_runtime.json"
-        )
-        identity = {
-            "device_id": "0000123456789ABC",
-        "urdf_repo_path": "models/hand.urdf",
-        "product_fingerprint": {"schema_version": 2},
-            "calibration_snapshot_sha256": "abc",
-        }
-        controller._multiturn_identity = lambda _state: identity
-        controller._multiturn_store_payload = controller._multiturn_store.save(
-            identity=identity,
-            valid_motor_mask=(1 << 2) | (1 << 3),
-            logical_abs=[0, 0, 5000, 6000] + [0] * (MOTOR_COUNT - 4),
-            raw=[0, 0, 904, 1904] + [0] * (MOTOR_COUNT - 4),
-            p4_time_ms=10,
-        )
-        state = controller.current_state
-        state.has_product_fingerprint = True
-        state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": HOST_PROTOCOL_VERSION}
-        state.has_system_status_data = state.has_servo_route_status = True
-        state.system_state = SYSTEM_STATE_IDLE
-        state.system_status_last_rx_ts = core_logic.time.time()
-        stamp(state, 'system_status_last_rx_ts')
-        state.servo_route_controllable_bitmap = (1 << 2) | (1 << 3)
-        state.has_servo_reset_zero_status = True
-        state.servo_online_bitmap = (1 << 2) | (1 << 3)
-        state.servo_reset_zero_status = 0
-        state.servo_reset_zero_result_token = 5
-        state.servo_reset_zero_request_token = 5
-        monkeypatch.setattr(core_logic.time, "sleep", lambda _seconds: None)
-        monkeypatch.setattr(core_logic, "CALIBRATION_TURN_RESET_SETTLE_S", 0)
-
-        def wait_for_ack(cmd, _timeout, received_after_monotonic=None):
-            if cmd == CMD_RESET:
-                return (cmd, 0, PROTO_ACK_STATUS_QUEUED, received_after_monotonic)
-            if cmd == CMD_SERVO_RESET_ZERO:
-                state.servo_reset_zero_result_token = 6
-                state.servo_reset_zero_request_token = 6
-                state.system_status_last_rx_ts = core_logic.time.time()
-                stamp(state, 'system_status_last_rx_ts')
-                state.servo_reset_zero_status = 2
-                state.servo_reset_zero_success_mask = 1 << 2
-                state.servo_reset_zero_failed_mask = 0
-                return (cmd, 1, PROTO_ACK_STATUS_OK, received_after_monotonic)
-            return None
-
-        controller.comm.wait_for_ack.side_effect = wait_for_ack
-        ok, _message, success_mask, failed_mask = (
-            controller.prepare_calibration_turn_zero(1 << 2)
-        )
-
-        assert ok is True
-        assert success_mask == 1 << 2
-        assert failed_mask == 0
-        payload = controller._multiturn_store.load(identity=identity)
-        assert int(payload["valid_motor_mask"], 0) == 1 << 3
-        assert call("reset") in controller.comm.send_command.call_args_list
-        assert call(("servo_reset_zero", 1 << 2)) in controller.comm.send_command.call_args_list
-
+class TestReleaseZero:
     def test_manual_prepare_freezes_only_online_motors(self):
         """离线通道不加入 Release Rope 的冻结集合。"""
         controller = HandController()
         controller.comm = MagicMock()
-        controller.prepare_calibration_turn_zero = MagicMock(return_value=(False, "reset rejected", 0, 0))
+        controller.rebase_servo_abs_zero = MagicMock(return_value=ServoRebaseZeroResult(False, "reset rejected", 1, 0, 0))
         state = controller.current_state
         state.has_product_fingerprint = True
         state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": HOST_PROTOCOL_VERSION}
@@ -666,12 +595,9 @@ class TestPrepareCalibrationTurnZero:
 
         assert result.ok is False
         assert "reset rejected" in result.message
-        controller.prepare_calibration_turn_zero.assert_called_once()
-        assert controller.prepare_calibration_turn_zero.call_args.args == (all_motors & ~(1 << 24),)
-        assert controller.prepare_calibration_turn_zero.call_args.kwargs["invalidation_reason"] == "manual_prepare"
-
-
-
+        controller.rebase_servo_abs_zero.assert_called_once()
+        assert controller.rebase_servo_abs_zero.call_args.args == (all_motors & ~(1 << 24),)
+        assert "send_gate" in controller.rebase_servo_abs_zero.call_args.kwargs
 
 
 class TestLoadCalibrationSnapshot:

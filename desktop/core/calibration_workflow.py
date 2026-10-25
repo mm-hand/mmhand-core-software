@@ -190,8 +190,18 @@ class CalibrationWorkflowService:
                     return
                 if ok:
                     stage = 'P4 readback succeeded; activate local snapshot'
-                    self._store.activate(snapshot)
+                    self._controller.activate_calibration_snapshot(snapshot, self._store)
                     activated = True
+                    stage = 'Calibration installed; recover multi-turn positions'
+                    recovered, recovery_message = self._controller.wait_for_multiturn_recovery(
+                        parse_mask(snapshot.get("active_motor_mask")) & VALID_MOTOR_MASK,
+                        cancelled=lambda: not self._is_current(epoch),
+                    )
+                    ok = bool(recovered)
+                    message = (
+                        f"{message}; {recovery_message}" if recovered else
+                        f"Calibration installed, but multi-turn recovery failed: {recovery_message}"
+                    )
                 self._emit(
                     CalibrationWorkflowEvent(
                         epoch,
@@ -200,7 +210,7 @@ class CalibrationWorkflowService:
                         str(message),
                         parse_mask(snapshot.get("active_joint_mask")) & _JOINT_MASK,
                         parse_mask(snapshot.get("active_motor_mask")) & VALID_MOTOR_MASK,
-                        details={"source": str(source)},
+                        details={"source": str(source), "activated": activated},
                     )
                 )
             except Exception as exc:
@@ -228,7 +238,6 @@ class CalibrationWorkflowService:
         *,
         joint_mask: int,
         motor_mask: int,
-        reset_motor_mask: int,
         baseline_state: HandModel,
     ) -> bool:
         """Run the sole supported host calibration workflow."""
@@ -237,7 +246,6 @@ class CalibrationWorkflowService:
             return False
         joint_mask = int(joint_mask) & ((1 << ENCODER_COUNT) - 1)
         motor_mask = int(motor_mask) & VALID_MOTOR_MASK
-        reset_motor_mask = int(reset_motor_mask) & VALID_MOTOR_MASK
 
         def worker() -> None:
             records: list[dict] = []
@@ -273,12 +281,10 @@ class CalibrationWorkflowService:
                 )
                 effective_joint_mask = joint_mask | auto_joint_mask
                 effective_motor_mask = motor_mask | auto_motor_mask
-                effective_reset_mask = reset_motor_mask | auto_motor_mask
                 io = self._controller.create_host_calibration_io(
                     lambda: not self._is_current(epoch),
                     effective_joint_mask,
                     effective_motor_mask,
-                    reset_motor_mask=effective_reset_mask,
                     snapshot_store=self._store,
                 )
                 io.snapshot_identity = identity
@@ -297,8 +303,8 @@ class CalibrationWorkflowService:
                 self._emit(CalibrationWorkflowEvent(
                     epoch, "prepare", True,
                     "host calibration started" + auto_text
-                    + "; each joint is rebased before calibration",
-                    effective_joint_mask, effective_reset_mask,
+                    + "; coordinates are prepared once before movement",
+                    effective_joint_mask, effective_motor_mask,
                     details={"auto_aa_joint_mask": auto_joint_mask},
                 ))
 

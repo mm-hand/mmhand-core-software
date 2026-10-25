@@ -1,8 +1,8 @@
 /**
  * @file HostCalibrationCommandHandler.h
- * @brief 声明上位机维护命令涉及的 Manual、Auto 和 Reset Zero 联动事务。
+ * @brief 声明上位机维护命令涉及的 Manual、Auto 事务。
  * @details
- * - 输入：协议命令、Manual 参考表或 Reset Zero 结果 token。
+ * - 输入：协议命令、Manual 参考表。
  * - 输出：更新 P4 RAM 标定状态，并按 HardwareMap 精确失效受影响关节。
  * - 状态所有权：Manual RAM 提交由本服务串行处理；舵机硬件复位由 Servo 服务执行。
  * - 禁止依赖：本模块不读取串口帧、不组装上行包、不直接操作飞特 SDK。
@@ -33,10 +33,6 @@ void invalidateAutomaticCalibration(SystemRuntimeContext* sharedData,
 uint8_t commitManualReferences(
     SystemRuntimeContext* sharedData,
     const ManualEncoderReference references[ENCODER_TOTAL_NUM]);
-
-/** 消费一次 Reset Zero 完成结果，并联动失效对应关节标定。 */
-void processServoResetZeroResult(SystemRuntimeContext* sharedData,
-                                 uint32_t* lastResultToken);
 
 /** 返回 Manual、Auto、URDF 和单关节 CRC 全部匹配的 Jxx 位图。 */
 uint32_t autoCalibrationValidMask(SystemRuntimeContext* sharedData);

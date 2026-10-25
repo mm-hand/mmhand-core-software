@@ -12,14 +12,15 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+from pathlib import Path
 import threading
 import time
 
-from desktop.paths import CALIB_ACTIVE_SNAPSHOT_PATH
+from desktop.paths import CALIB_ACTIVE_SNAPSHOT_PATH, LOG_DIR
 
 from ..angle_mapping import get_spec, urdf_manual_scaled_mapping_metadata
 from ..calibration_snapshot import (
-    CalibrationSnapshotStore, update_snapshot_multiturn_anchors,
+    CalibrationSnapshotStore,
 )
 from ..data_models import HandModel, resolve_joint_workspace_range
 from ..communication.feedback_history import (
@@ -50,13 +51,18 @@ from .config import (
     kFeedbackReadyServoTimeoutMs, kServoRecoveryStableSamples,
     kServoRecoveryTimeoutMs, kHostTargetResultTimeoutMs, kHostRebaseFeedbackTimeoutMs,
     kOverloadLoadThreshold, load_magnitude,
-    kTendonFitSampleStepDeg,
+    kAaMidpointSpeedCountsPerSec, kAaMidpointToleranceFractionOfRange,
+    kAbsRebaseTriggerCounts, kTendonFitSampleStepDeg,
 )
-from .math import (TendonRawFitBuffer, encoder_count_to_deg, tendon_lut_sample_angle,
+from .math import (TendonRawFitBuffer, encoder_count_to_deg,
                    wrap_encoder_delta, map_manual_scaled_encoder_to_urdf)
 from .dependencies import usable_snapshot_aa_result
 from .finish import dual_lut_targets
 from .time_alignment import TimeAlignmentError, align_feedback
+
+
+# 标定直控目标落盘目录；测试通过 conftest 重定向到 tmp，避免写真实日志。
+CALIB_PUBLISH_LOG_DIR = Path(LOG_DIR) / 'diag'
 
 
 @dataclass(frozen=True)
@@ -73,24 +79,27 @@ class HostCalibrationIO:
     """机械算法只调用此端口；所有下行位置均为 logical ABS counts。"""
 
     def __init__(self, controller, cancel_check, selected_joint_mask,
-                 selected_motor_mask, *, reset_motor_mask=0, snapshot_store=None):
+                 selected_motor_mask, *, snapshot_store=None):
         self.controller = controller
         self.cancel_check = cancel_check
         self.selected_joint_mask = int(selected_joint_mask)
         self.active_joint_mask = self.selected_joint_mask
         self.selected_motor_mask = int(selected_motor_mask) & VALID_MOTOR_MASK
-        self.preparation_reset_mask = int(reset_motor_mask or selected_motor_mask) & VALID_MOTOR_MASK
         self.snapshot_store = snapshot_store or CalibrationSnapshotStore(CALIB_ACTIVE_SNAPSHOT_PATH)
         self.snapshot_identity = {}
         self._cancel = threading.Event()
         self._initial_prepared = False
+        self._coordinates_prepared = False
+        self._helper_restore_mask = 0
         self._motion_started = False
         self._workspace_mask = 0
         self._motion_scope = self.selected_motor_mask
         self._limits = {}
         self._committed_joint_results = {}
         self._aa_hold = None
-        self._aa_drift = (None, 0)
+        self._publish_log_path = None
+        self._active_calib_motor_mask = 0
+        self.rebase_retry_requested = False
         self.control_loss_reason = ''
         self._lut_sampling_windows = {}
         self._lut_sampling_diagnostics = {}
@@ -228,11 +237,8 @@ class HostCalibrationIO:
         return int(state.servo_angles[motor])
 
     def servo_raw(self, motor):
-        state = self._state()
-        if (self.servo_abs(motor) is None or not state.has_servo_raw_data
-                or not state.servo_raw_online[motor]):
-            return None
-        return int(state.servo_raw_positions[motor]) % 4096
+        absolute = self.servo_abs(motor)
+        return None if absolute is None else absolute % 4096
 
     def servo_load(self, motor):
         state = self._state()
@@ -333,6 +339,11 @@ class HostCalibrationIO:
     def urdf_limits(self, joint):
         return get_spec(joint).urdf_range_deg
 
+    def _aa_midpoint_tolerance(self, aa):
+        """AA 中点容差(度):关节量程的固定比例,到达和保持共用。"""
+        lo, hi = self.urdf_limits(aa)
+        return kAaMidpointToleranceFractionOfRange * (hi - lo)
+
     def urdf_config_crc(self):
         return urdf_manual_scaled_mapping_metadata()[1]
 
@@ -365,20 +376,9 @@ class HostCalibrationIO:
                     return None
                 targets[motor] = actual
         if self._aa_hold:
-            aa, result, center, fixed = self._aa_hold
-            try:
-                state, angle = self._finger_aa_feedback(aa, result)
-                stamp = state.encoder_raw_p4_time_ms
-                last, count = self._aa_drift
-                if stamp != last:
-                    count = count + 1 if abs(angle - center) > 3.0 else 0
-                    self._aa_drift = (stamp, count)
-                if count >= 3:
-                    raise ValueError(f'AA drifted from midpoint {center:.2f} deg (actual {angle:.2f})')
-            except ValueError as exc:
-                self.motion_publish_error = f'J{aa:02d}: {exc}'
-                self.trace('AA_MIDPOINT_FAILED', aa, reason=str(exc))
-                return None
+            # AA 只在从属关节标定前摆到中点；摆完不再复查是否漂移。
+            # 腱的跟随差会让任何角度门限在真机上压线误杀（J00 3°、J04 14.6°）。
+            _aa, _result, _center, fixed = self._aa_hold
             targets.update(fixed)
         return targets
 
@@ -445,14 +445,8 @@ class HostCalibrationIO:
         if (not state.has_servo_route_status or mask & ~state.servo_route_controllable_bitmap
                 or mask & state.servo_route_conflict_bitmap or mask & state.multi_turn_unknown_bitmap):
             raise ValueError('AA motor routes or multi-turn coordinates are untrusted')
-        first = float(result['tendonLutAngleStartDeg'])
-        # 末点按静态 angleMax 截断（与 P4 的取样角规则一致）。
-        last = tendon_lut_sample_angle(result, int(result['tendonLutCount']) - 1)
-        # 工作区始终使用静态 URDF Min/Max；currentMin/Max 概念已删除。
-        low = max(workspace.urdf_min_deg, first)
-        high = min(workspace.urdf_max_deg, last)
-        center = (low + high) / 2
-        if low >= high or dual_lut_targets(result, motors, center) is None:
+        center = (workspace.urdf_min_deg + workspace.urdf_max_deg) / 2
+        if dual_lut_targets(result, motors, center) is None:
             raise ValueError('AA midpoint requires a valid dual LUT; extrapolation is forbidden')
         limits = {}
         for motor in motors:
@@ -502,7 +496,7 @@ class HostCalibrationIO:
 
     def prepare_finger_aa(self, joint):
         self._aa_hold = None
-        self._aa_drift = (None, 0)
+        self._active_calib_motor_mask = 0
         aa = finger_aa_joint(joint)
         if aa is None:
             return True, ''
@@ -518,7 +512,8 @@ class HostCalibrationIO:
             if not (response[0] * response[1] < 0):
                 raise ValueError('AA tendon directions are invalid')
             targets = {m: state.servo_angles[m] for m in motors}
-            speed = min(100, params.servoSpeed)
+            speed = min(kAaMidpointSpeedCountsPerSec, params.servoSpeed)
+            tolerance = self._aa_midpoint_tolerance(aa)
             last_command = progress_at = self.now_ms()
             progress_angle = angle
             deadline = last_command + 60000
@@ -534,7 +529,7 @@ class HostCalibrationIO:
                     now = self.now_ms()
                     if abs(angle - progress_angle) >= 0.5:
                         progress_at, progress_angle = now, angle
-                    if abs(angle - center) <= 2:
+                    if abs(angle - center) <= tolerance:
                         targets = {m: state.servo_angles[m] for m in motors}
                         stable += 1
                     else:
@@ -678,14 +673,14 @@ class HostCalibrationIO:
         requested_at = time.monotonic()
         self.controller.request_state_sync()
         accepted_anchor_ms = None
-        # 新坐标的 ABS/raw 和硬件行程都必须来自这次结果之后。
+        # 新坐标的原生ABS和硬件行程都必须来自这次结果之后。
         def rebased_feedback():
             nonlocal accepted_anchor_ms
             state = self._state()
             delta = (state.servo_feedback_p4_time_ms - after_ms) & 0xFFFFFFFF
             range_delta = (getattr(state, 'servo_logical_range_p4_time_ms', 0)
                            - after_ms) & 0xFFFFFFFF
-            ready = (self._fresh_anchor(state, mask) and 0 < delta < 0x80000000
+            ready = (self._fresh_feedback(state, mask) and 0 < delta < 0x80000000
                      and 0 < range_delta < 0x80000000
                      and state.received_at('servo_logical_range_last_rx_ts') >= requested_at
                      and state.servo_logical_range_valid_bitmap & mask == mask)
@@ -700,18 +695,14 @@ class HostCalibrationIO:
             self.feedback_recovery_error = (
                 f'feedback wait {reason} after logical ABS zero was applied: '
                 f'mask=0x{mask:08X} result_ms={after_ms} '
-                f'ABS_ms={state.servo_feedback_p4_time_ms} raw_ms={state.servo_raw_p4_time_ms} '
+                f'ABS_ms={state.servo_feedback_p4_time_ms} '
                 f'range_ms={state.servo_logical_range_p4_time_ms} '
                 f'unknown=0x{mask & state.multi_turn_unknown_bitmap:08X} '
                 f'unmet={",".join(unmet) if unmet else "none"}'
             )
             log_session('HOST_CALIB', self.feedback_recovery_error)
             return False
-        # The new turn-zero anchor must be persisted before prepare_joint
-        # invalidates this joint's scope.  If the invalidation runs first, the
-        # anchor save sees "motors not active in calibration snapshot", the
-        # capture mask never clears, and the next rebase is rejected with
-        # "previous servo ABS rebase is awaiting its result/new feedback".
+        # Persist the confirmed new coordinates before any motion or another rebase.
         def anchor_captured():
             return not getattr(self.controller, '_servo_rebase_zero_capture_mask', 0)
         if not self._wait(anchor_captured, kHostRebaseFeedbackTimeoutMs):
@@ -723,7 +714,7 @@ class HostCalibrationIO:
             return False
         with self.controller.state_lock:
             # SYSTEM_STATUS 可以比归零后的 Known 锚点更旧；以实际验收的
-            # post-result ABS/raw 快照为截止，才能识别 NiceGUI 延迟的 F0 中间帧。
+            # post-result 原生ABS快照为截止，才能识别 NiceGUI 延迟的 F0 中间帧。
             window['end_ms'] = accepted_anchor_ms
         return True
 
@@ -745,14 +736,6 @@ class HostCalibrationIO:
                         state.received_at('servo_abs_last_rx_ts'))
         if age > kFeedbackReadyServoTimeoutMs:
             unmet.append(f'stale_abs(age={age:.0f}ms)')
-        if not state.has_servo_raw_data:
-            unmet.append('missing_raw')
-        raw_offline = sum(1 << motor for motor in range(MOTOR_COUNT)
-                          if mask & (1 << motor) and not state.servo_raw_online[motor])
-        if raw_offline:
-            unmet.append(f'raw_offline=0x{raw_offline:08X}')
-        if state.servo_feedback_p4_time_ms != state.servo_raw_p4_time_ms:
-            unmet.append('abs_raw_timestamp_mismatch')
         delta = (state.servo_feedback_p4_time_ms - after_ms) & 0xFFFFFFFF
         if not 0 < delta < 0x80000000:
             unmet.append('abs_not_after_zero_result')
@@ -791,13 +774,8 @@ class HostCalibrationIO:
                 self._age(state, state.servo_feedback_p4_time_ms,
                           state.received_at('servo_abs_last_rx_ts')) <= kFeedbackReadyServoTimeoutMs)
 
-    def _fresh_anchor(self, state, mask):
-        return (self._fresh_feedback(state, mask) and state.has_servo_raw_data and
-                state.servo_feedback_p4_time_ms == state.servo_raw_p4_time_ms and
-                all(state.servo_raw_online[m] for m in range(MOTOR_COUNT) if mask & (1 << m)))
-
     def _prepare_device(self):
-        # 与原 prepare_calibration_turn_zero 相同：每次校准入口一次维护 RESET。
+        # 每次标定入口只复位P4控制状态；电机坐标在逐关节准备时设零。
         # 直接走通信端口，controller.reset() 会取消当前宿主工作线程。
         if not self.owns_control():
             self.feedback_recovery_error = 'calibration preparation lost control or fresh system status'
@@ -820,11 +798,6 @@ class HostCalibrationIO:
             return False
         return True
 
-    def _prepare_workspace_reset_scope(self):
-        # Never reset or preposition fingers outside the explicit calibration scope.
-        self.preparation_reset_mask &= self.selected_motor_mask
-        return True
-
     def wait_servo_recovery(self, mask):
         self.feedback_recovery_error = ''
         if not self._initial_prepared:
@@ -837,19 +810,16 @@ class HostCalibrationIO:
                     return False
             if not self._prepare_device():
                 return False
-            if not self._prepare_workspace_reset_scope():
-                return False
-            if self.preparation_reset_mask and not self._rebase(self.preparation_reset_mask):
-                return False
             self._initial_prepared = True
         stable = 0
         last_timestamp = None
         deadline = self.now_ms() + kServoRecoveryTimeoutMs
         while self.now_ms() <= deadline and self.owns_control():
             state = self._state()
-            # 原 waitForCalibrationServoRecovery 只按新 ABS 快照累计稳定帧。
-            # Raw/ABS 是独立上行包；同戳要求只用于归零后的锚点采集。
-            ready = (self._fresh_feedback(state, mask) and
+            # 准备阶段只读原生反馈；一次批量置数/保留辅助坐标后，恢复严格可信门禁。
+            ready = (self._fresh_feedback(state, mask if self._coordinates_prepared else 0) and
+                     state.servo_online_bitmap & mask == mask and
+                     state.servo_route_controllable_bitmap & mask == mask and
                      state.servo_logical_range_valid_bitmap & mask == mask)
             if ready and state.servo_feedback_p4_time_ms != last_timestamp:
                 stable += 1
@@ -896,22 +866,84 @@ class HostCalibrationIO:
                           state.encoder_online_bitmap, state.encoder_fault_bitmap, mask)
         return False
 
+    def prepare_coordinates(self, joints, motor_mask):
+        """一次准备所有参与电机：保留已标定辅助坐标，其余批量设零。"""
+        if self._coordinates_prepared:
+            self.feedback_recovery_error = 'coordinate preparation was already completed'
+            return False
+        # The flow resolves motor-only selections to complete joints before this call.
+        self.selected_joint_mask = sum(1 << j for j in joints)
+        self.selected_motor_mask = sum(1 << m for j in joints for m in joint_motors(j))
+        if self.selected_motor_mask & ~motor_mask:
+            self.feedback_recovery_error = 'coordinate preparation omits selected joint motors'
+            return False
+        if not self.wait_servo_recovery(motor_mask):
+            return False
+        state = self._state()
+        try:
+            saved = self.snapshot_store.load()
+        except FileNotFoundError:
+            saved = {}
+        except (OSError, ValueError) as exc:
+            self.feedback_recovery_error = f'cannot inspect saved helper calibration: {exc}'
+            return False
+        saved = saved if isinstance(saved, dict) else {}
+        saved_limits = int(str(saved.get('motor_abs_limit_valid_bitmap', 0)), 0)
+        saved_joints = saved.get('joint_calib_results') or [None] * ENCODER_COUNT
+        helpers = motor_mask & ~self.selected_motor_mask
+        preserve = 0
+        for joint in range(ENCODER_COUNT):
+            pair = sum(1 << m for m in joint_motors(joint))
+            if not pair & helpers:
+                continue
+            result = state.joint_calib_results[joint]
+            persisted = saved_joints[joint] if joint < len(saved_joints) else None
+            if ((state.motor_abs_limit_valid_bitmap | saved_limits) & pair
+                    or state.auto_calibration_valid_bitmap & (1 << joint)
+                    or isinstance(result, dict) and result.get('success')
+                    or isinstance(persisted, dict) and persisted.get('success')):
+                preserve |= pair & helpers
+        unknown = preserve & state.multi_turn_unknown_bitmap
+        if unknown:
+            self._helper_restore_mask = unknown
+            try:
+                restored, message = self.controller.wait_for_multiturn_recovery(
+                    unknown, cancelled=self.is_cancelled)
+            finally:
+                self._helper_restore_mask = 0
+            if not restored or not self._fresh_feedback(self._state(), preserve):
+                self.feedback_recovery_error = f'calibrated helper coordinate recovery failed: {message}'
+                return False
+        if not self.preflight_finger_aa(joints):
+            return False
+        zero_mask = motor_mask & ~preserve
+        self.trace('BATCH_COORDINATES', 255, zero_mask=zero_mask, preserved_helper_mask=preserve)
+        if zero_mask and not self._rebase(zero_mask):
+            return False
+        self._coordinates_prepared = True
+        return True
+
+    def rebase_joint_for_retry(self, joint, mask):
+        """接近ABS边界时显式重新建立当前关节坐标。"""
+        if not self._rebase(mask):
+            return False
+        if self._aa_hold and self._aa_hold[0] == joint:
+            self._aa_hold = None
+        return True
+
     def set_workspace_read_mask(self, mask):
         self._workspace_mask = int(mask)
 
+    def set_active_calibration_motors(self, mask):
+        """记录当前正在标定的关节电机；只有它们的 ABS 目标会触发自动重设零。"""
+        self._active_calib_motor_mask = int(mask)
+
     def prepare_joint(self, joint, mask):
+        self.rebase_retry_requested = False
         self.clear_limits(joint)
         self._lut_sampling_windows.pop(joint, None)
         self.lut_sampling_error = ''
         self._committed_joint_results.pop(joint, None)
-        if not self._rebase(mask):
-            if self._rebase_zero_applied:
-                return False, f'J{joint:02d} logical ABS zero applied; {self.feedback_recovery_error}'
-            if self.is_cancelled():
-                return False, f'J{joint:02d} calibration cancelled before logical ABS zero completed: {self.feedback_recovery_error}'
-            return False, f'J{joint:02d} logical ABS zero failed: {self.feedback_recovery_error}'
-        self.snapshot_store.invalidate_scope(motor_mask=mask, joint_mask=1 << joint,
-                                             reason='host_calibration_rebase')
         return True, ''
 
     def _ensure_motion(self):
@@ -928,6 +960,27 @@ class HostCalibrationIO:
         return self._wait(lambda: self._state().system_state in (
             SYSTEM_STATE_IDLE, SYSTEM_STATE_READY, SYSTEM_STATE_RECOVERY_REQUIRED), 1000)
 
+    def _log_publish_targets(self, token, mask, values, actual):
+        """把每批直控目标与同刻实测 ABS 落盘（P4 trace 不覆盖 direct 模式）。
+
+        ponytail: 临时诊断，定位"M11 在保持期间被下发到远处"这类问题用；
+        问题关闭后删除本方法及其调用，或收敛到正式 trace。
+        """
+        if self._publish_log_path is None:
+            CALIB_PUBLISH_LOG_DIR.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
+            self._publish_log_path = CALIB_PUBLISH_LOG_DIR / f'calib_publish_{stamp}.csv'
+            with self._publish_log_path.open('w', encoding='utf-8') as stream:
+                stream.write('host_time,token,mask,' + ','.join(
+                    f'M{m:02d}_target,M{m:02d}_actual' for m in range(MOTOR_COUNT)) + '\n')
+        now = time.time()
+        stamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now))
+        with self._publish_log_path.open('a', encoding='utf-8') as stream:
+            stream.write(
+                f'{stamp}.{int((now % 1) * 1000):03d},{token},0x{mask:08X},'
+                + ','.join(f'{int(values[m])},{int(actual[m])}' for m in range(MOTOR_COUNT))
+                + '\n')
+
     def publish(self, targets, speed, acc):
         self.motion_publish_error = ''
         if not targets:
@@ -936,9 +989,28 @@ class HostCalibrationIO:
             return False
         scope = self.selected_motor_mask | self._workspace_mask
         requested_mask = sum(1 << m for m in targets)
-        if any(not scope & (1 << m) or not self.inside_limit(m, target)
-               for m, target in targets.items()):
-            return False
+        for motor, target in targets.items():
+            if not scope & (1 << motor):
+                self.motion_publish_error = f'M{motor:02d} is outside the enabled calibration scope'
+                return False
+            if (self._active_calib_motor_mask & (1 << motor)
+                    and abs(int(target)) >= kAbsRebaseTriggerCounts):
+                # 收紧把活动关节推到多圈上限附近：让流程重新设零后重跑该关节，
+                # 不要先撞 P4 的 ±30715 越圈保护（那会停整手）。
+                self.rebase_retry_requested = True
+                self.motion_publish_error = (
+                    f'M{motor:02d} target {int(target)} reached ABS rebase trigger '
+                    f'{kAbsRebaseTriggerCounts}')
+                return False
+            bounds = self.logical_range(motor)
+            if bounds is None:
+                self.motion_publish_error = f'M{motor:02d} logical range is unavailable'
+                return False
+            if not bounds[0] <= int(target) <= bounds[1]:
+                self.motion_publish_error = (
+                    f'M{motor:02d} target {int(target)} outside servo multi-turn range '
+                    f'[{bounds[0]}, {bounds[1]}]')
+                return False
         for motor in targets:
             load = self.servo_load(motor)
             if load is not None and load_magnitude(load) >= kOverloadLoadThreshold:
@@ -960,6 +1032,7 @@ class HostCalibrationIO:
         token = (self._target_token + 1) & 0xFFFFFFFF
         token = token or 1
         self._target_token = token
+        self._log_publish_targets(token, requested_mask, values, state.servo_angles)
         sent_at = time.monotonic()
         if not self.controller.comm.send_command((
                 'motor_pos_abs', token, requested_mask,
@@ -1125,8 +1198,8 @@ class HostCalibrationIO:
             'source': {'transport': 'host_calibration',
                        'identity_contract': 'hand_profile+urdf_crc+manual_entry_crc'},
         }, 1 << joint)
-        if not self._wait(lambda: self._fresh_anchor(self._state(), mask), 3000):
-            return False, 'new joint result saved; waiting for trusted ABS/raw anchors'
+        if not self._wait(lambda: self._fresh_feedback(self._state(), mask), 3000):
+            return False, 'new joint result saved; waiting for trusted native ABS anchors'
         state = self._state()
         with self.controller._multiturn_io_lock:
             with self.controller._multiturn_anchor_capture_lock:
@@ -1136,9 +1209,6 @@ class HostCalibrationIO:
                     with self.controller._multiturn_anchor_capture_lock:
                         self.controller._multiturn_anchor_capture_blocked_mask |= mask
                     return False, 'new joint result saved; runtime anchor persistence failed'
-                update_snapshot_multiturn_anchors(self.snapshot_store.path, motor_mask=mask,
-                                                  logical_abs=list(state.servo_angles),
-                                                  raw=list(state.servo_raw_positions))
             except Exception:
                 with self.controller._multiturn_anchor_capture_lock:
                     self.controller._multiturn_anchor_capture_blocked_mask |= mask

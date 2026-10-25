@@ -11,6 +11,7 @@ from desktop.core.calibration_snapshot import (
     joint_calib_result_has_valid_tendon_lut,
     joint_calib_result_tendon_lut_abs_ranges,
     merge_snapshot,
+    multiturn_anchor_fields,
     parse_mask,
     read_snapshot,
     seal_snapshot,
@@ -115,8 +116,7 @@ def test_scoped_manual_and_release_preserve_other_finger_after_reconnect(tmp_pat
     after = read_snapshot(path)
     for field, index in [('joint_calib_results', 11), ('manual_reference_min_raw', 11),
                          ('manual_reference_max_raw', 11), ('motor_abs_limit_min', 14),
-                         ('motor_abs_limit_max', 14), ('multiturn_anchor_logical_abs', 14),
-                         ('multiturn_anchor_raw', 14)]:
+                         ('motor_abs_limit_max', 14), ('multiturn_anchor_logical_abs', 14)]:
         assert after[field][index] == before[field][index], field
     for field, bit in [('manual_reference_valid_bitmap', 1 << 11),
                        ('motor_abs_limit_valid_bitmap', 1 << 14),
@@ -217,7 +217,8 @@ def test_multiturn_anchor_update_preserves_calibrated_joint_snapshot(tmp_path):
     persisted = read_snapshot(path)
     assert parse_mask(persisted["multiturn_anchor_valid_bitmap"]) & bit
     assert persisted["multiturn_anchor_logical_abs"][motor_idx] == 8192
-    assert persisted["multiturn_anchor_raw"][motor_idx] == 17
+    assert "multiturn_anchor_raw" not in persisted
+    assert multiturn_anchor_fields(persisted)[2][motor_idx] == 0
     assert persisted["joint_calib_results"][14]["success"] is True
 
 
@@ -400,7 +401,8 @@ def test_retained_out_of_scope_anchors_do_not_block_new_anchor_save(tmp_path):
     # 范围外的 M00 保留锚点值不被新写入覆盖，也不被截掉。
     assert bitmap & 1
     assert saved["multiturn_anchor_logical_abs"][0] == 8192
-    assert saved["multiturn_anchor_raw"][0] == 0
+    assert "multiturn_anchor_raw" not in saved
+    assert multiturn_anchor_fields(saved)[2][0] == 0
     assert saved["multiturn_anchor_logical_abs"][15] == 111 + 15
 
 

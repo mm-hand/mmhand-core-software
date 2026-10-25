@@ -56,6 +56,8 @@ struct HostCommRuntimeContext {
     uint32_t lastEncoderRawTimestampSent;
     uint32_t lastServoPositionTimestampSent;
     uint32_t lastServoTelemetryTimestampSent;
+    uint32_t lastOnlineCheckHash, lastOnlineCheckMs;
+    bool onlineCheckSent;
     uint32_t lastFaultStatusSent;
     uint32_t lastFaultStatusSentMs;
     bool faultStatusSentInitialized;
@@ -80,7 +82,6 @@ struct HostCommRuntimeContext {
     bool controlTraceSubscribed;
     uint32_t lastTaskDiagRenewMs; ///< 最近一次独立诊断订阅/续订时间，不参与运动控制租约。
     uint32_t pendingStateSyncMask;
-    uint32_t lastServoResetZeroResultToken;
     uint32_t lastSafetyEventSequenceSent;
     uint32_t lastUpperFrameRejectEventMs; ///< COM-6005 限频时间戳。
     uint32_t pendingUartRxErrorFlags; ///< 尚未成功上报的 UART overflow/frame/parity 错误位。
@@ -167,8 +168,6 @@ bool initHostCommService(SystemRuntimeContext* sharedData)
     g_hostCommRuntime.lastManualReferenceSequenceSent = 0xFFFFFFFFUL;
     g_hostCommRuntime.lastManualReferenceValidMaskSent = 0xFFFFFFFFUL;
     g_hostCommRuntime.lastManualReferenceCommittedSent = 0xFF;
-    g_hostCommRuntime.lastServoResetZeroResultToken =
-        sharedAtomicLoad(&sharedData->servo_reset_zero_result_token);
     initHostMultiTurnPublisher();
     FW_LOG_INFO_PRINTLN("<<<SYS_READY>>>");
     g_hostCommRuntime.initialized = true;
@@ -213,7 +212,6 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
     auto& taskDiagSubscribed = runtime.taskDiagSubscribed;
     auto& pendingStateSyncMask = runtime.pendingStateSyncMask;
     publishServoMaintenance();
-    auto& lastServoResetZeroResultToken = runtime.lastServoResetZeroResultToken;
     auto& lastSafetyEventSequenceSent = runtime.lastSafetyEventSequenceSent;
     const bool processRx = request.periodicDue ||
         (request.wakeReasons & p4::runtime::wake::kHostRx) != 0U;
@@ -274,8 +272,6 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
     if (!request.periodicDue) {
         return true;
     }
-    processServoResetZeroResult(
-        sharedData, &lastServoResetZeroResultToken);
     if (runtime.telemetrySentInitialized &&
         (uint32_t)(nowMs - runtime.lastTelemetryDispatchMs) < HOST_TELEMETRY_PERIOD_MS) {
         return true;
@@ -332,7 +328,7 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
             }
         }
 
-        // ABS/raw 必须共享快照和限频条件，否则 raw-only 更新会覆盖同戳锚点。
+        // 原生ABS位置快照。
         ServoAngleData_t servoPositionData;
         if (sharedData->servoFeedbackQueue.peek(&servoPositionData)) {
             if ((!runtime.controlTraceSubscribed ||
@@ -350,6 +346,21 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
         {
             if (sendServoTelemetryPacket(telemetryData)) {
                 lastServoTelemetryTimestampSent = telemetryData.timestamp;
+            }
+        }
+
+        if (sharedData->servoTelemetryQueue.peek(&telemetryData)) {
+            const uint32_t hash = appendFnv1a(2166136261UL, &telemetryData.onlineCheck,
+                                             sizeof(telemetryData.onlineCheck));
+            if (!runtime.onlineCheckSent || hash != runtime.lastOnlineCheckHash ||
+                uint32_t(nowMs - runtime.lastOnlineCheckMs) >= 1000U ||
+                (pendingStateSyncMask & STATE_SYNC_SERVO_ONLINE_STATUS)) {
+                if (sendServoOnlineStatusPacket(telemetryData)) {
+                    runtime.onlineCheckSent = true;
+                    runtime.lastOnlineCheckHash = hash;
+                    runtime.lastOnlineCheckMs = nowMs;
+                    pendingStateSyncMask &= ~uint32_t(STATE_SYNC_SERVO_ONLINE_STATUS);
+                }
             }
         }
 

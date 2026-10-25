@@ -23,7 +23,7 @@ from ..protocol import (
     ENCODER_COUNT,
     VALID_MOTOR_MASK,
 )
-from .config import default_auto_calibration_params
+from .config import default_auto_calibration_params, kAbsRebaseRetryCounts
 from .dual_motor import (
     build_dynamic_workspace_motor_mask,
     invalidate_dual_workspace_cache_joint,
@@ -111,20 +111,19 @@ def run(io, joint_mask: int, motor_mask: int,
                     CALIB_DIAG_PHASE_SEQUENCE, 0xFF, 0xFF,
                     int(joint_mask), int(motor_mask), 0, 0)
             message = "active scope has no joints"
-        elif not io.preflight_finger_aa(joints):
-            message = io.feedback_recovery_error
         elif not io.wait_servo_recovery(selected_motors):
             message = _servo_recovery_message(io, "selected servo feedback recovery failed")
         elif not io.wait_encoder_recovery(selected_mask):
             message = "selected encoder feedback recovery failed"
         else:
-            workspace_motors = build_dynamic_workspace_motor_mask(io, joints)
+            workspace_motors = build_dynamic_workspace_motor_mask(io, joints, allow_unknown=True)
             if workspace_motors is None:
                 message = "workspace feedback preflight failed"
             else:
                 workspace_motors |= io.finger_aa_motor_mask(joints)
                 io.set_workspace_read_mask(workspace_motors)
-                if not io.wait_servo_recovery(selected_motors | workspace_motors):
+                if (not io.prepare_coordinates(joints, selected_motors | workspace_motors)
+                        or not io.wait_servo_recovery(selected_motors | workspace_motors)):
                     message = _servo_recovery_message(io, "workspace servo feedback recovery failed")
                 else:
                     io.session_state("RUNNING", progress=0, joint=0xFF,
@@ -141,19 +140,19 @@ def run(io, joint_mask: int, motor_mask: int,
                             on_joint_started(joint, joint_motors)
                         io.session_state("RUNNING", progress=index * 100 // len(joints),
                                          joint=joint, completed=completed, failed=failed)
-                        prepared, prepare_message = _accepted(
-                            io.prepare_joint(joint, joint_motors)
-                        )
-                        if not prepared:
-                            outcome = {
-                                "success": False, "aborted": True,
-                                "cancelled": _is_cancelled(io),
-                                "reason": prepare_message or "joint ABS zero failed",
-                                "result": None, "limits": {},
-                            }
-                        else:
-                            # 当前关节原点改变后，不能使用此前辅助动作的旧 ABS cache。
-                            invalidate_dual_workspace_cache_joint(io, joint)
+                        outcome = {}
+                        for attempt in range(kAbsRebaseRetryCounts + 1):
+                            prepared, prepare_message = _accepted(
+                                io.prepare_joint(joint, joint_motors)
+                            )
+                            if not prepared:
+                                outcome = {
+                                    "success": False, "aborted": True,
+                                    "cancelled": _is_cancelled(io),
+                                    "reason": prepare_message or "joint ABS zero failed",
+                                    "result": None, "limits": {},
+                                }
+                                break
                             if joint in DUAL_TENDON_JOINT_INDICES:
                                 outcome = run_dual(
                                     io, joint, index, len(joints), selected_mask, joint_params
@@ -164,20 +163,40 @@ def run(io, joint_mask: int, motor_mask: int,
                                     selected_mask,
                                 )
                             outcome = dict(outcome)
-                            if bool(outcome.get("success")):
-                                committed, commit_message = _accepted(io.commit_joint(
-                                    joint, outcome.get("result"), outcome.get("limits", {})
-                                ))
-                                if not committed:
-                                    if not _is_cancelled(io):
-                                        io.diag(CALIB_DIAG_REASON_RESULT_COMMIT_FAILED,
-                                                CALIB_DIAG_PHASE_SEQUENCE, joint, 0xFF,
-                                                0, 0, 0, joint_motors)
-                                    outcome.update(success=False, aborted=True,
-                                                   reason=commit_message or
-                                                   "joint calibration commit failed")
-                                else:
-                                    outcome["commit_message"] = commit_message
+                            if (bool(outcome.get("success"))
+                                    or not getattr(io, "rebase_retry_requested", False)
+                                    or attempt >= kAbsRebaseRetryCounts
+                                    or _is_cancelled(io)):
+                                break
+                            # 只有明确接近ABS边界才重新设零，普通关节切换不改变坐标。
+                            if not io.rebase_joint_for_retry(joint, joint_motors):
+                                outcome.update(aborted=True, reason=io.feedback_recovery_error)
+                                break
+                            invalidate_dual_workspace_cache_joint(io, joint)
+                            message_for_trace = outcome.get("reason") or ""
+                            failure_message = getattr(io, "failure_message", None)
+                            if callable(failure_message):
+                                message_for_trace = failure_message(message_for_trace)
+                            trace = getattr(io, "trace", None)
+                            if callable(trace):
+                                trace("ABS_REBASE_RETRY", joint, attempt=attempt + 1,
+                                      reason=str(message_for_trace))
+                            io.session_state("RUNNING", progress=index * 100 // len(joints),
+                                             joint=joint, completed=completed, failed=failed)
+                        if bool(outcome.get("success")):
+                            committed, commit_message = _accepted(io.commit_joint(
+                                joint, outcome.get("result"), outcome.get("limits", {})
+                            ))
+                            if not committed:
+                                if not _is_cancelled(io):
+                                    io.diag(CALIB_DIAG_REASON_RESULT_COMMIT_FAILED,
+                                            CALIB_DIAG_PHASE_SEQUENCE, joint, 0xFF,
+                                            0, 0, 0, joint_motors)
+                                outcome.update(success=False, aborted=True,
+                                               reason=commit_message or
+                                               "joint calibration commit failed")
+                            else:
+                                outcome["commit_message"] = commit_message
                         if bool(outcome.get("success")):
                             completed |= 1 << joint
                         else:

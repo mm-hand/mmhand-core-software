@@ -14,7 +14,6 @@
 #include "../tasks/servo_bus/ServoBusTask.h"
 #include "../config/topology/HardwareMap.h"
 #include "../config/ServoConfig.h"
-#include "../data/RecoveryTypes.h"
 #include "../data/ServoRouteTypes.h"
 #include "calibration/ManualEncoderReferenceStore.h"
 #include "../config/protocol/HostProtocol.h"
@@ -59,7 +58,6 @@ bool assembleAndStartSystem() {
     sharedData.canRxQueue.create(1);
     sharedData.servoTargetQueue.create(1);
     sharedData.servoFeedbackQueue.create(1);
-    sharedData.servoRawQueue.create(1);
     sharedData.servoTelemetryQueue.create(1);
     sharedData.mappedAngleQueue.create(1);
     sharedData.controlTraceQueue.create(32);
@@ -70,7 +68,6 @@ bool assembleAndStartSystem() {
         sharedData.canRxQueue.valid() &&
         sharedData.servoTargetQueue.valid() &&
         sharedData.servoFeedbackQueue.valid() &&
-        sharedData.servoRawQueue.valid() &&
         sharedData.servoTelemetryQueue.valid() &&
         sharedData.mappedAngleQueue.valid() &&
         sharedData.controlTraceQueue.valid() &&
@@ -123,7 +120,6 @@ bool assembleAndStartSystem() {
            sizeof(sharedData.servo_route_bus));
     // 上电时尚未收到任何舵机反馈，因此没有 pending 事务，也没有已配置电机。
     // 舵机连续上线两帧后，ServoBusTask 会建立 pending 并完成恢复。
-    sharedData.servo_reset_zero_status = SERVO_RESET_ZERO_STATUS_IDLE;
 
     sharedData.host_rx_heartbeat_ms = millis();
 

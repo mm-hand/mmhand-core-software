@@ -31,7 +31,6 @@ from .math import (
     f32,
     map_manual_scaled_encoder_to_urdf,
     round_to_int32,
-    signed_encoder_delta,
     wrap_encoder_count,
     wrap_encoder_delta,
 )
@@ -62,27 +61,13 @@ class WorkspaceCacheEntry:
     secondary_release_abs: int = 0
 
 
-@dataclass
-class _EncoderTravel:
-    """Unwrap consecutive feedback in the unchanged Manual coordinate frame."""
-
-    last_encoder: int
-    counts: int = 0
-    min_counts: int = 0
-    max_counts: int = 0
-
-    def observe(self, encoder):
-        self.counts += wrap_encoder_delta(encoder, self.last_encoder)
-        self.last_encoder = encoder
-        self.min_counts = min(self.min_counts, self.counts)
-        self.max_counts = max(self.max_counts, self.counts)
-
-
 def _get(snapshot, name, default=None):
     return snapshot.get(name, default) if isinstance(snapshot, dict) else getattr(snapshot, name, default)
 
 
 def _dual_motors(joint):
+    # Dual joints: motors[0] (primary) tightens toward URDF Max;
+    # motors[1] (secondary) tightens toward URDF Min.
     motors = config.joint_motors(joint)
     return tuple(motors) if len(motors) == 2 else None
 
@@ -133,7 +118,7 @@ def classify_dual_workspace_pair(io, joint):
     return PAIR_READY
 
 
-def build_dynamic_workspace_motor_mask(io, active_joints):
+def build_dynamic_workspace_motor_mask(io, active_joints, *, allow_unknown=False):
     """Exclude fully offline helpers; reject partial/unknown/stale helpers.
 
     AA 邻指让位是 AA 行程搜索的机械前提，与本次标定选了哪些关节无关：
@@ -151,18 +136,11 @@ def build_dynamic_workspace_motor_mask(io, active_joints):
             if availability == PAIR_READY:
                 mask |= pair_mask
                 continue
-            snapshot = io.snapshot()
-            configured = int(_get(snapshot, "servo_multiturn_configured_bitmap", 0))
-            pending = int(_get(snapshot, "servo_recovery_pending_bitmap", 0))
-            failed = int(_get(snapshot, "servo_recovery_failed_bitmap", 0))
-            target_can_rebuild = (
-                candidate == target and availability == PAIR_TURN_UNKNOWN
-                and configured & pair_mask == pair_mask
-                and pending & pair_mask == 0 and failed & pair_mask == 0
-            )
-            if target_can_rebuild:
+            # Discovery only: readiness/configuration is checked for the full scope
+            # before coordinate preparation can write or enable anything.
+            if allow_unknown and availability == PAIR_TURN_UNKNOWN:
                 mask |= pair_mask
-                io.trace("WORKSPACE_MASK_TARGET_REBUILD", target, mask=pair_mask)
+                io.trace("WORKSPACE_MASK_PREPARE_COORDINATES", target, mask=pair_mask)
                 continue
             if candidate != target and availability == PAIR_ALL_OFFLINE:
                 io.trace("WORKSPACE_MASK_SKIP", target, helper=candidate, reason=availability)
@@ -200,7 +178,6 @@ class _DualMachine:
         # 辅助手指让位沿用独立原速参数，不跟随当前校准的自定义参数。
         self.workspace_params = config.default_auto_calibration_params()
         self.reason = protocol.CALIB_DIAG_REASON_NONE
-        self._result_travel = None
 
     def _diag(self, reason, phase, joint, motor=255, *values):
         # Same first-root-cause semantics as setCalibrationDiagIfEmpty.
@@ -245,7 +222,13 @@ class _DualMachine:
             self._control_lost(phase, joint, motor)
             return False
         for channel, target in targets.items():
-            if not self.io.inside_limit(channel, target):
+            bounds = self.io.logical_range(channel)
+            if bounds is None or not bounds[0] <= target <= bounds[1]:
+                # 收紧搜索把多圈计数推到 ±30715 之外时，必须报出是哪颗电机、
+                # 目标是多少；否则上位机只显示笼统的 "target publish failed"。
+                self.io.motion_publish_error = (
+                    f'M{channel:02d} target {target} outside servo multi-turn range '
+                    f'{list(bounds) if bounds else "unavailable"}')
                 values = list(targets.values()) + [0]
                 self._diag(protocol.CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
                            phase, joint, motor, values[0], values[1], -1,
@@ -515,8 +498,6 @@ class _DualMachine:
             if raw is None or encoder is None or current is None:
                 self._feedback_lost(phase, self.joint, secondary, (1 << primary) | (1 << secondary))
                 return None
-            if self._result_travel is not None:
-                self._result_travel.observe(encoder)
             load_raw = self.io.servo_load(secondary)
             load = config.load_magnitude(load_raw) if load_raw is not None else 0
             if load_raw is not None and load >= threshold:
@@ -542,7 +523,6 @@ class _DualMachine:
         window_encoder, window_s, window_p, stable = start_encoder, start_s, start_p, 0
         threshold = config.kDualSecondaryFinalLoadThreshold
         motor_mask = (1 << primary) | (1 << secondary)
-        exchange_travel = _EncoderTravel(start_encoder)
         while self.io.owns_control():
             now = self.io.now_ms()
             raw, encoder = self.io.encoder_raw(self.joint), self.io.encoder(self.joint)
@@ -550,14 +530,15 @@ class _DualMachine:
             if raw is None or encoder is None or s_abs is None or p_abs is None:
                 self._feedback_lost(phase, self.joint, secondary, motor_mask)
                 return None
-            exchange_travel.observe(encoder)
-            if self._result_travel is not None:
-                self._result_travel.observe(encoder)
             load_raw = self.io.servo_load(secondary)
             load = config.load_magnitude(load_raw) if load_raw is not None else 0
             load_high = load_raw is not None and load >= threshold
-            total_delta = exchange_travel.counts
-            total_deg = abs(encoder_count_to_deg(total_delta))
+            # Exchange moves toward Min; positive travel is the signed ring
+            # distance from the start raw. The old mod-16384 "forward" distance
+            # read a few counts of encoder jitter as a whole turn; the
+            # tight->limit span check after the endpoint judges the sweep.
+            total_delta = -wrap_encoder_delta(encoder, start_encoder)
+            total_deg = encoder_count_to_deg(total_delta)
             if fit is not None:
                 fit.maybe_append(total_deg, encoder, p_abs, s_abs)
             found = False
@@ -568,7 +549,7 @@ class _DualMachine:
                 angle_stalled = angle_delta <= p.stallActualDeg
                 stable = min(stable + 1, 255) if load_high and not enough_travel and angle_stalled else 0
                 self.io.trace("CHECK_DUAL_EXCHANGE_NEG3", self.joint, secondary,
-                              total_deg=total_deg, signed_travel=total_delta, window_deg=angle_delta,
+                              total_deg=total_deg, total_counts=total_delta, window_deg=angle_delta,
                               secondary_delta=s_delta, primary_delta=p_delta,
                               angle_stable=stable, load=load, enough_travel=enough_travel)
                 if stable >= config.kAngleStallStableSamples:
@@ -633,24 +614,19 @@ class _DualMachine:
             if tight is None:
                 return None
         tight_abs, tight_raw, tight_encoder, tight_load = tight
-        self._result_travel = _EncoderTravel(tight_encoder)
         s_start, s_encoder = self.io.servo_abs(secondary), self.io.encoder(self.joint)
         if s_start is None or s_encoder is None:
             self._feedback_lost(protocol.CALIB_DIAG_PHASE_DUAL_PRELOAD, self.joint, secondary, 1 << secondary)
             return None
-        self._result_travel.observe(s_encoder)
         preload = self._find_secondary_preload(secondary, s_start, primary, tight_abs)
         if preload is None:
             return None
         preload_abs, preload_raw, preload_encoder, preload_load = preload
-        self._result_travel.observe(preload_encoder)
         exchange_encoder = self.io.encoder(self.joint)
         if exchange_encoder is None:
             self._feedback_lost(protocol.CALIB_DIAG_PHASE_DUAL_EXCHANGE,
                                 self.joint, secondary, (1 << primary) | (1 << secondary))
             return None
-        self._result_travel.observe(exchange_encoder)
-        preload_travel = self._result_travel.counts
         fit = TendonRawFitBuffer()
         begin_sampling = getattr(self.io, "begin_lut_sampling", None)
         sampling_window = None
@@ -675,7 +651,6 @@ class _DualMachine:
         if endpoint is None:
             return None
         s_limit, p_final, ready_raw, limit_encoder, ready_load = endpoint
-        self._result_travel.observe(limit_encoder)
         if sampling_window is not None:
             try:
                 fit = self.io.finish_lut_sampling(sampling_window)
@@ -687,46 +662,35 @@ class _DualMachine:
                 return None
         else:
             fit.append(limit_encoder, p_final, s_limit)
-        signed_travel = self._result_travel.counts
-        span = abs(signed_travel)
-        observed_span = self._result_travel.max_counts - self._result_travel.min_counts
-        # Primary tendon tension need not increase the Manual/URDF angle (thumb).
-        # Order actual endpoints; do not flip direction or the LUT sample frame.
-        if signed_travel > 0:
-            start_encoder, result_tight = tight_encoder, limit_encoder
-            start_primary_abs, end_primary_abs = tight_abs, p_final
-        else:
-            start_encoder, result_tight = limit_encoder, tight_encoder
-            start_primary_abs, end_primary_abs = p_final, tight_abs
-        self.io.trace("DUAL_SPAN_CHECK", self.joint, primary,
-                      tight_encoder=tight_encoder, preload_encoder=preload_encoder,
-                      exchange_encoder=exchange_encoder, limit_encoder=limit_encoder,
-                      preload_travel=preload_travel, exchange_travel=signed_travel - preload_travel,
-                      signed_travel=signed_travel, span=span, observed_span=observed_span,
-                      start_encoder=start_encoder, end_encoder=result_tight)
-        if (span <= 0 or observed_span >= config.kRejectNearFullWrapSpanCounts
-                or forward_encoder_delta(start_encoder, result_tight) != span):
-            self._diag(protocol.CALIB_DIAG_REASON_RESULT_SPAN_INVALID,
-                       protocol.CALIB_DIAG_PHASE_DUAL_EXCHANGE, self.joint, primary,
-                       span, limit_encoder, tight_encoder, (1 << primary) | (1 << secondary))
-            return None
-        total_deg = encoder_count_to_deg(span)
+        # Physical numbering invariant: tightening primary reaches URDF Max;
+        # the exchange must sweep toward URDF Min. Reversed numbering makes
+        # forward_encoder_delta exceed half a turn.
+        span = forward_encoder_delta(limit_encoder, tight_encoder)
+        required = 0
         if self.joint in WORKSPACE_DUAL_JOINTS:
             # 邻指没让位（或电机编号接错）时 AA 会被挡住，扫不满量程；截断的
             # LUT 还会被同指其它关节当依赖，直接拒绝比写回一个假结果好。
             low, high = self.io.urdf_limits(self.joint)
             required = deg_to_encoder_count(
                 f32(config.kMinAaTravelFractionOfRange * f32(high - low)))
-            if span < required:
-                self._diag(protocol.CALIB_DIAG_REASON_RESULT_SPAN_INVALID,
-                           protocol.CALIB_DIAG_PHASE_DUAL_EXCHANGE, self.joint, primary,
-                           span, required, int(total_deg),
-                           (1 << primary) | (1 << secondary))
-                return None
-        fraction = f32(f32(config.kLutZeroDeg - config.kLutStartDeg) / total_deg) if total_deg > 0 else 0
-        zero_encoder = wrap_encoder_count(start_encoder + round_to_int32(f32(f32(span) * fraction)))
-        result = build_calibration_result(self.io, self.joint, start_encoder, zero_encoder,
-                                          result_tight, start_primary_abs, tight_abs, end_primary_abs)
+        self.io.trace("DUAL_SPAN_CHECK", self.joint, primary,
+                      tight_encoder=tight_encoder, preload_encoder=preload_encoder,
+                      exchange_encoder=exchange_encoder, limit_encoder=limit_encoder,
+                      span=span, required=required)
+        if span <= 0 or span >= config.kCalibrationEncoderHalfTurn or span < required:
+            self._diag(protocol.CALIB_DIAG_REASON_RESULT_SPAN_INVALID,
+                       protocol.CALIB_DIAG_PHASE_DUAL_EXCHANGE, self.joint, primary,
+                       span, required, int(encoder_count_to_deg(span)),
+                       (1 << primary) | (1 << secondary))
+            return None
+        # ponytail: net span replaces the old continuous travel monitor.
+        # Reintroduce an unwrapped counter only if a full-turn excursion that
+        # returns to a plausible endpoint must be rejected.
+        total_deg = encoder_count_to_deg(span)
+        fraction = f32(f32(config.kLutZeroDeg - config.kLutStartDeg) / total_deg)
+        zero_encoder = wrap_encoder_count(limit_encoder + round_to_int32(f32(f32(span) * fraction)))
+        result = build_calibration_result(self.io, self.joint, limit_encoder, zero_encoder,
+                                          tight_encoder, p_final, tight_abs, tight_abs)
         if result is None:
             self._diag(protocol.CALIB_DIAG_REASON_RESULT_BUILD_FAILED,
                        protocol.CALIB_DIAG_PHASE_DUAL_EXCHANGE, self.joint, primary,
@@ -743,7 +707,7 @@ class _DualMachine:
         limits = {}
         # LUT 构建失败时结果不可提交，但机械分支仍要留下可用限位；此时没有
         # 拟合直线，只能用本轮实测的两个 ABS 端点外延（ram-only，不入库）。
-        measured = ((start_primary_abs, end_primary_abs), (preload_abs, s_limit))
+        measured = ((p_final, tight_abs), (preload_abs, s_limit))
         for actuator, motor in enumerate((primary, secondary)):
             bounds = tendon_motor_abs_limits(
                 result, actuator, motor,
@@ -772,8 +736,7 @@ class _DualMachine:
             else:
                 workspace.valid = False
         self.io.trace("DUAL_RESULT", self.joint, primary,
-                      span=span, signed_span=signed_encoder_delta(limit_encoder, tight_encoder),
-                      tight_raw=tight_raw, tight_load=tight_load,
+                      span=span, tight_raw=tight_raw, tight_load=tight_load,
                       preload_raw=preload_raw, preload_encoder=preload_encoder,
                       preload_abs=preload_abs, preload_load=preload_load,
                       ready_raw=ready_raw, ready_load=ready_load,
@@ -786,6 +749,9 @@ class _DualMachine:
 
 def run_dual(io, joint, sequence_index, joint_count, selected_joint_mask, params):
     """Serial dual calibration; caller handles per-joint Manual/LUT commit."""
+    setter = getattr(io, 'set_active_calibration_motors', None)
+    if callable(setter):
+        setter(sum(1 << motor for motor in config.joint_motors(joint)))
     machine = _DualMachine(io, joint, params)
     outcome = {"success": False, "aborted": False, "preflight_failed": False,
                "reason": protocol.CALIB_DIAG_REASON_NONE, "result": None, "limits": {}}

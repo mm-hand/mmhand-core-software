@@ -1,6 +1,6 @@
 /**
  * @file HostCalibrationCommandHandler.cpp
- * @brief 实现 Manual 标定维护、局部 Auto 失效和 Reset Zero 结果联动。
+ * @brief 实现 Manual 标定维护、局部 Auto 失效。
  */
 #include "HostCalibrationCommandHandler.h"
 
@@ -192,38 +192,4 @@ uint8_t commitManualReferences(
         (unsigned long)changedMask,
         (unsigned long)sharedAtomicLoad(&sharedData->manual_reference_crc));
     return PROTO_ACK_STATUS_OK;
-}
-
-void processServoResetZeroResult(SystemRuntimeContext* sharedData,
-                                 uint32_t* lastResultToken)
-{
-    if (!sharedData || !lastResultToken) {
-        return;
-    }
-    const uint32_t resultToken =
-        sharedAtomicLoad(&sharedData->servo_reset_zero_result_token);
-    if (resultToken == 0 || resultToken == *lastResultToken) {
-        return;
-    }
-    *lastResultToken = resultToken;
-
-    // success mask 表示硬件 turn0 已改变，旧 LUT 必须立即失效并由桌面 JSON 重建。
-    const uint32_t resetMotorMask =
-        sharedAtomicLoad(&sharedData->servo_reset_zero_success_mask) &
-        validMotorChannelMask();
-    const uint32_t jointMask = jointMaskForMotorMask(resetMotorMask);
-    sharedAtomicStore(&sharedData->servo_reset_zero_invalidated_joint_mask,
-                      jointMask);
-    if (jointMask != 0) {
-        invalidateAutomaticCalibration(sharedData, jointMask);
-        postSystemEvent(sharedData, SYSTEM_EVENT_REEVALUATE_READY);
-    }
-    FW_LOG_WARN_PRINTF(
-        "[SERVO RESET ZERO] result token=%lu motors=0x%08lX failed=0x%08lX invalidatedJoints=0x%08lX status=%u\r\n",
-        (unsigned long)resultToken,
-        (unsigned long)resetMotorMask,
-        (unsigned long)sharedAtomicLoad(
-            &sharedData->servo_reset_zero_failed_mask),
-        (unsigned long)jointMask,
-        (unsigned)sharedAtomicLoad(&sharedData->servo_reset_zero_status));
 }

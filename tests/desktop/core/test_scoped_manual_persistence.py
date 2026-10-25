@@ -8,7 +8,7 @@ from unittest.mock import Mock
 import pytest
 
 from desktop.core.calibration_snapshot import read_snapshot, parse_mask
-from desktop.core.core_logic import HandController
+from desktop.core.core_logic import HandController, ServoRebaseZeroResult
 from desktop.core.protocol import ENCODER_COUNT, SYSTEM_STATE_IDLE
 from test_calibration_snapshot import two_finger_snapshot
 
@@ -61,17 +61,15 @@ def test_release_preserves_other_finger_in_runtime_and_json(controller):
     stamp(state, 'servo_abs_last_rx_ts')
     state.servo_online_bitmap = state.servo_route_controllable_bitmap = (1 << 14) | (1 << 19)
     state.servo_angles[14], state.servo_angles[19] = 2000, 3000
-    state.servo_raw_positions[19] = 3000
-    state.servo_raw_online[19] = True
 
     def reset_selected(mask, **kwargs):
         assert mask == 1 << 19
         # Emulate the P4's scoped reset-result invalidation.
         state.joint_calib_results[15] = None
         state.motor_abs_limit_valid_bitmap &= ~mask
-        return True, 'reset', mask, 0
+        return ServoRebaseZeroResult(True, 'zero', 1, mask, 0)
 
-    controller.prepare_calibration_turn_zero = Mock(side_effect=reset_selected)
+    controller.rebase_servo_abs_zero = Mock(side_effect=reset_selected)
     controller.set_active_scope = Mock(return_value=True)
 
     def move(command):

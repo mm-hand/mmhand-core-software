@@ -32,6 +32,7 @@ bool sendEncoderRawPacket(const RemoteSensorData_t& sensorRaw);
 bool sendMappedAnglePacket(const MappedAngleData_t& mappedAngle);
 bool sendControlTracePacket(const ControlTraceData_t& trace);
 bool sendServoPositionPackets(const ServoAngleData_t& position);
+bool sendServoOnlineStatusPacket(const ServoTelemetryData_t& telemetry);
 bool sendServoTelemetryPacket(const ServoTelemetryData_t& telemetry);
 bool sendAdaptiveKpPacket(SystemRuntimeContext* sharedData);
 bool sendTactileSummaryPacket(const RemoteTactileData_t& tactile);

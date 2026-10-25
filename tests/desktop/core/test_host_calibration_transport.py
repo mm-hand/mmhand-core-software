@@ -208,7 +208,7 @@ def test_each_feedback_source_keeps_its_own_timestamp_and_copy():
     model = comm._process_packets([
         (PACKET_TYPE_ENCODER_RAW, struct.pack(">21HI", *range(21), 90)),
         (PACKET_TYPE_SERVO_POSITION,
-         struct.pack(">27h", *range(27)) + struct.pack(">27i", *range(27)) + struct.pack(">I", 91)),
+         struct.pack(">27i", *range(27)) + struct.pack(">I", 91)),
         (PACKET_TYPE_SERVO_TELEM,
          b"".join(struct.pack(">hhhBB", 1, -2, 3, 12, 24) for _ in range(27))
          + struct.pack(">I", 92)),
@@ -243,12 +243,12 @@ def test_merged_position_packet_has_one_timestamp(monkeypatch):
     comm = LowerComputerComm('')
     paired = comm._process_packets([
         (PACKET_TYPE_SERVO_POSITION,
-         struct.pack('>27h', *([101] * 27)) + struct.pack('>27i', *([1] * 27)) + struct.pack('>I', 1020)),
+         struct.pack('>27i', *([1] * 27)) + struct.pack('>I', 1020)),
     ])
     copied = HandModel()
     copied.copy_state_from(paired)
-    assert copied.servo_feedback_p4_time_ms == copied.servo_raw_p4_time_ms == 1020
-    assert copied.servo_angles[2] == 1 and copied.servo_raw_positions[2] == 101
+    assert copied.servo_feedback_p4_time_ms == 1020
+    assert copied.servo_angles[2] == 1
 
 
 def test_invalid_result_does_not_replace_the_last_confirmed_transaction():

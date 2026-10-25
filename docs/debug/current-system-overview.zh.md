@@ -1,5 +1,7 @@
 # 当前系统代码、协议与验收边界
 
+2026-10-25 原生ABS改动见[电机坐标与恢复](native-motor-abs.zh.md)。下文历史实机证据仍对应当时固件；新协议为6，需要配套更新上位机和P4。
+
 核对日期：2026-10-16。根目录：`C:/Users/73547/mmhand`。
 依据当前工作区源码和 `docs/debug/control-tuning.md` 的最新结果；不是根据旧版 AI README 推断。本次只做代码检查与统计，没有新增硬件运动测试，也没有修改生成的 AI README/HTML。
 
@@ -215,7 +217,7 @@ ACK负载含原命令、执行时模式/状态、结果码；0=同步成功，2=
 - CD全局STOP撤销输出并锁存；CE明确Clear Faults。切换模式内部用F6释放普通owner，不增加Pause或Exit Control按钮。
 - 自动标定算法在上位机执行，P4提供Direct、反馈、归零和结果装载等原语。旧0xCA固件自动标定命令已删除；CC START仍是当前流程需要的就绪命令。
 - 参数F8载荷165字节=`version1+revision4+39×float32+CRC32(4)`；整组仅空闲时应用。39字段中ROS2输入的8字段在主机执行，当前仍作为整组revision/CRC的一部分发给P4，不能因此说P4也运行了One Euro。
-- 电机维护F4载荷12字节：token4、session4、op/bus/old/new各1。op0能力、1开始、2结束、3探测、4改号、5读profile、6写profile；1B结果负载19字节，版本2，带stage/status/present/profile。253中转；84/85/86设置254/254/0。
+- 电机维护F4载荷12字节：token4、session4、op/bus/old/new各1。op0能力、1开始、2结束、3探测、4改号；1B结果负载16字节，版本3，带stage/status/present。253中转；84/85/86由每次上线检查配置。
 - 电机普通扫描0–30共124地址；253和中断日志中的地址另作核对，超过30的目标也会被专门探测以拒绝冲突。普通快扫不代表遍历所有0–252设备。
 
 ### 4.2 S3 → P4 CAN
@@ -255,11 +257,11 @@ selector=`finger_bus×3+pageID`，共0–14；手指顺序Little/Ring/Middle/Ind
 
 ### 4.4 S3 ↔ 传感器、P4 ↔ 舵机
 
-- 磁编AS5047P：独立SPI，10MHz、14位角度0–16383，21路按五指译码/链路组织；校验与诊断状态机在HalEncoders。S3已在raw源头把链末DIP通道归一化为统一方向（关节正方向raw递减），P4/上位机不再保存或传输磁编方向。采样无效在CAN中编码成0xFFFF。
+- 磁编AS5047P：独立SPI，10MHz、14位角度0–16383，21路按五指译码/链路组织；校验与诊断状态机在HalEncoders。S3在raw源头统一方向：DIP（J03/J07/J11/J15/J19，掩码`0x88888`）透传，其余关节（含AA/CMC）取`(16384 - payload) & 0x3FFF`；P4/上位机看到的raw均随URDF正方向递增。左右手末端板均按此掩码验证。采样无效在CAN中编码成0xFFFF。
 - PaXini触觉：独立SPI，1MHz，功能码/两字节小端寄存器地址/两字节小端长度/数据/CRC8，厂商CRC初值FF。解锁`7A 01 00 01 00 A1 CE`，改号`7E 23 00 01 00 dest_id CRC8`。目标片选号1/2/3对应尾部`01 22`、`02 23`、`03 E3`。采集和改号在同一触觉任务两轮之间串行执行。
 - 两型号：DP-S2015-Elite PXSR-STDDP03G为指尖52测点；IP-S1610-Elite PXSR-STDIP03B为指腹25测点。满配5×(52+25+25)×3=1530字节，当前实物只读到3个模块，不是15个满配验收。
 - P4飞特总线：四路1Mbaud UART，RX={21,23,27,33}、TX={20,22,26,32}。由FeetechServoDriver封装飞特寄存器读写、同步读/写、校验、EEPROM解锁/重锁；不是把上位机FE帧直接透传到舵机。
-- 控制层的logical ABS counts、多圈锚点、舵机单圈raw是三种不同概念；没有将它们混作同一个当前位置。
+- 电机当前位置只使用原生有符号ABS，不再由P4或上位机展开圈数；标定包保存原生ABS恢复记录，圈内相位仅在需要时取模计算。
 
 ### 4.5 ROS2 → 上位机
 
@@ -288,7 +290,6 @@ P4通过xTaskCreate创建，**没有在TaskFactory固定核**；诊断中显示�
 | canRxQueue | 1 | CAN接收→控制/状态/遥测，最新覆盖快照 |
 | servoTargetQueue | 1 | 获得owner的控制/初始化流程→ServoBus，唯一目标邮箱 |
 | servoFeedbackQueue | 1 | ServoBus→控制/状态/上行，logical ABS |
-| servoRawQueue | 1 | ServoBus→上行/恢复，单圈raw |
 | servoTelemetryQueue | 1 | ServoBus→控制/保护/上行，在线、负载等 |
 | mappedAngleQueue | 1 | 控制侧映射/滤波→上行等，21路关节角 |
 | controlTraceQueue | 32 | 控制→HostComm，订阅时保存顺序诊断记录 |
@@ -338,13 +339,13 @@ S3维护等待者→独立USB发送      S3 RX→触觉解析/维护token匹配
 | 主页面/子页 | 布局、按钮与功能 |
 |---|---|
 | Calibration / Joint Calibration | 五指卡片、手指/关节复选框、原始磁编、Manual Min/Max、Span与URDF差值、Auto端点和RAM/JSON状态。Load Joint & Motor Calibration、Clear Manual Selected、Release Selected Tendons，每行Set Min/Set Max；采集/保存/验证状态显示。清除/释放操作有现存确认交互。 |
-| Calibration / Motor Calibration | 选择关节，展开相关电机表，显示BUS、路由、多圈、raw、ABS、load、关节角、ABS限位、回程偏差和行程不足。Load、Calibrate Selected；当前运行关节CALIBRATING，后续PENDING，完成后显示质量标签。自动标定算法由上位机执行。 |
+| Calibration / Motor Calibration | 选择关节，展开相关电机表，电机反馈表只显示Motor、ABS、Load，并保留标定操作及结果。Load、Calibrate Selected；当前运行关节CALIBRATING，后续PENDING，完成后显示质量标签。自动标定算法由上位机执行。 |
 | Control / Feedback Control | 五指关节卡片、角度输入/滑条、单行Send、Manual允许范围、当前角、ROS2目标、raw和相关电机ABS。ENABLE Selected、Clear Faults、Send Selected、ROS2 INPUT。每个关节以P4状态确认ENABLED/DISABLED；仅该关节实际碰撞时追加红色COLLISION DETECTED。 |
-| Control / Direct Control | 按关节归组的电机卡片、BUS/route/turn、当前与保存raw、ABS、load、关联关节角、logical ABS范围和输入/滑条/±1/Send。ENABLE Selected、Clear Faults、Send Selected、Reset Motor Multi-turn Position；设零按实际执行回读，并使有关标定/锚点失效。 |
+| Control / Direct Control | 按关节归组的电机卡片、ABS、load、关联关节角、ABS范围和输入/滑条/±1/Send。ENABLE Selected、Clear Faults、Send Selected、Reset Motor Multi-turn Position；设零按实际执行回读，并使有关标定/锚点失效。 |
 | Replay | Import CSV、Play、五指/关节复选框、文件名/帧数/时长/频率、警告、逐关节当前角/目标/误差表、回放状态与进度；取消用全局STOP，无Pause。只读当前支持的CSV字段，不保留旧格式猜测。 |
 | Plot / Curves & Recordings | 最多5个不同关节曲线，实测/目标角；Clear Plot。另选一电机查看P/I/换向/配对恢复counts分量。记录状态、目录、时长、Full tactile data选项；保存总开关在顶栏，不在此重复设置。 |
 | Plot / Tactile | 平面手形、15个安装位置、X/Y/Z/Magnitude切换、手指/模块详情、Fx/Fy/Fz与新鲜度。S3直连FULL按厂商XY显示52或25测点；P4-only SUMMARY显示Σ合力；无新鲜传感器数据不伪造测点，位置灰/无有效数据。数值仍是设备raw单位，不是已标定的N或Pa。 |
-| Settings / Renumber Motor | Scan All Buses、Renumber All、BUS/Current ID/New ID输入表、完整等比电机ID示意图。P4有效连接门禁；文字说明同BUS同ID无法区分，以及全部扫描电机84/85/86=254/254/0。无逐行改号按钮，无新增Reset ID上层。 |
+| Settings / Renumber Motor | Scan All Buses、Renumber All、BUS/Current ID/New ID输入表、完整等比电机ID示意图。P4有效连接门禁；文字说明同BUS同ID无法区分，上线检查统一配置84/85/86=254/254/0，改号流程不再操作这些参数。无逐行改号按钮，无新增Reset ID上层。 |
 | Settings / Renumber Tactile | Scan All Fingers、Renumber All，Thumb/Index/Middle/Ring/Little分组，每个传感器Current ID/New ID和已登记型号/点数；空输入不改，0/1/2，扫描与上次改号结果分别显示。必须直连S3，P4数据不能代替连接门禁。 |
 | Settings / Control Parameters | Save Parameters、Restore Defaults、revision/CRC/P4应用状态；Kp config/Ki config/Kd config（AA/MCP/PIP/DIP/CMC五组）、Ki组内共享积分限幅/噪声/确认时间、双腱恢复增益、编码器快慢窗、快速换向、碰撞阈值、最终输出约束、ROS2滤波分组折叠面板。Kp/Ki/Kd按关节类型共用，无每关节覆盖；恢复默认读本机默认JSON。 |
 | Settings / Diagnostics | Clear Faults、在线电机/编码器数量、owner和状态age；问题列表和详情、Operation History；可展开Task Runtime、Routes、Fingerprint、Raw Snapshot，任务统计按需订阅。 |
@@ -377,7 +378,7 @@ S3维护等待者→独立USB发送      S3 RX→触觉解析/维护token匹配
 | 0xD3 | CMD_MOTOR_POS_ABS | 119 | 通用logical ABS直控：token、实际电机位图、27路int32 counts、速度和加速度；token=0不跟踪，位图=0用当前scope |
 | 0xD7 | CMD_ACTIVE_SCOPE | 9 | 同步 active joint/motor mask 与 control enable |
 | 0xD8 | CMD_RUN_FEEDBACK | 0 | 申请状态机进入负反馈运行 |
-| 0xDA | CMD_RESTORE_MULTITURN | 112 | 按位图恢复 27 路 logical ABS 多圈快照 |
+| 0xDA | CMD_RESTORE_MULTITURN | 112 | 提交27路已保存原生ABS；P4选择恢复目标并确认完整值 |
 | 0xDC | CMD_HOST_HEARTBEAT | 0 | 刷新上位机在线计时器，不携带业务数据 |
 | 0xDE | CMD_MOTOR_POS_ABS_ONE | 5 | 单台 Mxx logical ABS 直控，Mxx 加 int32 counts |
 | 0xDF | CMD_CALIB_LOAD_JOINT | 189 | 恢复单关节唯一 Auto/LUT v4 标定快照 |
@@ -389,7 +390,6 @@ S3维护等待者→独立USB发送      S3 RX→触觉解析/维护token匹配
 | 0xE9 | CMD_ROPE_INIT | 4 | 按 21 位关节掩码启动 P4 Rope Init |
 | 0xEA | CMD_ANGLE_CTRL_MASKED | 88 | 按关节掩码下发稀疏关节目标角 |
 | 0xEB | CMD_CLEAR_CALIBRATION_SCOPE | 4 | 按电机位图清除关联关节 Auto/LUT |
-| 0xEC | CMD_SERVO_RESET_ZERO | 4 | 标定前归零所选舵机硬件圈数并清除对应多圈锚点 |
 | 0xED | CMD_STATE_SYNC_REQUEST | 4 | 按位请求静态状态、标定快照、路由和产品指纹 |
 | 0xEE | CMD_TASK_DIAG_SUBSCRIBE | 1 | 打开或关闭 RTOS 任务诊断按需上报 |
 | 0xFA | CMD_CONTROL_DIAGNOSTICS | 2 | 控制诊断订阅：启用字节和1至100控制周期采样分频 |
@@ -408,11 +408,11 @@ S3维护等待者→独立USB发送      S3 RX→触觉解析/维护token匹配
 |---|---|---|
 | 0x1B | PACKET_TYPE_SERVO_MAINTENANCE | 舵机维护事务结果 |
 | 0x01 | PACKET_TYPE_SENSOR | 21 关节映射角 |
-| 0x03 | PACKET_TYPE_SERVO_ANGLE | 27 路 logical ABS |
+| 0x20 | PACKET_TYPE_SERVO_ONLINE_STATUS | 每路上线代次、固件版本、配置检查结果 |
+| 0x03 | PACKET_TYPE_SERVO_POSITION | 27路原生有符号ABS与时间戳，完整帧116字节 |
 | 0x05 | PACKET_TYPE_SERVO_TELEM | 舵机遥测 |
 | 0x06 | PACKET_TYPE_PROTO_ACK | 命令 ACK |
 | 0x07 | PACKET_TYPE_FAULT_STATUS | 故障与在线位图 |
-| 0x09 | PACKET_TYPE_SERVO_RAW | 27 路单圈 raw |
 | 0x0A | PACKET_TYPE_TACTILE | 五指触觉摘要 |
 | 0x0B | PACKET_TYPE_ENCODER_RAW | 21 路磁编 raw |
 | 0x0C | PACKET_TYPE_SYSTEM_STATUS | 状态机与 owner |

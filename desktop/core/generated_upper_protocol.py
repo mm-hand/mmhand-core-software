@@ -9,7 +9,7 @@
 """
 
 PROTOCOL_HEADER = 0xFE
-HOST_PROTOCOL_VERSION = 4
+HOST_PROTOCOL_VERSION = 6
 PROTOCOL_TAIL = 0xFF
 DISCONNECT_SENTINEL = 32767
 P4_TIMESTAMP_BYTES = 4
@@ -28,7 +28,7 @@ TACTILE_FULL_BYTES = TACTILE_GROUP_COUNT * sum(TACTILE_SENSOR_TAXEL_COUNTS) * TA
 # P4 -> Desktop 包类型。
 PACKET_TYPE_SERVO_MAINTENANCE = 0x1B  # 舵机维护事务结果
 PACKET_TYPE_SENSOR = 0x01  # 21 关节映射角
-PACKET_TYPE_SERVO_POSITION = 0x03  # 27 路单圈 raw + 27 路 logical ABS，同一时间戳
+PACKET_TYPE_SERVO_POSITION = 0x03  # 27路原生有符号ABS，不携带独立单圈数组
 PACKET_TYPE_SERVO_TELEM = 0x05  # 舵机遥测
 PACKET_TYPE_PROTO_ACK = 0x06  # 命令 ACK
 PACKET_TYPE_FAULT_STATUS = 0x07  # 故障与在线位图
@@ -51,6 +51,7 @@ PACKET_TYPE_DIRECT_TARGET_RESULT = 0x1A  # 通用直控目标完成总线同步�
 PACKET_TYPE_CONTROL_PARAMETERS = 0x1C  # 参数应用/查询结果：block、状态、修订、CRC
 PACKET_TYPE_CONTROL_COMPONENTS = 0x1D  # 同周期PI、换向和慢反馈分量及采样分频
 PACKET_TYPE_ADAPTIVE_KP = 0x1F  # 21 路自适应 Kp 倍率与实际 Kp
+PACKET_TYPE_SERVO_ONLINE_STATUS = 0x20  # 27路上线会话、固件主次版本和配置检查结果
 
 # Desktop -> P4 命令。
 CMD_SERVO_MAINTENANCE = 0xF4  # 舵机维护会话、探测及单步改号
@@ -61,7 +62,7 @@ CMD_RESET = 0xCE  # 清除允许恢复的系统故障锁存
 CMD_MOTOR_POS_ABS = 0xD3  # 通用logical ABS直控：token、实际电机位图、27路int32 counts、速度和加速度；token=0不跟踪，位图=0用当前scope
 CMD_ACTIVE_SCOPE = 0xD7  # 同步 active joint/motor mask 与 control enable
 CMD_RUN_FEEDBACK = 0xD8  # 申请状态机进入负反馈运行
-CMD_RESTORE_MULTITURN = 0xDA  # 按位图恢复 27 路 logical ABS 多圈快照
+CMD_RESTORE_MULTITURN = 0xDA  # 按位图提交27路原生ABS恢复锚点；P4统一计算最近圈并执行
 CMD_HOST_HEARTBEAT = 0xDC  # 刷新上位机在线计时器，不携带业务数据
 CMD_CALIB_LOAD_JOINT = 0xDF  # 恢复单关节唯一 Auto/LUT v4 标定快照
 CMD_CALIB_LOAD_LIMITS = 0xE0  # 批量恢复 27 路 ABS 标定范围与有效位图
@@ -70,7 +71,6 @@ CMD_MANUAL_ENCODER_REFERENCE = 0xE6  # 写入或清除 21 组 Manual Min/Max 原
 CMD_MANUAL_ENCODER_SINGLE = 0xE8  # 写入单个 Jxx 的 Manual Min/Max
 CMD_ROPE_INIT = 0xE9  # 按 21 位关节掩码启动 P4 Rope Init
 CMD_CLEAR_CALIBRATION_SCOPE = 0xEB  # 按电机位图清除关联关节 Auto/LUT
-CMD_SERVO_RESET_ZERO = 0xEC  # 标定前归零所选舵机硬件圈数并清除对应多圈锚点
 CMD_STATE_SYNC_REQUEST = 0xED  # 按位请求静态状态、标定快照、路由和产品指纹
 CMD_DIAGNOSTICS_SUBSCRIBE = 0xEE  # 诊断订阅：bit0 任务诊断、bit1 控制 trace；1 字节分频
 CMD_MOTOR_ABS_ZERO = 0xF1  # 按非空电机位图用0x0B将当前位置设为ABS零点；标定页和Direct页共用
@@ -101,7 +101,8 @@ STATE_SYNC_JOINT_CALIBRATION = 8  # 同步全部有效 Auto/LUT 标定快照
 STATE_SYNC_SERVO_ROUTE = 16  # 同步动态舵机 BUS 路由
 STATE_SYNC_PRODUCT_FINGERPRINT = 32  # 同步产品配置指纹
 STATE_SYNC_MULTITURN_STATE = 64  # 同步多圈恢复、logical ABS设零及上位机标定目标的最终结果
-STATE_SYNC_ALL = 127  # 同步全部静态运行契约
+STATE_SYNC_ALL = 255  # 同步全部静态运行契约
+STATE_SYNC_SERVO_ONLINE_STATUS = 128  # 同步电机上线检查结果
 
 # 当前 P4 会在这些上行包的业务负载末尾追加 uint32 毫秒时间戳。
 P4_TRAILING_TIMESTAMP_PACKET_TYPES = frozenset({
@@ -126,6 +127,7 @@ P4_TRAILING_TIMESTAMP_PACKET_TYPES = frozenset({
     PACKET_TYPE_SERVO_REBASE_ZERO_RESULT,
     PACKET_TYPE_DIRECT_TARGET_RESULT,
     PACKET_TYPE_CONTROL_COMPONENTS,
+    PACKET_TYPE_SERVO_ONLINE_STATUS,
 })
 
 # 固定下行 payload 长度，不包含命令字。
@@ -147,7 +149,6 @@ COMMAND_PAYLOAD_LENGTHS = {
     CMD_MANUAL_ENCODER_SINGLE: 5,
     CMD_ROPE_INIT: 4,
     CMD_CLEAR_CALIBRATION_SCOPE: 4,
-    CMD_SERVO_RESET_ZERO: 4,
     CMD_STATE_SYNC_REQUEST: 4,
     CMD_DIAGNOSTICS_SUBSCRIBE: 2,
     CMD_MOTOR_ABS_ZERO: 4,
@@ -171,7 +172,6 @@ COMMANDS_REQUIRING_HANDSHAKE = frozenset({
     CMD_MANUAL_ENCODER_REFERENCE,
     CMD_MANUAL_ENCODER_SINGLE,
     CMD_ROPE_INIT,
-    CMD_SERVO_RESET_ZERO,
     CMD_MOTOR_ABS_ZERO,
     CMD_CONTROL_RELEASE,
     CMD_CONTROL_PARAMETERS_SET,

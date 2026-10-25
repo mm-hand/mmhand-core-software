@@ -6,7 +6,7 @@ from desktop.core import protocol
 from desktop.core.host_calibration import config, dual_motor as dual
 from desktop.core.host_calibration.math import (
     TendonRawFitBuffer, manual_entry_crc, tendon_motor_abs_limits,
-    wrap_encoder_delta,
+    forward_encoder_delta,
 )
 from desktop.core.host_calibration.time_alignment import TimeAlignmentError
 
@@ -147,19 +147,11 @@ def test_dynamic_workspace_rejects_unusable_pair_without_motion(failure):
     assert not io.commands
 
 
-@pytest.mark.parametrize("gate", ["configured", "pending", "failed", "ready"])
-def test_target_unknown_rebuild_requires_original_recovery_gates(gate):
+def test_unknown_pairs_can_be_discovered_for_coordinate_preparation_only():
     io = FakeIO()
-    pair = sum(1 << motor for motor in config.joint_motors(0))
-    io.unknown = pair
-    if gate == "configured":
-        io.configured &= ~pair
-    elif gate == "pending":
-        io.pending = pair
-    elif gate == "failed":
-        io.failed = pair
-    result = dual.build_dynamic_workspace_motor_mask(io, [0])
-    assert (result is not None) == (gate == "ready")
+    io.unknown = sum(1 << motor for motor in config.joint_motors(0) + config.joint_motors(4))
+    assert dual.build_dynamic_workspace_motor_mask(io, [0]) is None
+    assert dual.build_dynamic_workspace_motor_mask(io, [0], allow_unknown=True) is not None
     assert not io.commands
 
 
@@ -538,23 +530,15 @@ def test_target_b_cache_reuse_uses_abs_and_accepts_zero_instantaneous_load(monke
 
 
 @pytest.mark.parametrize("span,expected_success", [(0, False), (15360, False), (700, True)])
-def test_dual_result_rejects_zero_and_near_full_wrap_spans(monkeypatch, span, expected_success):
+def test_dual_result_rejects_zero_and_oversized_spans(monkeypatch, span, expected_success):
     io = FakeIO()
     worker = machine(io)
     monkeypatch.setattr(worker, "_wait_motor_target", lambda *args: True)
     monkeypatch.setattr(worker, "_find_tight", lambda *args: (120, 5000, 5000, 190))
     monkeypatch.setattr(worker, "_find_secondary_preload", lambda *args: (20, 5000, 5000, 190))
     endpoint = (5000 - span) % 16384
-
-    def exchange(*_args):
-        # A genuine near-full turn needs consecutive feedback, not two points
-        # whose shortest difference would instead describe a 1024-count move.
-        for moved in range(4000, span, 4000):
-            worker._result_travel.observe((5000 - moved) % 16384)
-        worker._result_travel.observe(endpoint)
-        return 80, -60, endpoint, endpoint, 250
-
-    monkeypatch.setattr(worker, "_find_exchange", exchange)
+    monkeypatch.setattr(worker, "_find_exchange",
+                        lambda *_args: (80, -60, endpoint, endpoint, 250))
     result = worker.calibrate()
     assert (result is not None) is expected_success
     if not expected_success:
@@ -574,14 +558,8 @@ def test_side_sway_result_requires_most_of_the_urdf_range(monkeypatch, joint, sp
     monkeypatch.setattr(worker, "_find_tight", lambda *args: (120, 5000, 5000, 190))
     monkeypatch.setattr(worker, "_find_secondary_preload", lambda *args: (20, 5000, 5000, 190))
     endpoint = (5000 - span) % 16384
-
-    def exchange(*_args):
-        for moved in range(4000, span, 4000):
-            worker._result_travel.observe((5000 - moved) % 16384)
-        worker._result_travel.observe(endpoint)
-        return 80, -60, endpoint, endpoint, 250
-
-    monkeypatch.setattr(worker, "_find_exchange", exchange)
+    monkeypatch.setattr(worker, "_find_exchange",
+                        lambda *_args: (80, -60, endpoint, endpoint, 250))
     result = worker.calibrate()
     assert (result is not None) is success
     if not success:
@@ -589,28 +567,25 @@ def test_side_sway_result_requires_most_of_the_urdf_range(monkeypatch, joint, sp
 
 
 @pytest.mark.parametrize("joint,tight,limit,manual_span", [
-    (16, 9688, 10962, 4108),  # Supplied J16 log: formerly 15110 / 332 degrees.
-    (20, 5595, 8307, 1476),  # Supplied J20 log: formerly 13672 / 300 degrees.
-    (16, 5000, 4300, 1500),  # Original negative exchange direction.
-    (16, 5000, 5700, 1500),
-    (16, 16000, 400, 1500),  # Positive exchange across magnetic zero.
+    (16, 10962, 9688, 4108),  # Supplied J16 log: formerly 15110 / 332 degrees.
+    (20, 8307, 5595, 1476),  # Supplied J20 log: formerly 13672 / 300 degrees.
+    (16, 5700, 5000, 1500),
     (16, 400, 16000, 1500),  # Negative exchange across magnetic zero.
 ])
-def test_dual_orders_result_endpoints_without_flipping_manual_or_lut_samples(
+def test_dual_uses_primary_endpoint_as_urdf_max(
         monkeypatch, joint, tight, limit, manual_span):
     io = FakeIO(joint)
     io.encoder_value = tight
     worker = machine(io, joint)
     primary, secondary = config.joint_motors(joint)
-    signed_travel = wrap_encoder_delta(limit, tight)
-    start, end = (tight, limit) if signed_travel > 0 else (limit, tight)
-    manual = {"valid": True, "minRaw": start % 16384,
-              "maxRaw": (start + manual_span) % 16384}
+    span = forward_encoder_delta(limit, tight)
+    manual = {"valid": True, "minRaw": limit % 16384,
+              "maxRaw": (limit + manual_span) % 16384}
     io.manual_reference = lambda _joint: dict(manual)
     manual_crc = manual_entry_crc(joint, manual)
     fit = TendonRawFitBuffer()
     fit.append(tight, 120, 20)
-    fit.append((tight + signed_travel // 2) % 16384, 30, 50)
+    fit.append((limit + span // 2) % 16384, 30, 50)
     fit.append(limit, -60, 80)
     original_samples = [(s.encoder, s.primary_abs, s.secondary_abs) for s in fit.samples]
     window = object()
@@ -633,19 +608,19 @@ def test_dual_orders_result_endpoints_without_flipping_manual_or_lut_samples(
     outcome = worker.calibrate()
     assert outcome is not None
     result = outcome["result"]
-    assert (result["startEncoder"], result["tightEncoder"]) == (start, end)
-    assert result["encoderSpan"] == abs(signed_travel)
-    assert result["autoSpanCounts"] == abs(signed_travel)
-    assert result["totalDeg"] == pytest.approx(abs(signed_travel) * 360 / 16384)
-    assert (result["autoMinRaw"], result["autoMaxRaw"]) == (start % 16384, end % 16384)
-    assert result["zeroEncoder"] == (start + 228) % 16384
+    assert (result["startEncoder"], result["tightEncoder"]) == (limit, tight)
+    assert result["encoderSpan"] == span
+    assert result["autoSpanCounts"] == span
+    assert result["totalDeg"] == pytest.approx(span * 360 / 16384)
+    assert (result["autoMinRaw"], result["autoMaxRaw"]) == (limit % 16384, tight % 16384)
+    assert result["zeroEncoder"] == (limit + 228) % 16384
     assert "encoderDirection" not in result
     assert result["manualSpanCounts"] == manual_span
     assert result["manualReferenceCrc"] == manual_crc
     assert result["tendonLutValid"]
     assert result["tendonLutMotor"] == [primary, secondary]
-    assert result["startServoAbs"] == (120 if signed_travel > 0 else -60)
-    assert result["tightServoAbs"] == (-60 if signed_travel > 0 else 120)
+    assert result["startServoAbs"] == -60
+    assert result["tightServoAbs"] == 120
     for actuator, motor in enumerate((primary, secondary)):
         assert outcome["limits"][motor] == tendon_motor_abs_limits(
             result, actuator, motor,
@@ -654,7 +629,7 @@ def test_dual_orders_result_endpoints_without_flipping_manual_or_lut_samples(
     assert protocol.build_calib_load_joint_cmd(result)
 
 
-@pytest.mark.parametrize("limit,expected_span", [(6200, 1200), (5000, 0)])
+@pytest.mark.parametrize("limit,expected_span", [(3800, 1200), (5000, 0)])
 def test_dual_keeps_primary_endpoint_when_preload_moves_joint(monkeypatch, limit, expected_span):
     io = FakeIO()
     worker = machine(io)
@@ -662,8 +637,8 @@ def test_dual_keeps_primary_endpoint_when_preload_moves_joint(monkeypatch, limit
     monkeypatch.setattr(worker, "_find_tight", lambda *_args: (120, 5000, 5000, 190))
 
     def preload(*_args):
-        io.encoder_value = 5600
-        return 20, 5600, 5600, 190
+        io.encoder_value = 4400
+        return 20, 4400, 4400, 190
 
     monkeypatch.setattr(worker, "_find_secondary_preload", preload)
     monkeypatch.setattr(worker, "_find_exchange",
@@ -671,59 +646,48 @@ def test_dual_keeps_primary_endpoint_when_preload_moves_joint(monkeypatch, limit
     outcome = worker.calibrate()
     checks = [details for values, details in io.traces if values[0] == "DUAL_SPAN_CHECK"]
     assert len(checks) == 1
-    assert checks[0]["preload_travel"] == 600
-    assert checks[0]["exchange_travel"] == limit - 5600
     assert checks[0]["span"] == expected_span
     if expected_span:
         assert outcome is not None
         assert outcome["result"]["encoderSpan"] == expected_span
-        assert outcome["result"]["startEncoder"] == 5000
+        assert outcome["result"]["startEncoder"] == limit
+        assert outcome["result"]["tightEncoder"] == 5000
     else:
         assert outcome is None
         assert worker.reason == protocol.CALIB_DIAG_REASON_RESULT_SPAN_INVALID
         assert not io.limits
 
 
-@pytest.mark.parametrize("direction,final_travel", [(-1, 15360), (1, 15360), (-1, 700), (1, 700)])
-def test_dual_rejects_observed_near_full_turn_even_if_motion_returns(
-        monkeypatch, direction, final_travel):
+def test_dual_rejects_reversed_primary_sweep(monkeypatch):
     io = FakeIO()
     worker = machine(io)
     monkeypatch.setattr(worker, "_wait_motor_target", lambda *_args: True)
     monkeypatch.setattr(worker, "_find_tight", lambda *_args: (120, 5000, 5000, 190))
     monkeypatch.setattr(worker, "_find_secondary_preload", lambda *_args: (20, 5000, 5000, 190))
-
-    def exchange(*_args):
-        for moved in [4000, 8000, 12000, 15360]:
-            worker._result_travel.observe((5000 + direction * moved) % 16384)
-        if final_travel != 15360:
-            for moved in [12000, 8000, 4000, final_travel]:
-                worker._result_travel.observe((5000 + direction * moved) % 16384)
-        endpoint = (5000 + direction * final_travel) % 16384
-        return 80, -60, endpoint, endpoint, 250
-
-    monkeypatch.setattr(worker, "_find_exchange", exchange)
+    monkeypatch.setattr(worker, "_find_exchange",
+                        lambda *_args: (80, -60, 5700, 5700, 250))
     assert worker.calibrate() is None
     assert worker.reason == protocol.CALIB_DIAG_REASON_RESULT_SPAN_INVALID
-    check = [details for values, details in io.traces if values[0] == "DUAL_SPAN_CHECK"][0]
-    assert check["span"] == final_travel
-    assert check["observed_span"] == 15360
     assert not io.limits
 
 
-@pytest.mark.parametrize("direction", [-1, 1])
-def test_exchange_uses_continuous_feedback_travel_past_half_turn(direction):
+def test_exchange_start_jitter_does_not_abort():
+    # Field 2026-10-25: 3 raw counts of jitter at the exchange start were read
+    # as a whole forward turn and aborted J00 before any sweep. Travel is
+    # signed now; the tight->limit span check still judges the sweep.
     io = FakeIO()
     io.loads[21] = 250
-    # 1000 counts per feedback step, 10000 counts per 200ms window.
-    io.on_sleep = lambda state: setattr(state, "encoder_value", (5000 + direction * 50 * state.t) % 16384)
+    steps = [0]
+
+    def on_sleep(state):
+        steps[0] += 1
+        state.encoder_value = (5000 + 3 if steps[0] <= 2
+                               else 5000 - 8 * (steps[0] - 2)) % 16384
+
+    io.on_sleep = on_sleep
     worker = machine(io)
-    result = worker._find_exchange(21, 0, 20, 0, 5000, None)
-    assert result is not None
-    assert io.t == 200
-    checks = [details for values, details in io.traces if values[0] == "CHECK_DUAL_EXCHANGE_NEG3"]
-    assert checks[-1]["signed_travel"] == direction * 10000
-    assert checks[-1]["total_deg"] == pytest.approx(10000 * 360 / 16384)
+    assert worker._find_exchange(21, 0, 20, 0, 5000, None) is not None
+    assert worker.reason == protocol.CALIB_DIAG_REASON_NONE
 
 
 @pytest.mark.parametrize("outside,cache_valid", [(-25, False), (-24, True), (0, True)])

@@ -290,8 +290,7 @@ def _encoder_packet(timestamp_ms: int, first: int, error_index: int = -1) -> tup
 
 def _abs_packet(timestamp_ms: int, first: int) -> tuple:
     values = [first + index for index in range(MOTOR_COUNT)]
-    payload = struct.pack(f">{MOTOR_COUNT}h", *values)
-    payload += struct.pack(f">{MOTOR_COUNT}i", *values)
+    payload = struct.pack(f">{MOTOR_COUNT}i", *values)
     return _timestamped_packet(PACKET_TYPE_SERVO_POSITION, payload, timestamp_ms)
 
 
@@ -300,7 +299,7 @@ def _connectivity_packet(
     encoder_mask: int = (1 << ENCODER_COUNT) - 1, unknown_mask: int = 0,
     encoder_fault_mask: int = 0, can_online: bool = True,
 ) -> tuple:
-    payload = bytearray(173)
+    payload = bytearray(152)
     struct.pack_into(">I", payload, 13, unknown_mask)
     struct.pack_into(">I", payload, 26, servo_mask)
     struct.pack_into(">I", payload, 30, encoder_mask)

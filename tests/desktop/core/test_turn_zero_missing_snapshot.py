@@ -2,7 +2,7 @@
 calibration bundle, and anchor invalidation must tolerate the missing file.
 
 Before the fix, the EE turn-zero result made _update_loop crash inside
-_service_servo_turn_zero_result before current_state.copy_state_from ran, so
+_service_servo_rebase_zero_capture before current_state.copy_state_from ran, so
 current_state froze, the Release wait never saw the result and timed out, and
 the unresolved mask stayed latched until an app restart."""
 
@@ -18,7 +18,7 @@ from desktop.core.calibration_snapshot import invalidate_snapshot_multiturn_anch
 from desktop.core.core_logic import HandController
 from desktop.core.protocol import (
     CMD_RESET,
-    CMD_SERVO_RESET_ZERO,
+    CMD_MOTOR_ABS_ZERO,
     HOST_PROTOCOL_VERSION,
     PROTO_ACK_STATUS_QUEUED,
     SYSTEM_STATE_IDLE,
@@ -45,27 +45,24 @@ def make_controller(monkeypatch, tmp_path):
     state.system_status_last_rx_ts = time.time()
     stamp(state, "system_status_last_rx_ts")
     state.servo_online_bitmap = state.servo_route_controllable_bitmap = MASK
-    state.has_servo_rebase_zero_result = state.has_servo_reset_zero_status = True
+    state.has_servo_rebase_zero_result = True
     state.servo_rebase_zero_result_token = 7
-    state.servo_reset_zero_request_token = state.servo_reset_zero_result_token = 7
-    state.has_servo_angle_data = state.has_servo_raw_data = True
+    state.has_servo_angle_data = True
     monkeypatch.setattr(core_logic, "_active_urdf_repo_path", lambda: "tests://repo/model.urdf")
     monkeypatch.setattr(core_logic, "CALIB_ACTIVE_SNAPSHOT_PATH", tmp_path / "missing.mmcal.json")
-    monkeypatch.setattr(core_logic, "CALIBRATION_TURN_RESET_SETTLE_S", 0)
-    monkeypatch.setattr(core_logic, "SERVO_RESET_ZERO_ACK_TIMEOUT_S", 1.0)
-    monkeypatch.setattr(core_logic, "SERVO_RESET_ZERO_RESULT_TIMEOUT_S", 1.0)
+    monkeypatch.setattr(core_logic, "SERVO_REBASE_ZERO_ACK_TIMEOUT_S", 1.0)
+    monkeypatch.setattr(core_logic, "SERVO_REBASE_ZERO_RESULT_TIMEOUT_S", 1.0)
     return controller
 
 
 def publish_full_success(controller, mask):
     state = controller.current_state
-    token = state.servo_reset_zero_result_token + 1
-    state.servo_reset_zero_request_token = state.servo_reset_zero_result_token = token
-    state.servo_reset_zero_success_mask = mask
-    state.servo_reset_zero_failed_mask = 0
-    state.servo_reset_zero_status = 2
-    state.system_status_last_rx_ts = time.time()
-    stamp(state, "system_status_last_rx_ts")
+    state.servo_rebase_zero_result_token += 1
+    state.servo_rebase_zero_success_mask = mask
+    state.servo_rebase_zero_failed_mask = 0
+    state.servo_rebase_zero_result_p4_time_ms = 10
+    state.servo_rebase_zero_result_last_rx_ts = time.time()
+    stamp(state, 'servo_rebase_zero_result_last_rx_ts')
 
 
 def test_multiturn_anchor_invalidation_tolerates_missing_snapshot(tmp_path):
@@ -88,18 +85,19 @@ def test_turn_zero_succeeds_without_calibration_bundle(monkeypatch, tmp_path):
 
     controller.comm.wait_for_ack.side_effect = ack
 
-    ok, message, success, failed = controller.prepare_calibration_turn_zero(MASK)
+    result = controller.rebase_servo_abs_zero(MASK)
+    ok, message, success, failed = result.ok, result.message, result.success_motor_mask, result.failed_motor_mask
 
     assert ok is True, message
     assert success == MASK
     assert failed == 0
-    assert controller._servo_turn_zero_unresolved_mask == 0
+    assert controller._servo_rebase_zero_unresolved_mask == 0
 
 
 def test_update_loop_publishes_state_when_bookkeeping_raises(monkeypatch, tmp_path):
     controller = make_controller(monkeypatch, tmp_path)
     controller.running = True
-    controller._service_servo_turn_zero_result = Mock(
+    controller._service_servo_rebase_zero_capture = Mock(
         side_effect=RuntimeError("bookkeeping boom")
     )
     controller._queue_multiturn_persistence = Mock()

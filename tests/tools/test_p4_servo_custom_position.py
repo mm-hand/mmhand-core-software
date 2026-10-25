@@ -75,6 +75,7 @@ inline HardwareSerial Serial1, Serial2, Serial3, Serial4;
 
 NATIVE_SOURCE = r'''
 #include "hal/servo/FeetechServoDriver.h"
+#include "tasks/servo_bus/ServoAbsoluteRestore.h"
 #include <climits>
 #include <cstdlib>
 #include <iostream>
@@ -99,12 +100,18 @@ static unsigned encodePosition(int position) {
 enum class Fault {
     None, AckMissing, AckWrongId, AckWrongLength, AckChecksum, AckStatus, AckTruncated,
     ReadMissing, ReadWrongId, ReadWrongLength, ReadChecksum, ReadStatus, ReadTruncated,
-    ReadMismatch, ReadOneAfterOffline,
+    ReadMismatch, ReadOneAfterOffline, ReadModulo,
     TorqueStatus, TorqueMissing, LimitsMismatch, LimitsMissing, LimitsStatus,
     ResetAckMissing, ResetAckStatus
 };
 
 struct Device {
+    Bytes config = {1,0,0,0,0,0,0,0,0,0,0x95};
+    Bytes version = {3,10};
+    Bytes profile = {254,254,0};
+    bool locked = true;
+    bool ignoreProfileWrites = false, configAckMissing = false;
+    bool versionMissing = false, lockFails = false;
     int hardwarePosition = 12488;
     int previousHardwarePosition = 12488;
     int resetReadbackPosition = INT_MIN;
@@ -132,7 +139,7 @@ struct Device {
 
     void ack(HardwareSerial& serial, unsigned char id, bool correction, bool torque,
              bool reset = false) {
-        if (id == 0xfe) return;
+        if (id == 0xfe || (configAckMissing && !correction)) return;
         if ((correction && fault == Fault::AckMissing) ||
             (torque && fault == Fault::TorqueMissing) ||
             (reset && fault == Fault::ResetAckMissing)) return;
@@ -188,8 +195,7 @@ struct Device {
             if (positionRead && corrected) ++positionReadsAfterCorrection;
             if (positionRead && corrected && fault == Fault::ReadOneAfterOffline) {
                 const unsigned failuresBeforeOneGoodFrame =
-                    mmhand::config::servo::kResetZeroFeedbackAttempts *
-                    (mmhand::config::servo::kResetZeroTransactionAttempts - 1);
+                    3 * (3 - 1);
                 require(failuresBeforeOneGoodFrame >=
                         mmhand::config::servo::kOfflineInvalidateMisses,
                         "read fault schedule must invalidate online before its one good frame");
@@ -201,11 +207,16 @@ struct Device {
             if ((positionRead && corrected && fault == Fault::ReadMissing) ||
                 (limitsRead && fault == Fault::LimitsMissing)) return;
             Bytes payload(size, 0);
+            if (address == 0) { if (versionMissing) return; payload = version; }
+            if (address == 8) payload = config;
+            if (address == 84) payload = profile;
+            if (address == SMS_STS_LOCK) payload[0] = locked;
+            if (address == SMS_STS_TORQUE_ENABLE) payload[0] = !torqueOff;
             if (positionRead) {
                 require(size >= 2, "position read omitted a position byte");
                 const int position = corrected && fault == Fault::ReadMismatch
                     ? previousHardwarePosition : hardwarePosition;
-                const unsigned encoded = encodePosition(position);
+                const unsigned encoded = encodePosition(corrected && fault == Fault::ReadModulo ? ((position % 4096) + 4096) % 4096 : position);
                 payload[0] = static_cast<unsigned char>(encoded);
                 payload[1] = static_cast<unsigned char>(encoded >> 8);
             }
@@ -228,6 +239,14 @@ struct Device {
                 ++validPositionResponsesAfterCorrection;
             enqueue(serial, bytes);
             return;
+        }
+        if (instruction == 0x03 && frame.size() >= 8 && frame[5] >= 8 && frame[5] <= 18) {
+            for (std::size_t n = 6; n + 1 < frame.size() && frame[5] + n - 6 <= 18; ++n)
+                config[frame[5] + n - 6 - 8] = frame[n];
+        }
+        if (instruction == 0x03 && frame.size() >= 8) {
+            if (frame[5] == SMS_STS_LOCK) locked = frame[6] && !lockFails;
+            if (frame[5] >= 84 && frame[5] <= 86 && !ignoreProfileWrites) profile[frame[5]-84] = frame[6];
         }
         const bool torque = instruction == 0x03 && frame.size() >= 8 &&
             frame[5] == SMS_STS_TORQUE_ENABLE;
@@ -309,660 +328,134 @@ static void sdkScenario(const std::string& name) {
     if (name == "level_zero_missing") require(sdk.Level == 0, "failed correction changed reply Level");
 }
 
-static void establishNativePosition(FeetechServoDriver& driver, Device& device,
-                                    uint8_t id, int position, bool configured) {
-    short raw = -1;
-    require(driver.calibrateHardwareAbsolutePosition(id, position, &raw) &&
-            driver.probeFeedback(id), "fixture could not establish verified native ABS");
-    require(device.hardwarePosition == position && driver.getAbsolutePosition(id) == position &&
-            driver.getHardwareAbsolutePosition(id) == position && driver.isAbsoluteReliable(id),
-            "fixture substituted a cached coordinate for native position correction");
-    if (!configured) {
-        // A new online session clears the HAL mode cache. Prepare this through
-        // actual public session transitions, without exposing private HAL fields.
-        require(driver.invalidateIfFeedbackStale(id, driver.getFeedback(id).lastUpdate + 2, 1),
-                "fixture could not invalidate its configured session");
-        for (unsigned read = 0; read < mmhand::config::servo::kOnlineConfirmReads; ++read)
-            require(driver.probeFeedback(id), "fixture unconfigured reconnect failed");
-        require(driver.isOnline(id) && !driver.isMultiTurnConfigured(id),
-                "fixture reconnect retained its old mode cache");
-    }
-    driver.finishRecoveryAttempt(id, true, static_cast<uint32_t>(millis()));
-    // Setup instructions must not count as writes made by the scenario itself.
-    device.corrected = false;
-    device.corrections = 0;
-    device.resets = 0;
-    device.positionReads = 0;
-    device.positionReadsAfterCorrection = 0;
-    device.validPositionResponsesAfterCorrection = 0;
-    device.frames.clear();
-}
-
-struct HalFixture {
-    FeetechServoDriver driver;
-    Device device;
-    explicit HalFixture(bool configured = true, int hardware = 12488) {
-        Serial1 = HardwareSerial{};
-        device.hardwarePosition = device.previousHardwarePosition = hardware;
-        device.requireTorqueOff = true;
-        Serial1.onPacket = [&](const Bytes& bytes) { device.receive(Serial1, bytes); };
-        driver.begin(0, 21, 20, 1000000);
-        for (unsigned i = 0; i < mmhand::config::servo::kOnlineConfirmReads; ++i)
-            require(driver.probeFeedback(1), "fixture could not establish production feedback");
-        require(driver.isOnline(1), "fixture did not establish online state");
-        establishNativePosition(driver, device, 1, hardware, configured);
-        Serial1.transmitted.clear();
-    }
-};
 
 static void halScenario(const std::string& name) {
-    if (name == "unbound") {
-        FeetechServoDriver driver;
-        short raw = -123;
-        require(!driver.calibrateHardwareAbsolutePosition(1, 0, &raw), "unbound HAL accepted correction");
+    Serial1 = HardwareSerial{};
+    Device device;
+    FeetechServoDriver driver;
+    driver.begin(0, 1, 2, 1000000);
+    Serial1.onPacket = [&](const Bytes& frame) { device.receive(Serial1, frame); };
+    for (int i=0;i<3;++i) require(driver.probeFeedback(1), "initial feedback missing");
+    if (name == "configuration") { device.config[0] = 0; device.config[10] = 0x85; device.config[3] = 0xff; }
+    if (name == "firmware_old") device.version = {3,9};
+    if (name == "firmware_new") device.version = {4,0};
+    if (name == "firmware_minor") device.version = {3,11};
+    if (name == "version_missing") device.versionMissing = true;
+    if (name == "profile" || name == "profile_ignored" || name == "config_ack_missing") device.profile = {1,2,3};
+    if (name == "profile_ignored") device.ignoreProfileWrites = true;
+    if (name == "config_ack_missing") device.configAckMissing = true;
+    if (name == "lock_failure") { device.profile = {1,2,3}; device.lockFails = true; }
+    if (name == "firmware_old" || name == "version_missing" || name == "lock_failure" || name == "profile_ignored") {
+        require(!driver.checkOnlineConfiguration(1), "invalid motor passed online check");
+        const auto expected = name == "firmware_old" ? ServoOnlineCheck::UnsupportedFirmware :
+            name == "version_missing" ? ServoOnlineCheck::VersionReadFailed : ServoOnlineCheck::ConfigurationFailed;
+        require(driver.getFeedback(1).onlineCheck == expected, "online failure classified incorrectly");
+        require(!driver.isMultiTurnConfigured(1), "failed motor configured");
+        if (name != "lock_failure" && name != "profile_ignored") for (const auto& f : device.frames)
+            require(f[4] != 3, "incompatible or unreadable version changed EEPROM");
         return;
     }
-    if (name == "reset_uncertain_ack") {
-        for (Fault fault : {Fault::ResetAckMissing, Fault::ResetAckStatus}) {
-            HalFixture fixture;
-            auto& driver = fixture.driver;
-            auto& device = fixture.device;
-            require(driver.setTarget(1, 12500, 400, 20),
-                    "RESET fixture could not queue an old-coordinate target");
-            device.fault = fault;
-            short raw = -123;
-            bool attempted = false;
-            require(!driver.resetTurnCounter(1, &raw, &attempted) && attempted,
-                    "HAL accepted an unconfirmed RESET or lost its attempted flag");
-            require(device.resets == 1 && device.corrections == 0 &&
-                    device.hardwarePosition == 200,
-                    "uncertain RESET did not include an actual hardware coordinate change");
-            require(raw == -123 && !driver.isAbsoluteReliable(1) &&
-                    !driver.isMultiTurnConfigured(1) &&
-                    !driver.getFeedback(1).offlineTrustedSnapshotPending,
-                    "uncertain RESET retained a trusted old coordinate or snapshot");
-            require(!driver.setTarget(1, 200, 400, 20),
-                    "unconfirmed RESET allowed a new motor target");
-            const auto frameCount = device.frames.size();
-            const auto transmittedCount = Serial1.transmitted.size();
-            driver.syncWriteAll();
-            require(device.frames.size() == frameCount &&
-                    Serial1.transmitted.size() == transmittedCount,
-                    "unconfirmed RESET emitted the queued old-coordinate target");
-        }
+    const auto before = device.frames.size();
+    require(driver.checkOnlineConfiguration(1), "hardware configuration failed");
+    require(device.config[0] == 1 && device.config[10] == 0x95 && device.config[3] == 0,
+            "configuration lost direction bits or did not enable full-angle feedback");
+    require(device.profile == Bytes({254,254,0}), "speed/acceleration profile differs");
+    require(driver.getFeedback(1).onlineCheck == ServoOnlineCheck::Ready, "online ready not published");
+    if (name == "configuration" || name == "profile" || name == "firmware_new" || name == "firmware_minor" || name == "config_ack_missing") return;
+    for (size_t i = before; i < device.frames.size(); ++i)
+        require(device.frames[i][4] != 3, "verified configuration rewrote EEPROM");
+    const auto cached = device.frames.size();
+    require(driver.checkOnlineConfiguration(1) && device.frames.size() == cached, "online cache rechecked hardware");
+    if (name == "session_recheck") {
+        const auto generation = driver.getFeedback(1).onlineSessionGeneration;
+        require(driver.invalidateIfFeedbackStale(1, millis() + 1000, 80), "offline transition missing");
+        device.version = {3,9};
+        for (int i=0; i<3; ++i) require(driver.probeFeedback(1), "reconnect read failed");
+        require(driver.getFeedback(1).onlineSessionGeneration == generation + 1, "online generation did not change");
+        require(!driver.checkOnlineConfiguration(1) && driver.getFeedback(1).onlineCheck == ServoOnlineCheck::UnsupportedFirmware,
+                "reconnect reused cached version/configuration");
         return;
     }
-    if (name == "reset_torque_failure") {
-        for (Fault fault : {Fault::TorqueMissing, Fault::TorqueStatus}) {
-            HalFixture fixture;
-            auto& driver = fixture.driver;
-            auto& device = fixture.device;
-            device.fault = fault;
-            short raw = -123;
-            bool attempted = true;
-            require(!driver.resetTurnCounter(1, &raw, &attempted) && !attempted,
-                    "failed torque precondition attempted a RESET");
-            require(raw == -123 && device.resets == 0 && device.corrections == 0 &&
-                    device.hardwarePosition == 12488 &&
-                    driver.getAbsolutePosition(1) == 12488 &&
-                    driver.getHardwareAbsolutePosition(1) == 12488 &&
-                    driver.isAbsoluteReliable(1) && driver.isMultiTurnConfigured(1),
-                    "pre-RESET torque failure invalidated an unchanged native coordinate");
-            require(driver.setTarget(1, 12500, 400, 20),
-                    "unchanged trusted coordinate stopped accepting valid targets");
-        }
-        return;
-    }
-    HalFixture fixture(name.rfind("limits_", 0) != 0 && name != "unconfigured");
-    auto& driver = fixture.driver;
-    auto& device = fixture.device;
-    short raw = -123;
-    unsigned char attempts = 99;
-    if (name == "invalid_id" || name == "range" || name == "null_output") {
-        if (name == "invalid_id") {
-            for (unsigned char id : {static_cast<unsigned char>(27), static_cast<unsigned char>(254), static_cast<unsigned char>(255)})
-                require(!driver.calibrateHardwareAbsolutePosition(id, 0, &raw, &attempts), "HAL accepted unsupported or broadcast ID");
-        } else if (name == "range") {
-            for (int value : {30720, -30720, INT_MAX, INT_MIN})
-                require(!driver.calibrateHardwareAbsolutePosition(1, value, &raw, &attempts), "HAL truncated an out-of-range position");
-        } else {
-            require(!driver.calibrateHardwareAbsolutePosition(1, 0, nullptr, &attempts), "HAL accepted missing readback output");
-        }
-        require(device.frames.empty(), "invalid HAL request accessed the physical UART");
-        return;
-    }
-    if (name == "legacy_restore" || name == "reset_multiturn_readback" ||
-        name == "reset_negative_readback") {
-        const int expected = name == "reset_multiturn_readback" ? 8392
-            : name == "reset_negative_readback" ? -8392 : 200;
-        if (name != "legacy_restore") device.resetReadbackPosition = expected;
-        require(driver.resetTurnCounter(1, &raw), "native RESET transaction failed");
-        require(device.resets == 1 && device.corrections == 0,
-                "native RESET substituted custom position correction");
-        require(device.positionReads > 0 && device.hardwarePosition == expected &&
-                driver.getHardwareAbsolutePosition(1) == expected &&
-                driver.getAbsolutePosition(1) == expected,
-                "RESET replaced actual fresh ABS feedback with a normalized cached position");
-        require(raw == ((expected % 4096) + 4096) % 4096 &&
-                driver.getRawPosition(1) == raw && driver.isAbsoluteReliable(1),
-                "RESET did not establish the actual ABS and single-turn raw together");
-        return;
-    }
-    if (name == "zero" || name == "positive" || name == "negative" ||
-        name == "hardware_limits" || name == "unconfigured") {
-        const int position = name == "positive" ? 200 : name == "negative" ? -200 : 0;
-        require(driver.calibrateHardwareAbsolutePosition(1, position, &raw, &attempts), "HAL correction failed");
-        require(device.corrections == 1 && device.resets == 0, "HAL substituted RESET for custom correction");
-        require(attempts == 1 && device.positionReadsAfterCorrection > 0, "HAL did not verify a fresh correction readback");
-        require(driver.getHardwareAbsolutePosition(1) == position, "HAL reused the previous hardware unwrap anchor");
-        require(driver.getAbsolutePosition(1) == device.hardwarePosition,
-                "HAL ABS differs from the actual corrected servo position");
-        require(raw == ((position % 4096) + 4096) % 4096, "HAL returned stale raw");
-        require(driver.isAbsoluteReliable(1) && driver.isMultiTurnConfigured(1), "verified correction did not become trusted");
-        const auto& feedback = driver.getFeedback(1);
-        require(feedback.offlineLastTrustedAbs == position &&
-                feedback.offlineLastTrustedRaw == raw &&
-                feedback.offlineLastTrustedTimestampMs == feedback.lastUpdate,
-                "verified correction retained the old hotplug anchor");
-        device.hardwarePosition = position + 1;
-        require(driver.probeFeedback(1) && driver.getHardwareAbsolutePosition(1) == position + 1, "next feedback reused the pre-correction unwrap");
-        if (name == "hardware_limits") {
-            for (int boundary : {-30719, 30719}) {
-                require(driver.calibrateHardwareAbsolutePosition(1, boundary, &raw, &attempts), "valid hardware boundary rejected");
-                require(driver.getHardwareAbsolutePosition(1) == boundary, "boundary correction did not reach hardware feedback");
-            }
-        }
-        return;
-    }
-    if (name == "cached_zero") {
-        // Cached equality alone cannot establish that the instruction was executed.
-        HalFixture cached(true, 0);
-        cached.device.fault = Fault::ReadMissing;
-        require(!cached.driver.calibrateHardwareAbsolutePosition(1, 0, &raw, &attempts), "old cached zero replaced fresh readback verification");
-        require(!cached.driver.isAbsoluteReliable(1), "unverified cached zero remained trusted");
-        require(!cached.driver.setTarget(1, 0, 400, 20), "failed correction accepted a target");
-        require(cached.device.resets == 0, "failed correction silently fell back to RESET");
-        return;
-    }
-    if (name == "pending_targets") {
-        require(driver.setTarget(1, 12500, 400, 20), "fixture failed to queue an old-coordinate target");
-        device.fault = Fault::AckMissing;
-    } else {
-        device.fault = namedFault(name);
-    }
-    require(!driver.calibrateHardwareAbsolutePosition(1, 0, &raw, &attempts), "HAL accepted an unverified coordinate write");
-    require(!driver.isAbsoluteReliable(1), "partially completed correction retained coordinate trust");
-    require(!driver.getFeedback(1).offlineTrustedSnapshotPending, "failed correction retained an old hotplug snapshot");
-    require(raw == -123, "failed correction returned an unverified raw");
-    require(!driver.setTarget(1, 0, 400, 20), "failed correction accepted a motor target");
-    require(device.resets == 0, "failed correction silently fell back to RESET");
-    if (name == "pending_targets") {
-        const auto frameCount = device.frames.size();
-        driver.syncWriteAll();
-        require(device.frames.size() == frameCount, "failed correction emitted an old-coordinate target");
-    }
-    require(attempts > 0 && attempts <= mmhand::config::servo::kResetZeroTransactionAttempts, "HAL retries were not bounded");
-    if (name == "read_one_after_offline") {
-        require(!driver.isOnline(1), "one feedback frame incorrectly restored online state");
-        require(device.validPositionResponsesAfterCorrection == 1,
-                "online regression did not deliver exactly one valid post-offline frame");
-        require(device.positionReadsAfterCorrection ==
-                mmhand::config::servo::kResetZeroFeedbackAttempts *
-                mmhand::config::servo::kResetZeroTransactionAttempts,
-                "HAL committed before the offline readback sequence finished");
-    }
-    if (name.rfind("torque_", 0) == 0 || name.rfind("limits_", 0) == 0)
-        require(device.corrections == 0, "HAL corrected before torque/mode verification succeeded");
-    else
-        require(device.corrections > 0, "failure scenario did not exercise the custom instruction");
-}
-
-// Only the task/platform boundary is stubbed. The complete production 0xDA
-// execution function is inserted unchanged below and calls the actual HAL/SDK.
-struct SystemRuntimeContext {
-    volatile uint32_t multi_turn_unknown_bitmap = 0;
-};
-
-struct ServoRoute {
-    uint8_t busIndex = 0;
-    uint8_t servoId = 0;
-};
-
-static FeetechServoDriver* restoreDrivers[2] = {};
-static uint8_t restoreServoIds[2] = {4, 9};
-static uint8_t restoreBusIndices[2] = {0, 1};
-static uint32_t routeLookups = 0;
-static unsigned recoveryClockCalls = 0;
-
-uint32_t validMotorChannelMask() {
-    return (uint32_t(1) << SERVO_TOTAL_NUM) - 1;
-}
-
-FeetechServoDriver* resolveMotorDriver(uint8_t channel, ServoRoute* route,
-                                     bool controllable) {
-    require(controllable, "restore bypassed the controllable route gate");
-    routeLookups |= uint32_t(1) << channel;
-    if (channel > 1) return nullptr;
-    route->busIndex = restoreBusIndices[channel];
-    // Physical IDs deliberately differ from host channel indices.
-    route->servoId = restoreServoIds[channel];
-    return restoreDrivers[channel];
-}
-
-static uint32_t sharedAtomicFetchAnd(volatile uint32_t* value, uint32_t mask) {
-    const uint32_t previous = *value;
-    *value &= mask;
-    return previous;
-}
-
-static uint32_t sharedAtomicLoad(const volatile uint32_t* value) {
-    return *value;
-}
-
-namespace p4::platform::time {
-uint32_t monotonicMillis() {
-    ++recoveryClockCalls;
-    return static_cast<uint32_t>(millis());
-}
-}
-
-#define FW_LOG_WARN_PRINTF(...) ((void)0)
-#define FW_LOG_INFO_PRINTF(...) ((void)0)
-
-/* PRODUCTION_HOST_RESTORE_FUNCTION */
-
-struct RoutingFixture {
-    FeetechServoDriver drivers[2];
-    Device devices[2];
-    SystemRuntimeContext context;
-    int32_t saved[SERVO_TOTAL_NUM] = {};
-
-    explicit RoutingFixture(bool configured = true) {
-        Serial1 = HardwareSerial{};
-        Serial2 = HardwareSerial{};
-        HardwareSerial* serials[] = {&Serial1, &Serial2};
-        for (unsigned channel = 0; channel < 2; ++channel) {
-            const uint8_t id = channel == 0 ? 4 : 9;
-            auto& driver = drivers[channel];
-            auto& device = devices[channel];
-            auto* serial = serials[channel];
-            device.hardwarePosition = device.previousHardwarePosition =
-                channel == 0 ? 12488 : -8300;
-            device.requireTorqueOff = true;
-            serial->onPacket = [this, channel, serial](const Bytes& frame) {
-                devices[channel].receive(*serial, frame);
-            };
-            driver.begin(static_cast<uint8_t>(channel), 21, 20, 1000000);
-            for (unsigned read = 0; read < mmhand::config::servo::kOnlineConfirmReads; ++read)
-                require(driver.probeFeedback(id), "routing fixture feedback failed");
-            require(driver.isOnline(id), "routing fixture is not online");
-            establishNativePosition(driver, device, id, device.hardwarePosition, configured);
-            restoreDrivers[channel] = &driver;
-            restoreServoIds[channel] = id;
-            restoreBusIndices[channel] = static_cast<uint8_t>(channel);
-            device.frames.clear();
-            serial->transmitted.clear();
-        }
-        // The third channel is deliberately unselected and has no usable route.
-        context.multi_turn_unknown_bitmap = 7;
-        saved[0] = 200;
-        saved[1] = -200;
-        saved[2] = INT_MAX;
-        routeLookups = 0;
-        recoveryClockCalls = 0;
-    }
-
-    void verifySuccess(unsigned channel, int32_t position) const {
-        const uint8_t id = channel == 0 ? 4 : 9;
-        const auto& driver = drivers[channel];
-        const auto& device = devices[channel];
-        require(device.corrections == 1 && device.resets == 0,
-                "host restore substituted RESET or RAM-only restore for 0x0B");
-        require(device.hardwarePosition == position &&
-                driver.getHardwareAbsolutePosition(id) == position &&
-                driver.getAbsolutePosition(id) == position,
-                "host restore did not establish the requested hardware coordinate");
-        require(driver.isAbsoluteReliable(id), "verified host restore remained unknown");
-        require(device.positionReadsAfterCorrection > 0,
-                "host restore accepted cached feedback without a fresh read");
-        bool checkedCorrection = false;
-        for (const auto& frame : device.frames) {
-            require(frame[2] == id, "host channel was used as the physical servo ID");
-            if (frame[4] != 0x0b) continue;
-            const unsigned encoded = encodePosition(position);
-            require(frame[3] == 4 && frame[5] == (encoded & 0xff) &&
-                    frame[6] == (encoded >> 8),
-                    "host restore changed the saved position before its protocol write");
-            checkedCorrection = true;
-        }
-        require(checkedCorrection, "host restore emitted no custom correction frame");
-    }
-
-    void verifyUnselectedSecond() const {
-        require(devices[1].frames.empty() && devices[1].corrections == 0 &&
-                devices[1].resets == 0 && drivers[1].getAbsolutePosition(9) == -8300 &&
-                drivers[1].getHardwareAbsolutePosition(9) == devices[1].hardwarePosition,
-                "host restore touched an unselected channel");
-    }
-};
-
-static void verifyCorrectionFrames(const Device& device, std::size_t start,
-                                   int32_t expectedPosition) {
-    const unsigned encoded = encodePosition(expectedPosition);
-    unsigned corrections = 0;
-    for (std::size_t index = start; index < device.frames.size(); ++index) {
-        const auto& frame = device.frames[index];
-        require(frame[2] == 4, "retry used a different physical servo");
-        if (frame[4] != 0x0b) continue;
-        require(frame[3] == 4 && frame[5] == (encoded & 0xff) &&
-                frame[6] == (encoded >> 8),
-                "retry replaced the original hardware write with a drifted payload");
-        ++corrections;
-    }
-    require(corrections > 0, "retry emitted no custom position correction");
-}
-
-static void routingRetryScenario(const std::string& name) {
-    RoutingFixture fixture(name != "retry_mode_new_payload");
-    auto& driver = fixture.drivers[0];
-    auto& device = fixture.devices[0];
-    // The external legacy JSON has saved ABS=0 and saved raw=200. The current
-    // device reports native ABS=12488, raw=200. A completed 0x0B write changes
-    // actual raw to zero; recomputing from the old JSON may yield payload=-200.
-    require(driver.probeFeedback(4), "legacy retry fixture could not refresh native feedback");
-    require(driver.getAbsolutePosition(4) == 12488 && driver.getRawPosition(4) == 200 &&
-            !driver.hasOnlineTransitionPending(4),
-            "legacy retry fixture does not represent a native ABS with an old JSON anchor");
-    device.frames.clear();
-    Serial1.transmitted.clear();
-    fixture.saved[0] = 0;
-
-    auto request = [&](bool expectedSuccess) {
-        uint32_t restored = 0xdeadbeef;
-        uint32_t rejected = 0xdeadbeef;
-        fixture.context.multi_turn_unknown_bitmap |= 1;
-        const bool success = restoreServoMultiTurnFromHost(
-            &fixture.context, 1, fixture.saved, 0, false, &restored, &rejected);
-        require(success == expectedSuccess && restored == (expectedSuccess ? 1U : 0U) &&
-                rejected == (expectedSuccess ? 0U : 1U),
-                "retry result masks do not describe its verified hardware outcome");
-        require(fixture.context.multi_turn_unknown_bitmap == (expectedSuccess ? 6U : 7U),
-                "retry cleared Unknown before the coordinate was confirmed");
-        if (!expectedSuccess)
-            require(!driver.isAbsoluteReliable(4) && !driver.setTarget(4, 0, 400, 20),
-                    "failed retry retained coordinate trust or accepted motion");
-        fixture.verifyUnselectedSecond();
-    };
-
-    if (name == "success_new_payload") {
-        request(true);
-        const auto start = device.frames.size();
-        fixture.saved[0] = -200;
-        request(true);
-        verifyCorrectionFrames(device, start, -200);
-        require(device.hardwarePosition == -200 && driver.getAbsolutePosition(4) == -200 &&
-                driver.getHardwareAbsolutePosition(4) == -200,
-                "successful transaction froze the next independent host target");
-        return;
-    }
-
-    if (name == "retry_torque_new_payload" || name == "retry_mode_new_payload") {
-        device.fault = name == "retry_torque_new_payload"
-            ? Fault::TorqueMissing : Fault::LimitsMismatch;
-        request(false);
-        require(device.corrections == 0 && device.hardwarePosition == 12488,
-                "precondition failure unexpectedly attempted hardware correction");
-        const auto start = device.frames.size();
-        device.fault = Fault::None;
-        fixture.saved[0] = -200;
-        request(true);
-        verifyCorrectionFrames(device, start, -200);
-        fixture.verifySuccess(0, -200);
-        return;
-    }
-
-    const bool bounded = name == "retry_limit" || name == "retry_new_trusted" ||
-        name == "retry_new_trusted_timestamp";
-    const bool boundary = name == "retry_route_changed" || name == "retry_route_missing" ||
-        name == "retry_session_changed" || name == "retry_payload_out_of_range";
-    require(bounded || name == "retry_ack_changed_payload" ||
-            name == "retry_read_changed_payload" || boundary,
-            "unknown hardware-sync retry scenario");
-    device.fault = name == "retry_read_changed_payload"
-        ? Fault::ReadMismatch : Fault::AckMissing;
-    const unsigned failedRequests = bounded ? 3 : 1;
-    for (unsigned index = 0; index < failedRequests; ++index) {
-        const auto start = device.frames.size();
-        request(false);
-        verifyCorrectionFrames(device, start, 0);
-        require(device.hardwarePosition == 0,
-                "retry fault did not follow a completed hardware coordinate write");
-        fixture.saved[0] = -200;
-    }
-
-    if (boundary) {
-        device.fault = Fault::None;
-        if (name == "retry_payload_out_of_range") {
-            const auto start = device.frames.size();
-            const auto txStart = Serial1.transmitted.size();
-            for (int invalid : {30720, -30720, INT_MAX, INT_MIN}) {
-                fixture.saved[0] = invalid;
-                request(false);
-                require(device.frames.size() == start && Serial1.transmitted.size() == txStart,
-                        "active retry cache bypassed the incoming payload range guard");
-            }
-            fixture.saved[0] = -200;
-            request(true);
-            verifyCorrectionFrames(device, start, 0);
-            require(device.hardwarePosition == 0 && driver.getAbsolutePosition(4) == 0,
-                    "rejected out-of-range payload erased the original pending coordinate");
-            return;
-        }
-        if (name == "retry_route_changed" || name == "retry_route_missing") {
-            const auto framesBefore = device.frames.size();
-            const auto txBefore = Serial1.transmitted.size();
-            if (name == "retry_route_changed") {
-                // The replacement route already has a different trusted basis.
-                // Route identity must be checked before that basis can clear cache.
-                restoreDrivers[0] = &fixture.drivers[1];
-                restoreServoIds[0] = 9;
-                restoreBusIndices[0] = 1;
-            } else restoreDrivers[0] = nullptr;
-            request(false);
-            require(device.frames.size() == framesBefore && Serial1.transmitted.size() == txBefore,
-                    "changed or missing route issued a pending hardware write");
-            restoreDrivers[0] = &driver;
-            restoreServoIds[0] = 4;
-            restoreBusIndices[0] = 0;
-            request(false);
-            require(device.frames.size() == framesBefore && Serial1.transmitted.size() == txBefore,
-                    "returning old route restarted a previously blocked transaction");
-            return;
-        }
-        const uint32_t previousGeneration = driver.getFeedback(4).onlineSessionGeneration;
-        const uint32_t previousTrustedTimestamp = driver.getFeedback(4).offlineLastTrustedTimestampMs;
-        require(driver.invalidateIfFeedbackStale(4, driver.getFeedback(4).lastUpdate + 2, 1),
-                "session regression could not invalidate the old online session");
-        for (unsigned read = 0; read < mmhand::config::servo::kOnlineConfirmReads; ++read)
-            require(driver.probeFeedback(4), "session regression could not reconnect");
-        require(driver.isOnline(4) && driver.hasOnlineTransitionPending(4) &&
-                driver.getFeedback(4).onlineSessionGeneration != previousGeneration,
-                "reconnection did not establish a new online generation");
-        driver.finishRecoveryAttempt(4, true, static_cast<uint32_t>(millis()));
-        require(!driver.hasOnlineTransitionPending(4) && !driver.isAbsoluteReliable(4) &&
-                driver.getFeedback(4).offlineLastTrustedTimestampMs == previousTrustedTimestamp,
-                "session regression did not preserve an unresolved coordinate basis");
-        const auto framesBefore = device.frames.size();
-        const auto txBefore = Serial1.transmitted.size();
-        request(false);
-        require(device.frames.size() == framesBefore && Serial1.transmitted.size() == txBefore,
-                "consumed online event allowed a retry across device sessions");
-        return;
-    }
-
-    if (!bounded) {
-        const auto start = device.frames.size();
-        device.fault = Fault::None;
-        request(true);
-        verifyCorrectionFrames(device, start, 0);
-        require(device.hardwarePosition == 0 && driver.getHardwareAbsolutePosition(4) == 0 &&
-                driver.getAbsolutePosition(4) == 0,
-                "legacy JSON retry drifted the established hardware zero");
-        require(device.resets == 0, "hardware-sync retry fell back to RESET");
-        return;
-    }
-
-    const auto lockedFrameCount = device.frames.size();
-    const auto lockedTransmitCount = Serial1.transmitted.size();
-    device.fault = Fault::None;
-    for (unsigned index = 0; index < 2; ++index) {
-        fixture.saved[0] = index == 0 ? -200 : 400;
-        request(false);
-        require(device.frames.size() == lockedFrameCount &&
-                Serial1.transmitted.size() == lockedTransmitCount,
-                "exhausted host retry budget emitted another UART transaction");
-    }
-    if (name == "retry_limit") return;
-
-    const uint32_t previousTrustedTimestamp = driver.getFeedback(4).offlineLastTrustedTimestampMs;
-    short raw = -1;
-    bool correctionAttempted = false;
-    require(driver.calibrateHardwareAbsolutePosition(4, 50, &raw, nullptr,
-                                                     &correctionAttempted) &&
-            correctionAttempted && driver.getFeedback(4).offlineLastTrustedTimestampMs !=
-                previousTrustedTimestamp,
-            "explicit coordinate rebase did not establish a fresh trusted generation");
-    if (name == "retry_new_trusted_timestamp") {
-        // Isolate the timestamp invalidation path: the explicit rebase is trusted,
-        // then a failed torque precondition removes current reliability without
-        // replacing that newer trusted generation or writing another position.
+    if (name == "torque_enable_missing") {
+        require(driver.setTorqueEnabled(1, false), "torque off failed");
         device.fault = Fault::TorqueMissing;
-        require(!driver.calibrateHardwareAbsolutePosition(4, 60, &raw, nullptr,
-                                                          &correctionAttempted) &&
-                !correctionAttempted && !driver.isAbsoluteReliable(4),
-                "pre-write failure did not isolate the new trusted timestamp");
-    }
-    const auto start = device.frames.size();
-    device.fault = Fault::None;
-    fixture.saved[0] = -200;
-    request(true);
-    verifyCorrectionFrames(device, start, -200);
-    require(device.hardwarePosition == -200 && driver.getAbsolutePosition(4) == -200 &&
-            driver.getHardwareAbsolutePosition(4) == -200,
-            "fresh trusted coordinates did not release the exhausted retry cache");
-}
-
-static void routingScenario(const std::string& name) {
-    if (name.rfind("retry_", 0) == 0 || name == "success_new_payload") {
-        routingRetryScenario(name);
+        require(!driver.queueTarget(1, 100, 400, 20), "unacknowledged torque enable accepted a position target");
+        device.fault = Fault::None;
+        require(driver.queueTarget(1, 100, 400, 20), "torque enable failure poisoned its retry cache");
         return;
     }
-    RoutingFixture fixture;
-    uint32_t restored = 0xdeadbeef;
-    uint32_t rejected = 0xdeadbeef;
-    uint32_t mask = 1;
-    uint32_t resetZeroMask = 0;
-    const bool clearRecovery = name == "clear_recovery" || name == "two_routes";
-    if (name == "negative") fixture.saved[0] = -200;
-    else if (name == "zero") fixture.saved[0] = 0;
-    else if (name == "multi_turn") fixture.saved[0] = 8392;
-    else if (name == "negative_multi_turn") fixture.saved[0] = -8392;
-    else if (name == "reset_mask_set") resetZeroMask = 1;
-    else if (name == "two_routes") {
-        mask = 3;
-        fixture.saved[0] = 8392;
-        fixture.saved[1] = -8392;
-    } else if (name == "ack_missing" || name == "read_mismatch") {
-        fixture.devices[0].fault = namedFault(name);
-        require(fixture.drivers[0].setTarget(4, 12500, 400, 20),
-                "routing fixture could not queue an old-coordinate target");
-    } else if (name == "out_of_range") fixture.saved[0] = 30720;
-    else if (name == "partial_ack_missing" || name == "partial_out_of_range") {
-        mask = 3;
-        if (name == "partial_ack_missing") fixture.devices[1].fault = Fault::AckMissing;
-        else fixture.saved[1] = -30720;
-    } else if (name == "missing_route") mask = 4;
-    else if (name == "empty_mask") mask = 0;
-    else require(name == "positive" || name == "reset_mask_zero" ||
-                 name == "clear_recovery" || name == "keep_recovery",
-                 "unknown host restore scenario");
-
-    const bool success = restoreServoMultiTurnFromHost(
-        &fixture.context, mask, fixture.saved, resetZeroMask,
-        clearRecovery, &restored, &rejected);
-    const bool failedFirst = name == "ack_missing" || name == "read_mismatch" ||
-        name == "out_of_range" || name == "missing_route";
-    const bool failedSecond = name == "partial_ack_missing" || name == "partial_out_of_range";
-    const uint32_t expectedRestored = failedFirst || mask == 0 ? 0
-        : failedSecond ? 1 : mask;
-    const uint32_t expectedRejected = failedFirst ? mask : failedSecond ? 2 : 0;
-    require(success == (mask != 0 && expectedRejected == 0),
-            "host restore returned success for a partial or empty transaction");
-    require(restored == expectedRestored && rejected == expectedRejected,
-            "host restore success/rejected masks do not match physical outcomes");
-    require(fixture.context.multi_turn_unknown_bitmap == (7U & ~expectedRestored),
-            "host restore cleared unknown for an unverified or unselected channel");
-    require(routeLookups == mask, "host restore resolved an unselected channel");
-    require(recoveryClockCalls == (clearRecovery ? (mask == 3 ? 2U : 1U) : 0U),
-            "clearRecoveryTransaction did not control recovery completion calls");
-    if ((expectedRestored & 1) != 0) fixture.verifySuccess(0, fixture.saved[0]);
-    if ((expectedRestored & 2) != 0) fixture.verifySuccess(1, fixture.saved[1]);
-    if ((mask & 2) == 0) fixture.verifyUnselectedSecond();
-    if (clearRecovery) {
-        const auto& feedback = fixture.drivers[0].getFeedback(4);
-        require(!fixture.drivers[0].hasOnlineTransitionPending(4) &&
-                !fixture.drivers[0].isRecoveryFailed(4) &&
-                feedback.recoveryAttemptCount == 0 && feedback.nextRecoveryAttemptMs == 0,
-                "successful restore did not finish the recovery transaction");
+    if (name == "native") {
+        for (int position : {8292, 100, 4100, 4090, -73, -8392, 30719, -30719}) {
+            device.hardwarePosition = position;
+            require(driver.probeFeedback(1), "native sample missing");
+            require(driver.getAbsolutePosition(1) == position, "native feedback was unwrapped or masked");
+        }
+        return;
     }
-    if (name == "out_of_range" || name == "partial_out_of_range") {
-        const unsigned channel = name == "out_of_range" ? 0 : 1;
-        require(fixture.devices[channel].frames.empty(),
-                "out-of-range saved ABS reached the physical UART");
+    p4::servo::AbsoluteRestore writer;
+    using Result = p4::servo::RestoreResult;
+    const int target = name == "negative" ? -8392 : name == "zero" ? 0 : 8292;
+    if (name == "ack_missing") device.fault = Fault::AckMissing;
+    if (name == "ack_status") device.fault = Fault::AckStatus;
+    if (name == "read_missing") device.fault = Fault::ReadMissing;
+    if (name == "read_status") device.fault = Fault::ReadStatus;
+    if (name == "read_mismatch") device.fault = Fault::ReadMismatch;
+    if (name == "single_turn_rejected") device.fault = Fault::ReadModulo;
+    if (name == "torque_missing") device.fault = Fault::TorqueMissing;
+    const auto first = writer.step(&driver, 1, target, 1000);
+    if (name == "ack_status" || name == "torque_missing") {
+        require(first == Result::Failed && !driver.isAbsoluteReliable(1), "rejected command became trusted");
+        return;
     }
-    if (name == "ack_missing" || name == "read_mismatch" || name == "partial_ack_missing") {
-        const unsigned channel = name == "partial_ack_missing" ? 1 : 0;
-        const uint8_t id = channel == 0 ? 4 : 9;
-        auto& driver = fixture.drivers[channel];
-        auto& device = fixture.devices[channel];
-        require(device.hardwarePosition == fixture.saved[channel] && device.corrections > 0,
-                "failure did not include a physically completed position write");
-        require(!driver.isAbsoluteReliable(id) && !driver.setTarget(id, 0, 400, 20),
-                "unconfirmed host restore remained eligible for motion");
-        const auto framesBeforeFlush = device.frames.size();
-        driver.syncWriteAll();
-        require(device.frames.size() == framesBeforeFlush && device.resets == 0,
-                "failed host restore emitted a queued target or RESET fallback");
+    require(first == Result::Pending && !driver.isAbsoluteReliable(1), "write trusted a cached sample");
+    require(device.corrections == 1, "one request did not issue exactly one correction");
+    require(writer.step(&driver, 1, target, 1001) == Result::Pending, "old feedback accepted");
+    if (name == "cancel") {
+        writer.cancel();
+        require(!writer.active() && !driver.isAbsoluteReliable(1), "cancel restored motion authority");
+        return;
+    }
+    if (name == "stale") {
+        require(writer.step(&driver, 1, target, 1500) == Result::Failed, "stale sample accepted");
+        return;
+    }
+    const bool read = driver.probeFeedback(1);
+    if (name == "read_missing") require(!read, "missing read was accepted");
+    if (name == "read_missing" || name == "read_mismatch" || name == "single_turn_rejected" || name == "read_status") {
+        require(writer.step(&driver, 1, target, 1500) == Result::Failed, "invalid full ABS accepted");
+        require(!driver.isAbsoluteReliable(1), "failed restore became trusted");
+        // A later request must retain the first uncertain target and never rewrite from shifted raw.
+        require(writer.step(&driver, 1, -200, 1600) == Result::Pending, "pending restore not retained");
+        require(device.corrections == 1, "uncertain write was repeated");
+        device.fault = Fault::None;
+        require(driver.probeFeedback(1), "late native feedback missing");
+        require(writer.step(&driver, 1, -200, 1601) == Result::Success, "late exact result not recovered");
+        require(driver.getAbsolutePosition(1) == target, "late request changed first target");
+        return;
+    }
+    require(read && writer.step(&driver, 1, target, 1002) == Result::Success, "exact native ABS not confirmed");
+    require(driver.getAbsolutePosition(1) == target && driver.isAbsoluteReliable(1), "native ABS differs from target");
+    require(device.corrections == 1 && device.resets == 0, "restore rewrote coordinates or reset turns");
+    if (name == "disconnect") {
+        require(driver.invalidateIfFeedbackStale(1, driver.getFeedback(1).lastUpdate+100, 80), "offline not detected");
+        int32_t saved = 0;
+        require(driver.consumeOfflineTrustedSnapshot(1, &saved) && saved == target,
+                "offline lost native checkpoint");
+        require(!driver.isAbsoluteReliable(1), "offline retained coordinate authority");
     }
 }
 
 int main(int argc, char** argv) {
     try {
-        require(argc == 2, "expected one scenario name");
-        const std::string scenario(argv[1]);
-        if (scenario.rfind("sdk_", 0) == 0) sdkScenario(scenario.substr(4));
-        else if (scenario.rfind("hal_", 0) == 0) halScenario(scenario.substr(4));
-        else if (scenario.rfind("routing_", 0) == 0) routingScenario(scenario.substr(8));
-        else throw std::runtime_error("unknown scenario prefix");
+        require(argc == 2, "scenario required");
+        const std::string name(argv[1]);
+        if (name.rfind("sdk_",0) == 0) sdkScenario(name.substr(4));
+        else halScenario(name);
         return 0;
-    } catch (const std::exception& error) {
-        std::cerr << (argc > 1 ? argv[1] : "harness") << ": " << error.what() << '\n';
-        return 1;
-    }
+    } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }
+
 '''
-
-
-def _production_restore_function(source: str) -> str:
-    """Extract the whole current routing function, without rewriting its body."""
-    start = source.index("bool restoreServoMultiTurnFromHost(")
-    opening = source.index("{", start)
-    depth = 1
-    closing = opening + 1
-    while depth:
-        depth += (source[closing] == "{") - (source[closing] == "}")
-        closing += 1
-    return source[start:closing]
 
 
 def _msvc_sdk_source(source: str) -> str:
@@ -998,12 +491,7 @@ def native_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dict
     include.mkdir()
     (include / "Arduino.h").write_text(ARDUINO_STUB, encoding="utf-8")
     source = directory / "servo_custom_position_test.cpp"
-    routing = (P4_SRC / "tasks/servo_bus/ServoBusRouting.cpp").read_text(encoding="utf-8")
-    source.write_text(
-        NATIVE_SOURCE.replace("/* PRODUCTION_HOST_RESTORE_FUNCTION */",
-                              _production_restore_function(routing)),
-        encoding="utf-8",
-    )
+    source.write_text(NATIVE_SOURCE, encoding="utf-8")
     executable = directory / "servo_custom_position_test.exe"
     sms_source = SDK_SRC / "SMS_STS.cpp"
     msvc = Path(compiler).name.lower() in {"cl", "cl.exe"}
@@ -1030,37 +518,13 @@ def native_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dict
 
 SCENARIOS = (
     "sdk_example", "sdk_zero", "sdk_negative", "sdk_signed_limits",
-    "sdk_minimum_invalid", "sdk_invalid_id", "sdk_broadcast",
-    "sdk_level_zero", "sdk_level_zero_missing", "sdk_short_tx", "sdk_legacy_recal",
-    "sdk_ack_missing", "sdk_ack_wrong_id", "sdk_ack_wrong_length",
-    "sdk_ack_checksum", "sdk_ack_status", "sdk_ack_truncated",
-    "hal_zero", "hal_positive", "hal_negative", "hal_hardware_limits",
-    "hal_unconfigured", "hal_invalid_id", "hal_range", "hal_null_output", "hal_unbound",
-    "hal_legacy_restore", "hal_cached_zero", "hal_pending_targets",
-    "hal_reset_multiturn_readback", "hal_reset_negative_readback",
-    "hal_reset_uncertain_ack", "hal_reset_torque_failure",
-    "hal_ack_missing", "hal_ack_wrong_id", "hal_ack_wrong_length",
-    "hal_ack_checksum", "hal_ack_status", "hal_ack_truncated",
-    "hal_read_missing", "hal_read_wrong_id", "hal_read_wrong_length",
-    "hal_read_checksum", "hal_read_status", "hal_read_truncated", "hal_read_mismatch",
-    "hal_read_one_after_offline",
-    "hal_torque_status", "hal_torque_missing",
-    "hal_limits_mismatch", "hal_limits_missing", "hal_limits_status",
-    "routing_positive", "routing_negative", "routing_zero",
-    "routing_multi_turn", "routing_negative_multi_turn",
-    "routing_reset_mask_zero", "routing_reset_mask_set", "routing_two_routes",
-    "routing_ack_missing", "routing_read_mismatch", "routing_out_of_range",
-    "routing_partial_ack_missing", "routing_partial_out_of_range",
-    "routing_missing_route", "routing_empty_mask",
-    "routing_clear_recovery", "routing_keep_recovery",
-    "routing_retry_ack_changed_payload", "routing_retry_read_changed_payload",
-    "routing_retry_torque_new_payload", "routing_retry_mode_new_payload",
-    "routing_success_new_payload", "routing_retry_limit",
-    "routing_retry_new_trusted", "routing_retry_new_trusted_timestamp",
-    "routing_retry_route_changed", "routing_retry_route_missing",
-    "routing_retry_session_changed", "routing_retry_payload_out_of_range",
+    "sdk_minimum_invalid", "sdk_invalid_id", "sdk_broadcast", "sdk_level_zero",
+    "sdk_level_zero_missing", "sdk_short_tx", "sdk_legacy_recal", "sdk_ack_missing",
+    "sdk_ack_wrong_id", "sdk_ack_wrong_length", "sdk_ack_checksum", "sdk_ack_status", "sdk_ack_truncated",
+    "firmware_old", "firmware_new", "firmware_minor", "session_recheck", "torque_enable_missing", "version_missing", "profile", "profile_ignored", "config_ack_missing", "lock_failure",
+    "configuration", "native", "positive", "negative", "zero", "ack_missing", "ack_status",
+    "torque_missing", "read_missing", "read_mismatch", "read_status", "single_turn_rejected", "stale", "cancel", "disconnect",
 )
-
 
 @pytest.mark.parametrize("scenario", SCENARIOS)
 def test_production_custom_position_transaction(native_harness, scenario: str) -> None:

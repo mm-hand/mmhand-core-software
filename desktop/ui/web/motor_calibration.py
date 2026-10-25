@@ -41,7 +41,7 @@ def build(hand, act, load_calibration):
                         with ui.row().classes('items-center'):
                             refreshers.append(selection(hand, 'selected_joints', [j], f'J{j:02d}'))
                             badge = quality()
-                        motors = table([(k, v) for k, v in [('motor', 'Motor'), ('raw', 'RawNow'), ('abs', 'AbsNow'), ('load', 'Load')]], 'motor')
+                        motors = table([(k, v) for k, v in [('motor', 'Motor'), ('abs', 'ABS'), ('load', 'Load')]], 'motor')
                         info = label().classes('text-xs leading-tight')
                     def refresh(snapshot, j=j, badge=badge, motors=motors, info=info):
                         row, result = snapshot['joints'][j], snapshot['joints'][j]['result']

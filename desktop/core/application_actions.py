@@ -33,6 +33,7 @@ from .console_snapshot import enrich_snapshot, motor_quality
 from .id_actions import IdResetActions
 from .control_parameters import ControlParameterStore
 from .protocol import (
+    ServoOnlineCheck,
     DIRECT_SERVO_SPEED, DIRECT_SERVO_ACC,
     ControlMode, ENCODER_COUNT, MOTOR_COUNT, DUAL_TENDON_JOINT_INDICES, SYSTEM_STATE_UNCONTROLLABLE,
     VALID_MOTOR_MASK,
@@ -985,7 +986,7 @@ class ApplicationActions(IdResetActions):
                         self._calibration_operation_id = None
                     return
                 ok = self.begin_calibration_workflow(
-                    joint_mask=mask, motor_mask=motors, reset_motor_mask=motors)
+                    joint_mask=mask, motor_mask=motors)
                 if not ok:
                     self._finish_application_operation(
                         operation_id, False, 'Calibration transaction rejected')
@@ -1162,9 +1163,18 @@ class ApplicationActions(IdResetActions):
                         or mask & state.servo_route_conflict_bitmap):
                     return False, 'ABS zero requires fresh status and online, unambiguous selected motors'
 
+                stopped_states = (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE,
+                                  SYSTEM_STATE_READY, SYSTEM_STATE_RECOVERY_REQUIRED)
+
                 def stop_outputs():
                     self._controller.invalidate_direct_commands()
-                    self._controller.stop()
+                    state = self.get_state_snapshot()
+                    # ABS 归零只要求 P4 无 owner 的静止态；空闲时再发 STOP 会锁存
+                    # E-STOP，随后首次 Enable 必被拒并只能 Clear Faults（Direct
+                    # 无标定自动归零后的表现）。只在真有输出或非静止态时才停机。
+                    if (state.control_enabled or state.servo_target_owner
+                            or state.system_state not in stopped_states):
+                        self._controller.stop()
                     return True
 
                 stopped_at = time.monotonic()
@@ -1204,9 +1214,8 @@ class ApplicationActions(IdResetActions):
                              - state.servo_rebase_zero_result_p4_time_ms) & 0xffffffff
                     if (cancelled() or not self._fresh_application_state()
                             or self._controller.servo_abs_zero_device_id(state) != operation_device_id
-                            or not state.has_servo_angle_data or not state.has_servo_raw_data
+                            or not state.has_servo_angle_data
                             or state.servo_rebase_zero_result_token != result.result_token
-                            or state.servo_feedback_p4_time_ms != state.servo_raw_p4_time_ms
                             or not 0 < delta < 0x80000000
                             or not 0 <= time.monotonic() - state.received_at('servo_abs_last_rx_ts') <= 0.6
                             or not state.has_servo_route_status):
@@ -1217,7 +1226,6 @@ class ApplicationActions(IdResetActions):
                                 or not state.servo_online_bitmap & bit
                                 or not state.servo_route_controllable_bitmap & bit
                                 or state.multi_turn_unknown_bitmap & bit
-                                or not state.servo_raw_online[motor]
                                 or not self._controller.servo_abs_zero_anchor_saved(bit)):
                             continue
                         if cancelled():
@@ -1245,6 +1253,9 @@ class ApplicationActions(IdResetActions):
         state = self.get_state_snapshot()
         mask = (state.servo_online_bitmap & state.servo_route_controllable_bitmap
                 & VALID_MOTOR_MASK & ~state.servo_route_conflict_bitmap)
+        if not state.has_servo_online_status:
+            return OperationResult(False, None, 'Waiting for motor firmware and configuration checks')
+        mask &= sum(1 << m for m, status in enumerate(state.servo_online_check) if status == ServoOnlineCheck.READY)
         motors = tuple(m for m in range(MOTOR_COUNT) if mask & (1 << m))
         if not motors:
             return OperationResult(False, None, 'No online, routable motors to zero')
@@ -1536,6 +1547,16 @@ class ApplicationActions(IdResetActions):
             problems.append(f'Servo: route conflict 0x{state.servo_route_conflict_bitmap:08X}. Check motor IDs and bus connections.')
         if state.multi_turn_unknown_bitmap:
             problems.append(f'Motor: multi-turn position unknown 0x{state.multi_turn_unknown_bitmap:08X}. Use the controlled recovery or calibration procedure.')
+        if fresh and state.has_servo_online_status:
+            for motor, status in enumerate(state.servo_online_check):
+                if not state.servo_online_bitmap & (1 << motor):
+                    continue
+                if status == ServoOnlineCheck.UNSUPPORTED_FIRMWARE:
+                    problems.append(f'M{motor:02d}: firmware {state.servo_firmware_major[motor]}.{state.servo_firmware_minor[motor]} is older than 3.10.')
+                elif status == ServoOnlineCheck.VERSION_READ_FAILED:
+                    problems.append(f'M{motor:02d}: motor firmware version read failed.')
+                elif status == ServoOnlineCheck.CONFIGURATION_FAILED:
+                    problems.append(f'M{motor:02d}: motor online configuration check failed.')
         if self.tactile_port and not self.is_tactile_serial_connected():
             problems.append('S3: tactile serial offline. Check its independent connection; P4 status is evaluated separately.')
         warning = (format_calibration_warning(state, state.calibration_warning_bitmap)
@@ -1550,14 +1571,12 @@ class ApplicationActions(IdResetActions):
                         and connection_unchanged
                         and device_id and zero_device_ids[motor] == device_id
                         and zero_connections[motor] == connection_generation
-                        and fresh and state.has_servo_angle_data and state.has_servo_raw_data
-                        and state.servo_feedback_p4_time_ms == state.servo_raw_p4_time_ms
+                        and fresh and state.has_servo_angle_data
                         and delta < 0x80000000
                         and 0 <= now - state.servo_abs_last_rx_ts <= 0.6
                         and state.servo_online_bitmap & bit
                         and state.servo_route_controllable_bitmap & bit
-                        and not state.multi_turn_unknown_bitmap & bit
-                        and state.servo_raw_online[motor]):
+                        and not state.multi_turn_unknown_bitmap & bit):
                     self._displayed_motor_abs_zero_generations[motor] = zero_generations[motor]
             busy = bool(self._application_busy or host_active)
             ros_reason = self._ros_reason if not self._ros_available else ('P4 is not ready' if not fresh or not self.is_started() else

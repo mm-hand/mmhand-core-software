@@ -9,7 +9,7 @@ import pytest
 
 from _clock_helpers import stamp
 from desktop.core import core_logic
-from desktop.core.core_logic import HandController
+from desktop.core.core_logic import HandController, ServoRebaseZeroResult
 from desktop.core.protocol import HOST_PROTOCOL_VERSION, MOTOR_COUNT, SYSTEM_STATE_IDLE, SYSTEM_STATE_RUN_DIRECT
 
 
@@ -70,9 +70,7 @@ def make_controller(monkeypatch, motors=(3,), angle=3000):
     state.multi_turn_unknown_bitmap = ((1 << MOTOR_COUNT) - 1) & ~mask
     for motor in motors:
         state.servo_angles[motor] = angle
-        state.servo_raw_positions[motor] = angle
-        state.servo_raw_online[motor] = True
-    controller.prepare_calibration_turn_zero = MagicMock(return_value=(True, 'ok', mask, 0))
+    controller.rebase_servo_abs_zero = MagicMock(return_value=ServoRebaseZeroResult(True, 'ok', 1, mask, 0))
     controller.set_active_scope = MagicMock(return_value=True)
     monkeypatch.setattr(core_logic, 'invalidate_calibration_snapshot_scope', Mock(return_value='saved'))
     return controller, state, mask
@@ -91,7 +89,6 @@ def accepted_send(state, mask):
             for motor in range(MOTOR_COUNT):
                 if mask & (1 << motor):
                     state.servo_angles[motor] = int(targets[motor])
-                    state.servo_raw_positions[motor] = int(targets[motor])
         return True
     return send
 
@@ -220,7 +217,7 @@ def test_repeat_release_resets_zero_and_releases_again(monkeypatch):
         first = controller.manual_prepare_all_motors()
         second = controller.manual_prepare_all_motors()
     assert first.ok and second.ok, second.message
-    assert controller.prepare_calibration_turn_zero.call_count == 2
+    assert controller.rebase_servo_abs_zero.call_count == 2
     assert core_logic.invalidate_calibration_snapshot_scope.call_count == 2
     motor_sends = [
         call for call in controller.comm.send_command.call_args_list
@@ -252,6 +249,6 @@ def test_cancel_during_release_motion_resets_without_marking_done(monkeypatch):
     # not marked done: a later attempt still performs a reset
     with feedback_ticker(state):
         controller.comm.send_command.side_effect = accepted_send(state, mask)
-        controller.prepare_calibration_turn_zero.reset_mock()
+        controller.rebase_servo_abs_zero.reset_mock()
         controller.manual_prepare_all_motors()
-    assert controller.prepare_calibration_turn_zero.called
+    assert controller.rebase_servo_abs_zero.called

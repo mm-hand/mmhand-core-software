@@ -32,7 +32,7 @@ def test_received_feedback_is_published_before_periodic_disk_save(monkeypatch):
     q=queue.Queue(); sample=HandModel(); sample.p4_time_ms=12345
     q.put(sample)
     c.comm=Mock(rx_queue=q,drain_ack_events=lambda:[],drain_safety_events=lambda:[])
-    for name in ('_service_startup_state_sync','_service_servo_turn_zero_result',
+    for name in ('_service_startup_state_sync',
                  '_service_servo_rebase_zero_capture','_service_multiturn_anchor_capture','_service_multiturn_restore'):
         monkeypatch.setattr(c,name,Mock())
     observed=[]
@@ -224,25 +224,25 @@ def direct_zero_device(hand, monkeypatch, *, success=None, fault='', change_sele
     monkeypatch.setattr(hand._controller, 'stop', Mock(side_effect=stop_readback))
     monkeypatch.setattr(hand._controller, 'invalidate_direct_commands', Mock())
 
+    state.has_servo_online_status = True
+    state.servo_online_check = [1] * 27
+
     def zero_readback(mask, *, cancelled, send_gate):
         assert not cancelled() and send_gate(lambda: True)
         done = mask if success is None else success
         if fault == 'rejected':
             return ServoRebaseZeroResult(False, 'hardware rejected', 0, 0, mask)
-        state.has_servo_angle_data = state.has_servo_raw_data = True
+        state.has_servo_angle_data = True
         state.servo_rebase_zero_result_token = 18
         state.servo_rebase_zero_result_p4_time_ms = 1000
-        state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = 1001
+        state.servo_feedback_p4_time_ms = 1001
         state.servo_abs_last_rx_ts = time.time()
         stamp(state, 'servo_abs_last_rx_ts')
-        state.servo_raw_online = [True] * 27
         for motor in range(27):
             if done & (1 << motor):
-                state.servo_angles[motor] = state.servo_raw_positions[motor] = 0
+                state.servo_angles[motor] = 0
         if fault == 'old_feedback':
-            state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = 999
-        if fault == 'timestamp_mismatch':
-            state.servo_raw_p4_time_ms = 1002
+            state.servo_feedback_p4_time_ms = 999
         if fault == 'unknown':
             state.multi_turn_unknown_bitmap = done
         if fault == 'one_offline':
@@ -311,6 +311,27 @@ def test_direct_zero_all_zeros_every_online_routable_motor(hand, monkeypatch):
     assert wait_operation(hand, hand.request_direct_zero_all())['status'] == 'SUCCESS'
     expected = ((1 << 27) - 1) & ~((1 << 3) | (1 << 4) | (1 << 5) | (1 << 6))
     assert writer.call_args.args == (expected,)
+    # 归零时会真停一次：P4 锁存 E-STOP，UI 必须显示 Clear Faults。
+    hand._controller.stop.assert_called_once()
+
+
+def test_direct_zero_while_idle_does_not_latch_estop(hand, monkeypatch):
+    """未标定进 Direct 时设备本来就静止，归零不得再发 STOP 锁存 E-STOP。"""
+    writer = direct_zero_device(hand, monkeypatch)
+    state = hand._controller.current_state
+    state.system_state = SYSTEM_STATE_READY
+    state.control_enabled = False
+    state.servo_target_owner = 0
+
+    def next_status_frame(predicate, epoch, timeout=3.0):
+        state.system_status_last_rx_ts = time.time()
+        stamp(state, 'system_status_last_rx_ts')
+        return epoch == hand._application_epoch and bool(predicate(hand.get_state_snapshot()))
+
+    monkeypatch.setattr(hand, '_wait_application', next_status_frame)
+    assert wait_operation(hand, hand.request_direct_zero_all())['status'] == 'SUCCESS'
+    hand._controller.stop.assert_not_called()
+    assert writer.called and hand._estop_requested_at == 0
 
 
 def test_direct_zero_all_rejects_when_no_motor_is_eligible(hand, monkeypatch):
@@ -338,7 +359,7 @@ def test_direct_zero_real_backend_sync_wrapper_waits_for_feedback_anchor_save(ha
         assert controller._servo_rebase_zero_capture_mask == 1 << 9
         controller._persist_multiturn_state.return_value = True
         controller._multiturn_store_payload = {'valid_motor_mask': hex(1 << 9)}
-        controller.current_state.servo_feedback_p4_time_ms = controller.current_state.servo_raw_p4_time_ms = 1002
+        controller.current_state.servo_feedback_p4_time_ms = 1002
         controller._service_servo_rebase_zero_capture(controller.current_state)
         assert controller.servo_abs_zero_anchor_saved(1 << 9)
         return True
@@ -381,7 +402,7 @@ def test_direct_zero_failure_keeps_host_feedback_and_target_generation(hand, mon
     assert not any(hand._controller.get_servo_abs_zero_generations())
 
 
-@pytest.mark.parametrize('fault', ['old_feedback', 'timestamp_mismatch', 'unknown', 'save_pending'])
+@pytest.mark.parametrize('fault', ['old_feedback', 'unknown', 'save_pending'])
 def test_direct_zero_needs_trusted_new_matching_feedback_and_json_save(hand, monkeypatch, fault):
     hand._selected_motors = (9,)
     writer = direct_zero_device(hand, monkeypatch, fault=fault)
@@ -438,10 +459,10 @@ def test_snapshot_waits_for_the_saved_zero_feedback_frame_before_refreshing_draf
     assert wait_operation(hand, hand.request_direct_zero())['status'] == 'SUCCESS'
     state = hand._controller.current_state
     # 已完成保存的 new_model 尚未复制到 current_state 的短暂窗口。
-    state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = 999
+    state.servo_feedback_p4_time_ms = 999
     state.servo_angles[9] = 7009
     assert hand.application_snapshot()['motors'][9]['abs_zero_generation'] == 0
-    state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = 1001
+    state.servo_feedback_p4_time_ms = 1001
     state.servo_angles[9] = 0
     row = hand.application_snapshot()['motors'][9]
     assert row['abs_zero_generation'] == 1 and row['abs'] == 0
@@ -477,7 +498,7 @@ def test_snapshot_never_publishes_saved_generation_to_a_different_device(hand, m
     assert wait_operation(hand, hand.request_direct_zero())['status'] == 'SUCCESS'
     state = hand._controller.current_state
     state.product_fingerprint["device_id"] = "0000FEDCBA987654"
-    state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = 5000
+    state.servo_feedback_p4_time_ms = 5000
     state.servo_angles[9] = 11200
     row = hand.application_snapshot()['motors'][9]
     assert row['abs_zero_generation'] == 0 and row['abs'] == 11200
@@ -491,7 +512,7 @@ def test_snapshot_never_pairs_unpublished_old_generation_with_a_new_connection_c
     new_session = HandModel()
     new_session.copy_state_from(hand._controller.current_state)
     hand._controller._reset_local_runtime_state('SYNCING')
-    new_session.servo_feedback_p4_time_ms = new_session.servo_raw_p4_time_ms = 5000
+    new_session.servo_feedback_p4_time_ms = 5000
     new_session.servo_angles[9] = 11200
     hand._controller.current_state.copy_state_from(new_session)
     assert hand.application_snapshot()['motors'][9]['abs_zero_generation'] == 0
@@ -515,9 +536,8 @@ def test_snapshot_rechecks_connection_if_reconnect_occurs_between_metadata_and_s
             reconnected = True
             new_session = original_snapshot()
             hand._controller._reset_local_runtime_state('SYNCING')
-            new_session.servo_feedback_p4_time_ms = new_session.servo_raw_p4_time_ms = 5000
+            new_session.servo_feedback_p4_time_ms = 5000
             new_session.servo_angles[9] = 11200
-            new_session.servo_raw_positions[9] = 11200 % 4096
             hand._controller.current_state.copy_state_from(new_session)
         return original_snapshot()
 

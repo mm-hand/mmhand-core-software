@@ -444,19 +444,19 @@ def multiturn_anchor_fields(payload: dict) -> tuple[int, list[int], list[int]]:
     except (TypeError, ValueError) as exc:
         raise CalibrationSnapshotError("invalid multiturn anchor valid bitmap") from exc
     logical_abs = payload.get("multiturn_anchor_logical_abs")
-    raw = payload.get("multiturn_anchor_raw")
+    legacy_raw = payload.get("multiturn_anchor_raw")
     if not isinstance(logical_abs, list) or len(logical_abs) != MOTOR_COUNT:
-        raise CalibrationSnapshotError(
-            "multiturn_anchor_logical_abs must contain 27 entries"
-        )
-    if not isinstance(raw, list) or len(raw) != MOTOR_COUNT:
+        raise CalibrationSnapshotError("multiturn_anchor_logical_abs must contain 27 entries")
+    if legacy_raw is not None and (not isinstance(legacy_raw, list) or len(legacy_raw) != MOTOR_COUNT):
         raise CalibrationSnapshotError("multiturn_anchor_raw must contain 27 entries")
     try:
-        return (
-            valid_mask & VALID_MOTOR_MASK,
-            [int(value) for value in logical_abs],
-            [int(value) % 4096 for value in raw],
-        )
+        absolute = [int(value) for value in logical_abs]
+        raw = [value % 4096 for value in absolute]
+        if legacy_raw is not None:
+            for motor in range(MOTOR_COUNT):
+                if int(legacy_raw[motor]) % 4096 != raw[motor]:
+                    valid_mask &= ~(1 << motor)
+        return valid_mask & VALID_MOTOR_MASK, absolute, raw
     except (TypeError, ValueError) as exc:
         raise CalibrationSnapshotError("invalid multiturn anchor values") from exc
 
@@ -477,7 +477,6 @@ def _empty_v7_snapshot() -> dict:
         "active_motor_mask": format_mask(0),
         "multiturn_anchor_valid_bitmap": format_mask(0),
         "multiturn_anchor_logical_abs": [0] * MOTOR_COUNT,
-        "multiturn_anchor_raw": [0] * MOTOR_COUNT,
     }
 
 
@@ -488,7 +487,7 @@ def update_snapshot_multiturn_anchors(
     logical_abs: list[int],
     raw: list[int],
 ) -> dict:
-    """将已确认写入运行锚点的 Mxx ABS/raw 同步写回标定快照。"""
+    """将已确认的Mxx原生ABS写入唯一标定包。"""
     if len(logical_abs) != MOTOR_COUNT or len(raw) != MOTOR_COUNT:
         raise CalibrationSnapshotError("multiturn anchors must contain 27 entries")
     with snapshot_write_transaction():
@@ -520,10 +519,10 @@ def update_snapshot_multiturn_anchors(
             bit = 1 << motor_idx
             if requested_mask & bit:
                 saved_abs[motor_idx] = int(logical_abs[motor_idx])
-                saved_raw[motor_idx] = int(raw[motor_idx]) % 4096
+                saved_raw[motor_idx] = int(logical_abs[motor_idx]) % 4096
         payload["multiturn_anchor_valid_bitmap"] = format_mask(valid_mask | requested_mask)
         payload["multiturn_anchor_logical_abs"] = saved_abs
-        payload["multiturn_anchor_raw"] = saved_raw
+        payload.pop("multiturn_anchor_raw", None)
         payload["multiturn_anchor_updated_motor_mask"] = format_mask(requested_mask)
         payload["multiturn_anchor_saved_at_host_time"] = time.time()
         return atomic_write_snapshot(path, payload, backup=False)
@@ -553,7 +552,7 @@ def invalidate_snapshot_multiturn_anchors(
                 raw[motor_idx] = 0
         payload["multiturn_anchor_valid_bitmap"] = format_mask(valid_mask & ~mask)
         payload["multiturn_anchor_logical_abs"] = logical_abs
-        payload["multiturn_anchor_raw"] = raw
+        payload.pop("multiturn_anchor_raw", None)
         payload["multiturn_anchor_last_invalidation"] = {
             "motor_mask": format_mask(mask),
             "reason": str(reason),
@@ -656,7 +655,7 @@ def _update_manual_snapshot_locked(
         anchor_valid & ~invalid_motor_mask
     )
     payload["multiturn_anchor_logical_abs"] = anchor_abs
-    payload["multiturn_anchor_raw"] = anchor_raw
+    payload.pop("multiturn_anchor_raw", None)
 
     active_joint_mask = 0
     for joint_idx, result in enumerate(results):
@@ -772,7 +771,7 @@ def _invalidate_calibration_snapshot_scope_locked(
     payload["motor_abs_limit_valid_bitmap"] = format_mask(valid & ~motor_mask)
     payload["multiturn_anchor_valid_bitmap"] = format_mask(anchor_valid & ~motor_mask)
     payload["multiturn_anchor_logical_abs"] = anchor_abs
-    payload["multiturn_anchor_raw"] = anchor_raw
+    payload.pop("multiturn_anchor_raw", None)
 
     remaining_joint_mask = 0
     remaining_limit_mask = valid & ~motor_mask
@@ -823,7 +822,7 @@ def merge_snapshot(
     anchor_valid, anchor_abs, anchor_raw = multiturn_anchor_fields(merged)
     merged["multiturn_anchor_valid_bitmap"] = format_mask(anchor_valid)
     merged["multiturn_anchor_logical_abs"] = anchor_abs
-    merged["multiturn_anchor_raw"] = anchor_raw
+    merged.pop("multiturn_anchor_raw", None)
 
     current_results = _normalized_list(
         current.get("joint_calib_results"), ENCODER_COUNT, None

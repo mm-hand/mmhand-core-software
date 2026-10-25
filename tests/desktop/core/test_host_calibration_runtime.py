@@ -36,14 +36,12 @@ def io(monkeypatch):
     state.system_status_last_rx_ts = time.time()
     stamp(state, 'system_status_last_rx_ts')
     state.system_status_p4_time_ms = 1000
-    state.p4_time_ms = state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = 1000
+    state.p4_time_ms = state.servo_feedback_p4_time_ms = 1000
     state.servo_abs_last_rx_ts = time.time()
     stamp(state, 'servo_abs_last_rx_ts')
-    state.has_servo_angle_data = state.has_servo_raw_data = True
+    state.has_servo_angle_data = True
     state.has_servo_route_status = True
     state.servo_online_bitmap = state.servo_route_controllable_bitmap = (1 << 27) - 1
-    state.servo_raw_online = [True] * 27
-    state.servo_raw_positions = [128] * 27
     state.servo_logical_range_valid_bitmap = (1 << 27) - 1
     state.servo_logical_range_min = [-30000] * 27
     state.servo_logical_range_max = [30000] * 27
@@ -190,7 +188,6 @@ def test_historical_task_packet_does_not_make_fresh_feedback_49_days_old(io):
     state.p4_time_ms = 398488  # 实录 TaskRuntime 包携带历史窗口时间。
     state.system_status_p4_time_ms = 398997
     state.servo_feedback_p4_time_ms = 398986
-    state.servo_raw_p4_time_ms = 398975
     state.encoder_raw_p4_time_ms = 398980
     state.servo_telem_p4_time_ms = 398986
     state.servo_telem_last_rx_ts = time.time()
@@ -202,7 +199,7 @@ def test_historical_task_packet_does_not_make_fresh_feedback_49_days_old(io):
     assert io.encoder_raw(1) == 10000
     assert io.servo_load(2) == 250
     assert io._fresh_feedback(state, 4)
-    assert not io._fresh_anchor(state, 4)  # 配对锚点仍须同戳。
+    assert io._fresh_feedback(state, 4)  # 唯一原生ABS帧已足够。
 
 
 def test_historical_packet_cannot_hide_genuinely_stale_device_feedback(io):
@@ -234,7 +231,6 @@ def _recovery_clock(io, monkeypatch, *, advance_feedback=True):
         if advance_feedback:
             state = io.controller.current_state
             state.servo_feedback_p4_time_ms += 20
-            state.servo_raw_p4_time_ms = state.servo_feedback_p4_time_ms - 11
             state.system_status_p4_time_ms = state.servo_feedback_p4_time_ms + 10
             state.p4_time_ms = state.servo_feedback_p4_time_ms - 498
             state.system_status_last_rx_ts = state.servo_abs_last_rx_ts = time.time()
@@ -248,12 +244,11 @@ def _recovery_clock(io, monkeypatch, *, advance_feedback=True):
 def test_uncontrollable_recovery_counts_new_abs_without_requiring_raw_pair(io, monkeypatch):
     state = io.controller.current_state
     state.system_state = SYSTEM_STATE_UNCONTROLLABLE
-    state.servo_raw_p4_time_ms = state.servo_feedback_p4_time_ms - 11
     io._initial_prepared = True
     clock = _recovery_clock(io, monkeypatch)
     assert io.wait_servo_recovery(4)
     assert clock[0] == 40  # 三个不同的新 ABS 快照，沿用原稳定帧门槛。
-    assert not io._fresh_anchor(state, 4)
+    assert io._fresh_feedback(state, 4)
     io.controller.comm.send_command.assert_not_called()
 
 
@@ -265,7 +260,7 @@ def test_repeated_abs_sample_never_satisfies_recovery_stable_frames(io, monkeypa
 
 
 @pytest.mark.parametrize('field', [
-    'multi_turn_unknown_bitmap', 'servo_online_bitmap',
+    'servo_online_bitmap',
     'servo_route_controllable_bitmap', 'servo_logical_range_valid_bitmap',
 ])
 def test_recovery_keeps_trust_online_route_and_range_gates(io, monkeypatch, field):
@@ -277,7 +272,7 @@ def test_recovery_keeps_trust_online_route_and_range_gates(io, monkeypatch, fiel
     assert diag_reason(io) == runtime.CALIB_DIAG_REASON_SERVO_RECOVERY_TIMEOUT
 
 
-def test_entry_resets_once_before_rebase_without_cancelling_host_session(io, monkeypatch):
+def test_entry_resets_once_without_preemptive_batch_zero(io, monkeypatch):
     state = io.controller.current_state
     state.has_direct_target_result = True
     state.system_state = SYSTEM_STATE_UNCONTROLLABLE
@@ -295,7 +290,7 @@ def test_entry_resets_once_before_rebase_without_cancelling_host_session(io, mon
     io.controller.reset = MagicMock()
     assert io.wait_servo_recovery(4)
     assert io.wait_servo_recovery(4 | 8)  # 第二轮 workspace 恢复不重复 RESET。
-    assert calls == [(CMD_RESET, 'reset'), ('rebase', 4)]
+    assert calls == [(CMD_RESET, 'reset')]
     io.controller.reset.assert_not_called()
     assert not io._cancel.is_set()
 
@@ -429,7 +424,7 @@ def test_expected_turn_unknown_only_covers_static_rebase_window(io, monkeypatch)
     def wait(predicate, timeout):
         assert timeout == runtime.kHostRebaseFeedbackTimeoutMs
         state.system_status_p4_time_ms = state.p4_time_ms = 1120
-        state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = 1120
+        state.servo_feedback_p4_time_ms = 1120
         state.servo_logical_range_p4_time_ms = 1120
         state.servo_logical_range_last_rx_ts = time.time() + 0.01
         stamp(state, 'servo_logical_range_last_rx_ts')
@@ -552,43 +547,40 @@ def test_motor_calibration_faults_are_scoped_without_masking_selected_failures(i
 @pytest.mark.parametrize('unknown', [0, 1 << 5])
 def test_core_ignores_unselected_unknown_helper_without_rebasing_it(io, unknown):
     io.selected_joint_mask = 1
-    io.selected_motor_mask = io.preparation_reset_mask = 3
+    io.selected_motor_mask = 3
     io.controller.current_state.multi_turn_unknown_bitmap = unknown
-    assert io._prepare_workspace_reset_scope()
-    assert io.preparation_reset_mask == 3
+    io.set_workspace_read_mask(1 << 5)
+    assert io.selected_motor_mask == 3
 
 
 def test_core_removes_now_offline_helper_from_old_preplanned_rebase_mask(io):
     io.selected_joint_mask = 1
     io.selected_motor_mask = 3
     pair = (1 << 5) | (1 << 6)
-    io.preparation_reset_mask = 3 | pair
     io.controller.current_state.servo_online_bitmap &= ~pair
-    assert io._prepare_workspace_reset_scope()
-    assert io.preparation_reset_mask == 3
+    io.set_workspace_read_mask(1 << 5)
+    assert io.selected_motor_mask == 3
 
 
 @pytest.mark.parametrize('motor_only', [False, True])
 def test_j07_initial_recovery_requires_only_its_selected_motor(io, monkeypatch, motor_only):
     selected = 1 << 9
     io.selected_joint_mask = 0 if motor_only else 1 << 7
-    io.selected_motor_mask = io.preparation_reset_mask = selected
+    io.selected_motor_mask = selected
     state = io.controller.current_state
     state.has_direct_target_result = True
     state.servo_online_bitmap = state.servo_route_controllable_bitmap = selected
     state.servo_logical_range_valid_bitmap = selected
     state.multi_turn_unknown_bitmap = state.servo_route_conflict_bitmap = (
         ((1 << 27) - 1) & ~selected)
-    state.servo_raw_online = [motor == 9 for motor in range(27)]
     # One helper is only partially online, and has unknown turns/conflicting routes.
     state.servo_online_bitmap |= 1 << 5
     monkeypatch.setattr(io, '_prepare_device', lambda: True)
     monkeypatch.setattr(io, '_rebase', MagicMock(return_value=True))
     _recovery_clock(io, monkeypatch)
     assert io.wait_servo_recovery(selected)
-    assert io.preparation_reset_mask == selected
     assert io.feedback_recovery_error == ''
-    io._rebase.assert_called_once_with(selected)
+    io._rebase.assert_not_called()
     io.controller.comm.send_command.assert_not_called()
 
 
@@ -599,7 +591,7 @@ def test_j07_initial_recovery_requires_only_its_selected_motor(io, monkeypatch, 
 ])
 def test_unselected_unusable_helper_never_blocks_or_enters_rebase(io, monkeypatch, failure, reason):
     io.selected_joint_mask = 1
-    io.selected_motor_mask = io.preparation_reset_mask = 3
+    io.selected_motor_mask = 3
     state = io.controller.current_state
     state.has_direct_target_result = True
     if failure == 'partial':
@@ -612,7 +604,7 @@ def test_unselected_unusable_helper_never_blocks_or_enters_rebase(io, monkeypatc
     monkeypatch.setattr(io, '_rebase', MagicMock(return_value=True))
     _recovery_clock(io, monkeypatch)
     assert io.wait_servo_recovery(3)
-    io._rebase.assert_called_once_with(3)
+    io._rebase.assert_not_called()
     assert io.feedback_recovery_error == ''
 
 
@@ -728,7 +720,7 @@ def test_rebase_requires_feedback_and_range_after_result(io, monkeypatch):
 
     def wait(predicate, _timeout):
         checked.append(predicate())
-        state.p4_time_ms = state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = 1120
+        state.p4_time_ms = state.servo_feedback_p4_time_ms = 1120
         state.system_status_p4_time_ms = 1120
         state.servo_logical_range_p4_time_ms = 1120
         state.servo_logical_range_last_rx_ts = time.time() + 0.01
@@ -765,7 +757,6 @@ def _install_rebase_feedback(io, *, result_ms=1100, abs_ms=1120,
 
     def sync():
         state.servo_feedback_p4_time_ms = abs_ms
-        state.servo_raw_p4_time_ms = raw_ms
         state.servo_logical_range_p4_time_ms = range_ms
         state.servo_logical_range_last_rx_ts = time.time()
         stamp(state, 'servo_logical_range_last_rx_ts')
@@ -777,37 +768,39 @@ def _install_rebase_feedback(io, *, result_ms=1100, abs_ms=1120,
 def test_successful_zero_followed_by_cancel_is_not_reported_as_hardware_failure(
     io, monkeypatch, cancel_source,
 ):
-    _install_rebase_feedback(io, raw_ms=1121)  # 等待尚未组成的同戳锚点。
+    _install_rebase_feedback(io, abs_ms=1100)  # 等待归零结果之后的新原生反馈。
     if cancel_source == 'io':
         clock = _rebase_wait_clock(io, monkeypatch, on_sleep=io.cancel)
     else:
         clock = _rebase_wait_clock(io, monkeypatch)
         io.cancel_check = lambda: clock[0] >= 5
-    ok, message = io.prepare_joint(1, 4)
+    ok = io.rebase_joint_for_retry(1, 4)
+    message = io.feedback_recovery_error
     assert not ok
     assert clock[0] == 5  # 真正超时为 20 ms，取消没有等到期限。
     assert io.wait_exit_reason == 'cancelled'
-    assert 'logical ABS zero applied' in message
+    assert 'after logical ABS zero was applied' in message
     assert 'feedback wait cancelled/stopped' in message
     assert 'zero failed' not in message
     assert 'timeout' not in message
-    assert 'abs_raw_timestamp_mismatch' in message
+    assert 'abs_not_after_zero_result' in message
     io.controller.rebase_servo_abs_zero.assert_called_once()
     assert io.controller.rebase_servo_abs_zero.call_args.args == (4,)
     assert io.controller.rebase_servo_abs_zero.call_args.kwargs['cancelled'] == io.is_cancelled
     assert io._rebase_windows[-1]['end_ms'] is None
 
 
-def test_post_zero_feedback_timeout_identifies_the_same_timestamp_gate(io, monkeypatch):
-    _install_rebase_feedback(io, raw_ms=1121)
+def test_post_zero_feedback_timeout_identifies_missing_new_native_sample(io, monkeypatch):
+    _install_rebase_feedback(io, abs_ms=1100)
     clock = _rebase_wait_clock(io, monkeypatch)
-    ok, message = io.prepare_joint(1, 4)
+    ok = io.rebase_joint_for_retry(1, 4)
+    message = io.feedback_recovery_error
     assert not ok
     assert clock[0] > runtime.kHostRebaseFeedbackTimeoutMs
     assert io.wait_exit_reason == 'timeout'
-    assert 'logical ABS zero applied' in message
+    assert 'after logical ABS zero was applied' in message
     assert 'feedback wait timeout' in message
-    assert 'unmet=abs_raw_timestamp_mismatch' in message
+    assert 'unmet=abs_not_after_zero_result' in message
     assert 'zero failed' not in message
     assert not io.is_cancelled()
     io.controller.rebase_servo_abs_zero.assert_called_once()
@@ -817,7 +810,6 @@ def test_post_zero_feedback_timeout_identifies_the_same_timestamp_gate(io, monke
 
 @pytest.mark.parametrize('field,value,expected', [
     ('has_servo_angle_data', False, 'missing_abs'),
-    ('has_servo_raw_data', False, 'missing_raw'),
     ('servo_online_bitmap', 0, 'offline=0x00000004'),
     ('servo_route_controllable_bitmap', 0, 'unroutable=0x00000004'),
     ('multi_turn_unknown_bitmap', 4, 'unknown=0x00000004'),
@@ -832,23 +824,21 @@ def test_post_zero_timeout_reports_the_missing_trust_gate(
     if field.endswith('last_rx_ts'):
         stamp(io.controller.current_state, field)
     _rebase_wait_clock(io, monkeypatch)
-    assert not io.prepare_joint(1, 4)[0]
+    assert not io.rebase_joint_for_retry(1, 4)
     assert expected in io.feedback_recovery_error
     assert io.wait_exit_reason == 'timeout'
 
 
-def test_post_zero_timeout_reports_raw_offline_and_old_range_reply(io, monkeypatch):
+def test_post_zero_timeout_reports_old_range_reply(io, monkeypatch):
     _install_rebase_feedback(io)
     state = io.controller.current_state
-    state.servo_raw_online[2] = False
     state.servo_logical_range_last_rx_ts = time.time() - 1
     stamp(state, 'servo_logical_range_last_rx_ts')
     io.controller.request_state_sync = MagicMock()
-    state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = 1120
+    state.servo_feedback_p4_time_ms = 1120
     state.servo_logical_range_p4_time_ms = 1120
     _rebase_wait_clock(io, monkeypatch)
-    assert not io.prepare_joint(1, 4)[0]
-    assert 'raw_offline=0x00000004' in io.feedback_recovery_error
+    assert not io.rebase_joint_for_retry(1, 4)
     assert 'range_before_sync_request' in io.feedback_recovery_error
 
 
@@ -863,7 +853,7 @@ def test_post_zero_timeout_keeps_strict_post_result_timestamps(
 ):
     _install_rebase_feedback(io, abs_ms=abs_ms, raw_ms=abs_ms, range_ms=range_ms)
     _rebase_wait_clock(io, monkeypatch)
-    assert not io.prepare_joint(1, 4)[0]
+    assert not io.rebase_joint_for_retry(1, 4)
     assert expected in io.feedback_recovery_error
 
 
@@ -894,7 +884,7 @@ def test_completed_rebase_window_uses_known_anchor_even_when_system_status_lags(
         return MagicMock(ok=True)
 
     io.controller.rebase_servo_abs_zero.side_effect = zero
-    assert io.prepare_joint(1, 4)[0]
+    assert io.rebase_joint_for_retry(1, 4)
     assert io.wait_exit_reason == 'ready'
     assert io._rebase_windows[-1]['end_ms'] == anchor_ms
     assert state.system_status_p4_time_ms == start_ms  # 旧状态包不能提前截断窗口。
@@ -917,9 +907,6 @@ def test_each_joint_writes_manual_and_lut_once_then_limits_and_anchors(io, monke
     sent = []
     monkeypatch.setattr(io, '_ack', lambda command, value: sent.append((command, value)) or True)
     io.controller._persist_multiturn_state = MagicMock(return_value=True)
-    saved_anchors = []
-    monkeypatch.setattr(runtime, 'update_snapshot_multiturn_anchors',
-                        lambda path, **values: saved_anchors.append((path, values)))
     ok, _message = io.commit_joint(1, result, {2: (-500, 2900)})
     assert ok
     assert [command for command, _value in sent] == [
@@ -931,7 +918,8 @@ def test_each_joint_writes_manual_and_lut_once_then_limits_and_anchors(io, monke
     assert sent[1][1][1]['tendonLutCount'] == result['tendonLutCount'] > 2
     assert sent[2][1][1:3] == (4, 4)
     io.snapshot_store.merge_calibration.assert_called_once()
-    assert saved_anchors[0][1]['motor_mask'] == 4
+    io.controller._persist_multiturn_state.assert_called_once_with(
+        io.controller.current_state, force=True)
     assert io.controller.current_state.joint_calib_results[1]['success']
     # P4 状态回显可稍后才到；host 收尾仍使用本轮自己的生成结果。
     io.controller.current_state.joint_calib_results[1] = None
@@ -983,3 +971,39 @@ def test_host_zero_finish_failure_stops_ordinary_motion(io, monkeypatch):
     monkeypatch.setattr(finish, 'finish_dual_zero', lambda *_args: (False, 'zero target rejected'))
     assert io.finish_session(True, 2, 0) == (False, 'zero target rejected')
     io.controller.comm.send_command.assert_called_once_with('stop')
+
+
+def test_active_joint_abs_trigger_requests_rebase_retry(io, monkeypatch):
+    monkeypatch.setattr(io, '_ensure_motion', lambda: True)
+    io.set_active_calibration_motors(1 << 2)
+    io.rebase_retry_requested = False
+    assert not io.publish({2: 30000}, 400, 20)
+    assert io.rebase_retry_requested
+    assert 'rebase trigger' in io.motion_publish_error
+    io.controller.comm.send_command.assert_not_called()
+
+
+def test_held_motor_abs_trigger_does_not_request_rebase_retry(io, monkeypatch):
+    # 保持通道（非活动关节电机）即使到阈值也按普通目标下发，不触发重设零。
+    monkeypatch.setattr(io, '_ensure_motion', lambda: True)
+    monkeypatch.setattr(io, '_wait', lambda *_args: False)
+    io.set_active_calibration_motors(1 << 3)
+    io.rebase_retry_requested = False
+    io.controller.comm.send_command.return_value = True
+    assert not io.publish({2: 30000}, 400, 20)  # 进入 D3 执行确认后超时
+    assert not io.rebase_retry_requested
+    command = io.controller.comm.send_command.call_args_list[0].args[0]
+    assert command[0] == 'motor_pos_abs' and command[3][2] == 30000
+
+
+def test_prepare_joint_clears_rebase_retry_flag(io, monkeypatch):
+    monkeypatch.setattr(io, '_rebase', lambda mask: True)
+    io.rebase_retry_requested = True
+    prepared, _ = io.prepare_joint(2, 1 << 2)
+    assert prepared and not io.rebase_retry_requested
+
+
+def test_prepare_finger_aa_clears_active_calibration_motors(io):
+    io.set_active_calibration_motors(1 << 2)
+    assert io.prepare_finger_aa(20) == (True, '')
+    assert io._active_calib_motor_mask == 0

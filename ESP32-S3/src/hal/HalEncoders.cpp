@@ -8,7 +8,7 @@ HalEncoders &encoders = HalEncoders::getInstance();
 namespace {
 // S3 只发映射后的 raw：DIP 原始 raw 本来就随正方向增大，直接透传；
 // AA/MCP/PIP 原始 raw 随正方向减小，取 16384-raw。上位机看到的 raw 全部正方向增大。
-// 掩码是本手末端板的硬件事实，不是协议字段；换板或改链序必须同步改。
+// 掩码是左右手末端板共同验证的硬件事实，不是协议字段；换板或改链序必须同步改。
 // 拇指 J20 是根部，不在 DIP 集合。
 // ponytail: 固定掩码 0x88888；若末端板拓扑变化，改这里并重新验证 raw 方向。
 constexpr uint32_t kDipRawMask =

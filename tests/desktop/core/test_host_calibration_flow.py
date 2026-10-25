@@ -10,10 +10,12 @@ from desktop.core import calibration_workflow
 from desktop.core.calibration_workflow import CalibrationWorkflowService
 from desktop.core.data_models import HandModel
 from desktop.core.host_calibration import dual_motor, flow
-from desktop.core.host_calibration.config import AutoCalibrationParams
+from desktop.core.host_calibration.config import AutoCalibrationParams, kAbsRebaseRetryCounts
 
 
 class _IO:
+    rebase_retry_requested = False
+
     def __init__(self):
         self.calls = []
         self.running = True
@@ -21,6 +23,9 @@ class _IO:
         self.commit_ok = True
         self.finish_ok = True
         self.feedback_ok = True
+
+    def trace(self, *args, **kwargs):
+        self.calls.append(("trace", args, kwargs))
 
     def set_workspace_read_mask(self, mask):
         self.calls.append(("workspace", mask))
@@ -44,6 +49,14 @@ class _IO:
 
     def owns_control(self):
         return self.running
+
+    def prepare_coordinates(self, joints, mask):
+        self.calls.append(('batch_coordinates', tuple(joints), mask))
+        return self.preflight_finger_aa(joints)
+
+    def rebase_joint_for_retry(self, joint, mask):
+        self.calls.append(('boundary_rebase', joint, mask))
+        return True
 
     def prepare_joint(self, joint, mask):
         self.calls.append(("prepare", joint, mask))
@@ -82,7 +95,7 @@ def machines(monkeypatch):
     monkeypatch.setattr(flow, "invalidate_dual_workspace_cache_joint",
                         lambda io, joint: calls.append(("invalidate", joint)))
     monkeypatch.setattr(flow, "build_dynamic_workspace_motor_mask",
-                        lambda io, joints: 0)
+                        lambda io, joints, **_: 0)
 
     def single(io, joint, params, ordered, failed, index, selected):
         calls.append(("single", joint, tuple(ordered), failed, index, selected, params))
@@ -365,7 +378,7 @@ def test_ui_default_workflow_uses_host_io_and_ignores_p4_idle(tmp_path, monkeypa
     events = queue.Queue()
     service.register_callback(events.put)
     assert service.begin_calibration(joint_mask=1 << 1, motor_mask=_mask((1,)),
-                                     reset_motor_mask=_mask((1,)), baseline_state=HandModel())
+                                     baseline_state=HandModel())
     assert entered.wait(2)
     assert service._operation == "host_calibration"
     release.set()
@@ -376,7 +389,6 @@ def test_ui_default_workflow_uses_host_io_and_ignores_p4_idle(tmp_path, monkeypa
             completed = event
     assert completed.ok and completed.details["completed_joint_mask"] == 1 << 1
     assert controller.factory[3]["snapshot_store"] is service._store
-    assert controller.factory[3]["reset_motor_mask"] == _mask((1,))
     service._executor.shutdown(wait=True)
 
 
@@ -395,7 +407,7 @@ def test_cancel_keeps_external_output_blocked_until_host_worker_finishes(tmp_pat
 
     monkeypatch.setattr(calibration_workflow, 'run_host_calibration', host_run)
     service = calibration_workflow.CalibrationWorkflowService(Controller(), tmp_path / 'calib.json')
-    args = dict(joint_mask=2, motor_mask=4, reset_motor_mask=4, baseline_state=HandModel())
+    args = dict(joint_mask=2, motor_mask=4, baseline_state=HandModel())
     assert service.begin_calibration(**args)
     assert entered.wait(2)
     service.cancel()
@@ -422,7 +434,6 @@ def test_begin_calibration_auto_includes_missing_aa_dependency(tmp_path, monkeyp
         def create_host_calibration_io(self, cancel_check, joint_mask, motor_mask, **kwargs):
             captured['factory_joint_mask'] = joint_mask
             captured['factory_motor_mask'] = motor_mask
-            captured['factory_reset_mask'] = kwargs.get('reset_motor_mask')
             return _IO()
 
     def host_run(calib_io, joint_mask, motor_mask, on_joint, *, on_joint_started):
@@ -444,8 +455,7 @@ def test_begin_calibration_auto_includes_missing_aa_dependency(tmp_path, monkeyp
     baseline.manual_reference_max_raw = [6000] * 21
 
     assert service.begin_calibration(
-        joint_mask=1 << 13, motor_mask=1 << 17, reset_motor_mask=1 << 17,
-        baseline_state=baseline)
+        joint_mask=1 << 13, motor_mask=1 << 17, baseline_state=baseline)
     assert entered.wait(2)
     service._executor.shutdown(wait=True)
 
@@ -455,13 +465,63 @@ def test_begin_calibration_auto_includes_missing_aa_dependency(tmp_path, monkeyp
     assert captured['expanded_joint_mask'] & (1 << 13)
     assert captured['factory_joint_mask'] == captured['expanded_joint_mask']
     assert captured['expanded_motor_mask'] & ((1 << 15) | (1 << 16))
-    assert captured['factory_reset_mask'] & ((1 << 15) | (1 << 16))
 
 
 def test_executor_submit_failure_rolls_back_host_flags(tmp_path):
     service = calibration_workflow.CalibrationWorkflowService(MagicMock(), tmp_path / 'calib.json')
     service._executor.shutdown(wait=True)
     assert not service.begin_calibration(
-        joint_mask=2, motor_mask=4, reset_motor_mask=4, baseline_state=HandModel())
+        joint_mask=2, motor_mask=4, baseline_state=HandModel())
     assert not service.is_host_calibration_active()
     assert service._operation == ''
+
+
+def test_abs_rebase_retry_rezeros_and_reruns_the_joint(machines, monkeypatch):
+    io = _IO()
+    attempts = []
+
+    def single(io_, joint, params, ordered, failed, index, selected):
+        attempts.append(len(attempts) + 1)
+        if len(attempts) < 3:
+            io_.rebase_retry_requested = True
+            return {"success": False, "aborted": True, "reason": "ABS limit",
+                    "result": None, "limits": {}}
+        io_.rebase_retry_requested = False
+        return _success()
+
+    monkeypatch.setattr(flow, "run_single", single)
+    session = flow.run(io, 1 << 7, _mask((7,)), lambda *_: None)
+    assert session.success
+    assert len(attempts) == 3
+    assert len([call for call in io.calls if call[0] == "prepare"]) == 3
+    assert len([call for call in io.calls if call[0] == "commit"]) == 1
+    assert [call[1][0] for call in io.calls if call[0] == "trace"] == [
+        "ABS_REBASE_RETRY", "ABS_REBASE_RETRY"]
+
+
+def test_abs_rebase_retry_gives_up_after_the_configured_attempts(machines, monkeypatch):
+    io = _IO()
+    attempts = []
+
+    def single(io_, joint, params, ordered, failed, index, selected):
+        attempts.append(1)
+        io_.rebase_retry_requested = True
+        return {"success": False, "aborted": True, "reason": "ABS limit",
+                "result": None, "limits": {}}
+
+    monkeypatch.setattr(flow, "run_single", single)
+    session = flow.run(io, 1 << 7, _mask((7,)), lambda *_: None)
+    assert not session.success
+    assert len(attempts) == kAbsRebaseRetryCounts + 1
+    assert len([call for call in io.calls if call[0] == "prepare"]) == kAbsRebaseRetryCounts + 1
+    assert not any(call[0] == "commit" for call in io.calls)
+
+
+def test_abs_rebase_retry_is_not_triggered_by_other_failures(machines, monkeypatch):
+    io = _IO()
+    monkeypatch.setattr(flow, "run_single", lambda *args: {
+        "success": False, "aborted": True, "reason": "other",
+        "result": None, "limits": {}})
+    session = flow.run(io, 1 << 7, _mask((7,)), lambda *_: None)
+    assert not session.success
+    assert len([call for call in io.calls if call[0] == "prepare"]) == 1

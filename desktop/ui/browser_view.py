@@ -232,6 +232,30 @@ def build_page(hand):
         calibration_title = ui.label().classes('font-semibold text-lg')
         calibration_message = ui.label().classes('whitespace-pre-wrap text-sm')
         ui.button('Close', on_click=calibration_dialog.close).props('dense')
+    displayed_firmware_alerts = set()
+    firmware_alert_device = [None]
+    with ui.dialog().props('persistent') as firmware_dialog, ui.card().classes('w-[600px] max-w-full'):
+        ui.label('Motor firmware is too old').classes('text-red-600 font-bold')
+        firmware_message = ui.label().classes('whitespace-pre-wrap text-sm')
+        ui.button('Close', on_click=firmware_dialog.close).props('dense')
+
+    def refresh_firmware_alerts(snapshot):
+        device = snapshot.get('motor_firmware_device')
+        if not snapshot.get('connections', {}).get('p4', {}).get('connected', False) or firmware_alert_device[0] != device:
+            displayed_firmware_alerts.clear()
+            firmware_alert_device[0] = device
+        alerts = snapshot.get('motor_firmware_alerts', [])
+        active = {(row['motor'], row['generation']) for row in alerts}
+        displayed_firmware_alerts.intersection_update(active)
+        new = [row for row in alerts if (row['motor'], row['generation']) not in displayed_firmware_alerts]
+        if not new:
+            return
+        displayed_firmware_alerts.update((row['motor'], row['generation']) for row in new)
+        firmware_message.set_text('Firmware 3.10 or newer is required. Affected motors cannot be controlled.\n' +
+            '\n'.join(f"M{row['motor']:02d} / BUS{row['bus']} / ID{row['motor']}: {row['version']}"
+                      for row in alerts))
+        firmware_dialog.open()
+
     def refresh_calibration_alerts(snapshot):
         leaf = current_leaf()
         now = time.time()
@@ -420,6 +444,7 @@ def build_page(hand):
 
     def refresh_body():
         snapshot = hand.application_snapshot(include_curves=False)
+        refresh_firmware_alerts(snapshot)
         refresh_calibration_alerts(snapshot)
         choices = {d['port']: f"{d['port']} · {d['description']}" for d in snapshot['devices']}
         for name, state in snapshot['connections'].items():

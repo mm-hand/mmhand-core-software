@@ -11,7 +11,6 @@
 #include "HostProtocolCodec.h"
 #include "../../safety/policies/ProtocolContractPolicy.h"
 #include "HostCalibrationCommandHandler.h"
-#include "../../data/RecoveryTypes.h"
 #include "../../data/SafetyTypes.h"
 #include "../../system/SystemRuntimeContext.h"
 #include "../../system/rtos/SharedSafetyState.h"
@@ -250,7 +249,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
     if (sharedAtomicLoad(&sharedData->direct_target_request_generation) !=
             sharedAtomicLoad(&sharedData->direct_target_result_generation) &&
         (cmd == CMD_MOTOR_ABS_ZERO ||
-         cmd == CMD_SERVO_RESET_ZERO ||
          cmd == CMD_RESTORE_MULTITURN || cmd == CMD_ACTIVE_SCOPE)) {
         sendProtoAckPacket(cmd, sharedData->system_state,
                            PROTO_ACK_STATUS_UNSUPPORTED_MODE);
@@ -496,6 +494,9 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         uint8_t status = PROTO_ACK_STATUS_OK;
         if (frameLen < 1 + kRestoreMultiTurnPayloadBytes) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        } else if (sharedAtomicLoad(&sharedData->restore_multi_turn_request_token) !=
+                   sharedAtomicLoad(&sharedData->restore_multi_turn_result_token)) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else if (servoRebaseZeroPending(sharedData)) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else if ((sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap) &
@@ -511,37 +512,13 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
             const uint32_t onlineMask =
                 sharedAtomicLoad(&sharedData->servo_online_bitmap) &
                 validMotorChannelMask();
-            const uint32_t configuredMask =
-                sharedAtomicLoad(&sharedData->servo_multiturn_configured_bitmap) &
-                validMotorChannelMask();
-            const uint32_t recoveryPendingMask =
-                sharedAtomicLoad(&sharedData->servo_recovery_pending_bitmap) &
-                validMotorChannelMask();
-            const uint32_t recoveryFailedMask =
-                sharedAtomicLoad(&sharedData->servo_recovery_failed_bitmap) &
-                validMotorChannelMask();
-            // 自动恢复仍在重试时不能插入人工 turn0，避免两条恢复路径竞争。
-            // 已经明确失败的舵机必须允许上位机 JSON 恢复接管，否则
-            // recoveryFailed 会把唯一的人工恢复入口永久锁死。
-            const uint32_t recoveryBusyMask =
-                recoveryPendingMask & ~recoveryFailedMask;
             int32_t motorAbs[SERVO_TOTAL_NUM] = {0};
-            // JSON 局部恢复只处理“在线、多圈模式已配置、当前确实 Unknown”
-            // 的舵机；自动恢复失败允许人工接管，但正常可信舵机仍不能重定义 turn0。
+            // 仅接受在线且坐标未知的通道；配置和恢复统一由ServoBus串行执行。
             if (motorMask == 0 ||
                 (motorMask & ~unknownMask) != 0 ||
                 (motorMask & ~onlineMask) != 0 ||
-                (motorMask & ~configuredMask) != 0 ||
-                (motorMask & recoveryBusyMask) != 0) {
+                (motorMask & ~sharedAtomicLoad(&sharedData->servo_logical_range_valid_bitmap)) != 0) {
                 status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-                FW_LOG_WARN_PRINTF(
-                    "[UPPER] RESTORE_MULTITURN scoped reject request=0x%08lX unknown=0x%08lX online=0x%08lX configured=0x%08lX recoveryBusy=0x%08lX recoveryFailed=0x%08lX\r\n",
-                    (unsigned long)motorMask,
-                    (unsigned long)unknownMask,
-                    (unsigned long)onlineMask,
-                    (unsigned long)configuredMask,
-                    (unsigned long)recoveryBusyMask,
-                    (unsigned long)recoveryFailedMask);
             } else if (!parseInt32ArrayBigEndian(frame + 5,
                                                  frameLen - 5,
                                                  motorAbs,
@@ -959,56 +936,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         return;
     }
 
-    if (cmd == CMD_SERVO_RESET_ZERO)
-    {
-        const uint32_t requestedMask =
-            readU32BigEndian(frame + 1) & validMotorChannelMask();
-        const uint32_t onlineMask =
-            sharedAtomicLoad(&sharedData->servo_online_bitmap) &
-            validMotorChannelMask();
-        uint8_t status = PROTO_ACK_STATUS_QUEUED;
-        const bool safeState =
-            sharedData->system_state == SYSTEM_STATE_UNCONTROLLABLE ||
-            sharedData->system_state == SYSTEM_STATE_IDLE ||
-            sharedData->system_state == SYSTEM_STATE_READY ||
-            sharedData->system_state == SYSTEM_STATE_RECOVERY_REQUIRED;
-        if (requestedMask == 0 ||
-            (requestedMask & ~onlineMask) != 0) {
-            status = PROTO_ACK_STATUS_INVALID_DATA;
-        } else if (!safeState ||
-                   sharedData->control_enabled != 0 ||
-                   sharedData->servo_target_owner !=
-                       SERVO_TARGET_OWNER_NONE) {
-            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-        } else if (sharedAtomicLoad(
-                       &sharedData->servo_reset_zero_status) ==
-                       SERVO_RESET_ZERO_STATUS_RUNNING ||
-                   servoRebaseZeroPending(sharedData)) {
-            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-        } else {
-            sharedAtomicStore(
-                &sharedData->servo_reset_zero_request_mask,
-                requestedMask);
-            sharedAtomicStore(
-                &sharedData->servo_reset_zero_success_mask,
-                (uint32_t)0);
-            sharedAtomicStore(
-                &sharedData->servo_reset_zero_failed_mask,
-                (uint32_t)0);
-            sharedAtomicStore(
-                &sharedData->servo_reset_zero_invalidated_joint_mask,
-                (uint32_t)0);
-            sharedAtomicStore(
-                &sharedData->servo_reset_zero_status,
-                (uint8_t)SERVO_RESET_ZERO_STATUS_RUNNING);
-            sharedAtomicAddFetch(
-                &sharedData->servo_reset_zero_request_token,
-                (uint32_t)1);
-        }
-        sendProtoAckPacket(
-            CMD_SERVO_RESET_ZERO, sharedData->system_state, status);
-        return;
-    }
+
 
     // Direct 显式置零与标定前 F0 共用同一坐标维护事务和最终 0x19 结果。
     // motor mask 原样提交；关联关节的标定失效不会扩大实际置零的电机范围。
@@ -1056,8 +984,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                        servoRebaseZeroPending(sharedData) ||
                        sharedAtomicLoad(&sharedData->restore_multi_turn_request_token) !=
                            sharedAtomicLoad(&sharedData->restore_multi_turn_result_token) ||
-                       sharedAtomicLoad(&sharedData->servo_reset_zero_status) ==
-                           SERVO_RESET_ZERO_STATUS_RUNNING ||
                        (requestedMask & recoveryBusyMask) != 0) {
                 status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
             } else {

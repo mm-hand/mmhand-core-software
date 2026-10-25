@@ -17,6 +17,8 @@ run_data/
 # Active calibration is runtime data created by the first calibration.
 *.mmcal.json
 !tests/fixtures/calibration_bundle.mmcal.json
+# Atomic bundle writes leave this sibling behind if the process dies mid-save.
+desktop/resources/config/.*.mmcal.json.*.tmp
 
 # Local firmware experiments and waveform captures
 ESP32-P4/debug.log

@@ -1,6 +1,6 @@
 """Assembly ID transactions owned by HandBackend, never by the views.
 
-职责：编排电机扫描、批量改号、参数设置及恢复。
+职责：编排电机扫描、批量改号及恢复。
 线程：应用操作工作线程。
 输入：P4维护响应、用户编号和设备身份。
 输出：逐步维护请求及只读进度。
@@ -13,7 +13,7 @@ import os
 import time
 from uuid import uuid4
 from desktop.paths import DEVICE_STATE_DIR
-from .id_protocol import CAPABILITY, BEGIN, END, PROBE, RENAME, READ_PROFILE, APPLY_PROFILE, plan_motor_ids, reconcile_motor_journal, motor_recovery_targets
+from .id_protocol import CAPABILITY, BEGIN, END, PROBE, RENAME, plan_motor_ids, reconcile_motor_journal, motor_recovery_targets
 from .tactile_id_actions import TactileIdActions
 
 MOTOR_SCAN_ID_COUNT = 31
@@ -53,7 +53,7 @@ class IdResetActions(TactileIdActions):
 
     @staticmethod
     def _id_checked(result):
-        if result['version'] != 2:
+        if result['version'] != 3:
             raise ValueError('Unsupported ID maintenance protocol version')
         if result['status']:
             raise RuntimeError(f"Device rejected ID operation: status={result['status']}, stage={result['stage']}")
@@ -187,8 +187,6 @@ class IdResetActions(TactileIdActions):
                     probe = self._id_checked(comm.maintenance_request(session, PROBE, row['bus'], row['id'], cancelled=cancelled))
                     if not probe['present']:
                         raise ValueError('Inventory changed; scan all buses again')
-                    if recovering and not probe['stage']:
-                        raise ValueError('EEPROM lock is unconfirmed; repair the lock before resuming')
                 for bus in range(4):
                     if not recovering and self._id_checked(comm.maintenance_request(session, PROBE, bus, 253, cancelled=cancelled))['present']:
                         raise ValueError('Temporary ID 253 is occupied')
@@ -244,38 +242,10 @@ class IdResetActions(TactileIdActions):
                     if not self._id_checked(comm.maintenance_request(session, PROBE, bus, identifier, cancelled=cancelled))['present']:
                         raise ValueError('Post-renumber scan failed; inspect current addresses')
                     verified.append(dict(bus=bus, id=identifier))
-                # Every scanned servo gets the same limits, even if its ID was
-                # left unchanged. READ_PROFILE is also the timeout recovery
-                # observation; never issue a second EEPROM write blindly.
-                for index, row in enumerate(verified):
-                    bus, identifier = row['bus'], row['id']
-                    self._id_update('motor', message=f'Checking 84/85/86 for BUS{bus} ID{identifier} ({index + 1}/{len(verified)})')
-                    before = self._id_checked(comm.maintenance_request(session, READ_PROFILE, bus, identifier, cancelled=cancelled))
-                    if tuple(before.get('profile', ())) != (254, 254, 0):
-                        journal['profile_intent'] = [bus, identifier]; save()
-                        try:
-                            self._id_checked(comm.maintenance_request(session, APPLY_PROFILE, bus, identifier, cancelled=cancelled))
-                        except Exception:
-                            try:
-                                observed = self._id_checked(comm.maintenance_request(session, READ_PROFILE, bus, identifier, timeout=1))
-                                journal['profile_observed'] = list(observed.get('profile', ()))
-                            except Exception:
-                                journal['profile_observed'] = None
-                            save()
-                            raise
-                    after = self._id_checked(comm.maintenance_request(session, READ_PROFILE, bus, identifier, cancelled=cancelled))
-                    if tuple(after.get('profile', ())) != (254, 254, 0):
-                        journal['profile_observed'] = list(after.get('profile', ()))
-                        save()
-                        raise ValueError(f'BUS{bus} ID{identifier} profile readback differs from 254/254/0')
-                    journal['profile_completed'] = index + 1
-                    journal.pop('profile_intent', None)
-                    journal.pop('profile_observed', None)
-                    save()
                 journal['status'] = 'SUCCESS'; save()
                 self._id_update('motor', rows=verified, generation=state['generation'] + 1,
-                                message='IDs and 84/85/86 = 254/254/0 verified. Repeat motor calibration after any ID change.', scanned=True, recovering=False)
-                return True, 'Motor IDs and speed/acceleration parameters verified'
+                                message='Motor IDs verified. Repeat motor calibration after any ID change.', scanned=True, recovering=False)
+                return True, 'Motor IDs verified'
             except Exception as exc:
                 if started:
                     journal['status'] = 'NEEDS_RECOVERY'; journal['error'] = str(exc); save()

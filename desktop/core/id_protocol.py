@@ -13,7 +13,6 @@ import time
 from . import protocol
 
 CAPABILITY, BEGIN, END, PROBE, RENAME = range(5)
-READ_PROFILE, APPLY_PROFILE = 5, 6
 
 
 
@@ -30,12 +29,11 @@ class MaintenanceChannel:
         self.closed = False
 
     def feed(self, payload):
-        if len(payload) != 19 or payload[14] != 2:
+        if len(payload) != 16 or payload[14] != 3:
             return False
         fields = struct.unpack('>IIBBBBBBBB', payload[:16])
         result = dict(zip(('token', 'session', 'operation', 'bus', 'old_id', 'new_id',
                            'status', 'present', 'version', 'stage'), fields))
-        result['profile'] = tuple(payload[16:19])
         with self.condition:
             self.responses[result['token']] = result
             while len(self.responses) > 32:

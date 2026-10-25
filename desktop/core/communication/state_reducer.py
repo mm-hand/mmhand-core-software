@@ -33,7 +33,6 @@ from ..protocol import (
     CMD_RESET,
     CMD_RESTORE_MULTITURN,
     CMD_RUN_FEEDBACK,
-    CMD_SERVO_RESET_ZERO,
     CMD_START,
     CMD_STOP,
     ENCODER_COUNT,
@@ -72,6 +71,7 @@ from ..protocol import (
     parse_servo_rebase_zero_result_packet,
     parse_servo_route_status_packet,
     parse_servo_telem_packet,
+    parse_servo_online_status_packet,
     parse_system_status_packet,
     parse_tactile_full_fragment,
     parse_tactile_packet,
@@ -103,6 +103,7 @@ STATE_SNAPSHOT_CRITICAL_PACKET_KINDS = frozenset({
     "multiturn_restore_result",     # 多圈恢复最终结果
     "safety_event",             # 安全规则事件
     "fault_status",             # 过载故障位图
+    "servo_online_status",
     "servo_route_status",       # 舵机路由/扫描配置
     "product_fingerprint",      # 产品指纹（启动握手依赖）
     "motor_abs_limit",          # ABS 可达范围
@@ -121,6 +122,7 @@ class StateReducer:
         "multiturn_restore_result": lambda self, owner, model, payload, time_ms, rx_at: self._apply_multiturn_restore_result(owner, model, payload, time_ms, rx_at),
         "servo_rebase_zero_result": lambda self, owner, model, payload, time_ms, rx_at: self._apply_servo_rebase_zero_result(owner, model, payload, time_ms, rx_at),
         "direct_target_result": lambda self, owner, model, payload, time_ms, rx_at: self._apply_direct_target_result(owner, model, payload, time_ms, rx_at),
+        "servo_online_status": lambda self, owner, model, payload, time_ms, rx_at: self._apply_servo_online_status(model, payload),
         "servo_telemetry": lambda self, owner, model, payload, time_ms, rx_at: self._apply_servo_telemetry(owner, model, payload, time_ms, rx_at),
         "fault_status": lambda self, owner, model, payload, time_ms, rx_at: self._apply_fault_status(owner, model, payload, time_ms, rx_at),
         "system_status": lambda self, owner, model, payload, time_ms, rx_at: self._apply_system_status(owner, model, payload, time_ms, rx_at),
@@ -347,23 +349,19 @@ class StateReducer:
         return emitted
 
     def _apply_servo_position(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
-        """Apply one merged raw+ABS servo position packet."""
+        """Apply the motor's native signed ABS feedback."""
         parsed = parse_servo_position_packet(payload)
         if parsed is None:
             return False
-        raw_positions, angles = parsed
-        for i in range(min(MOTOR_COUNT, len(raw_positions))):
-            model.servo_raw_positions[i] = int(raw_positions[i])
+        angles = parsed
         for i in range(min(MOTOR_COUNT, len(angles))):
             model.servo_angles[i] = int(angles[i])
-        # 两个数组共享同一个 P4 时间戳；CSV 不会误用同批次的 SYSTEM_STATUS。
+        # 使用位置帧自身的 P4 时间戳。
         if packet_p4_time_ms is not None:
             model.servo_feedback_p4_time_ms = int(packet_p4_time_ms)
-            model.servo_raw_p4_time_ms = int(packet_p4_time_ms)
         model.servo_abs_last_rx_ts = time.time()
         model.monotonic_received['servo_abs_last_rx_ts'] = time.monotonic()
         model.has_servo_angle_data = True
-        model.has_servo_raw_data = True
         # ABS 没有单路有效位。尚无权威在线状态时，不能把占位 ABS 当成可信反馈。
         valid_mask = (
             int(model.servo_online_bitmap)
@@ -446,6 +444,19 @@ class StateReducer:
             model.has_direct_target_result = True
             emitted = True
         return emitted
+
+    def _apply_servo_online_status(self, model, payload):
+        rows = parse_servo_online_status_packet(payload)
+        if rows is None:
+            return False
+        model.servo_online_generation = [row[0] for row in rows]
+        model.servo_firmware_major = [row[1] for row in rows]
+        model.servo_firmware_minor = [row[2] for row in rows]
+        model.servo_online_check = [row[3] for row in rows]
+        model.has_servo_online_status = True
+        model.servo_online_check_last_rx_ts = time.time()
+        model.monotonic_received['servo_online_check_last_rx_ts'] = time.monotonic()
+        return True
 
     def _apply_servo_telemetry(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one servo_telemetry packet within the RX batch boundary."""
@@ -539,13 +550,6 @@ class StateReducer:
                 direct_reject_reason,
                 has_motion_result_status,
                 servo_turn_overflow_bitmap,
-                servo_reset_zero_request_token,
-                servo_reset_zero_result_token,
-                servo_reset_zero_success_mask,
-                servo_reset_zero_failed_mask,
-                servo_reset_zero_invalidated_joint_mask,
-                servo_reset_zero_status,
-                has_servo_reset_zero_status,
                 feedback_admission_sequence,
                 feedback_admission_status,
                 feedback_reject_reason,
@@ -592,12 +596,11 @@ class StateReducer:
             model.require_can_feedback = bool(require_can_feedback)
             model.has_active_scope_status = bool(has_active_scope_status)
             model.servo_online_bitmap = int(servo_online_bitmap)
-            # 在线状态只有 SYSTEM_STATUS 一个权威来源；三个展示数组保持
+            # 在线状态只有 SYSTEM_STATUS 一个权威来源；展示数组保持
             # 同步，避免 100 Hz 数据包重复携带 27 字节在线标志。
             for i in range(MOTOR_COUNT):
                 online = ((int(servo_online_bitmap) >> i) & 0x01) != 0
                 model.servo_online[i] = online
-                model.servo_raw_online[i] = online
                 model.servo_telem_online[i] = online
             model.encoder_online_bitmap = int(encoder_online_bitmap)
             model.encoder_warn_bitmap = int(encoder_warn_bitmap)
@@ -634,27 +637,6 @@ class StateReducer:
             )
             model.servo_turn_overflow_bitmap = int(
                 servo_turn_overflow_bitmap
-            )
-            model.servo_reset_zero_request_token = int(
-                servo_reset_zero_request_token
-            )
-            model.servo_reset_zero_result_token = int(
-                servo_reset_zero_result_token
-            )
-            model.servo_reset_zero_success_mask = int(
-                servo_reset_zero_success_mask
-            )
-            model.servo_reset_zero_failed_mask = int(
-                servo_reset_zero_failed_mask
-            )
-            model.servo_reset_zero_invalidated_joint_mask = int(
-                servo_reset_zero_invalidated_joint_mask
-            )
-            model.servo_reset_zero_status = int(
-                servo_reset_zero_status
-            )
-            model.has_servo_reset_zero_status = bool(
-                has_servo_reset_zero_status
             )
             model.has_system_status_data = True
             model.system_status_last_rx_ts = time.time()
@@ -1011,7 +993,6 @@ class StateReducer:
             if ack_cmd in (
                 CMD_CLEAR_CALIBRATION,
                 CMD_CLEAR_CALIBRATION_SCOPE,
-                CMD_SERVO_RESET_ZERO,
             ):
                 owner._auto_calib_logger.log(
                     "ACK",
@@ -1115,7 +1096,6 @@ class StateReducer:
                     # 局部清除的准确 joint/motor mask 由后续 P4 状态包
                     # 回读，不能像全局清除一样在通信层把 21 路全部归零。
                     pass
-                elif ack_cmd == CMD_SERVO_RESET_ZERO:
                     pass
             emitted = True
         return emitted

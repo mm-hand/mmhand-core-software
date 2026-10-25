@@ -5,7 +5,7 @@ import time
 import pytest
 from unittest.mock import Mock
 from test_application_actions import hand
-from desktop.core.id_protocol import CAPABILITY, BEGIN, END, PROBE, RENAME, READ_PROFILE, APPLY_PROFILE
+from desktop.core.id_protocol import CAPABILITY, BEGIN, END, PROBE, RENAME
 from desktop.core.protocol import HOST_PROTOCOL_VERSION
 
 
@@ -41,25 +41,22 @@ def test_calibrating_badge_follows_current_joint_and_stop_clears_it(hand):
 
 
 class MotorDevice:
-    def __init__(self, lose_result=False):
+    def __init__(self, lose_result=False, locked=True):
         self.writes = []
         self.probes = []
         self.inventory={(0,i) for i in range(5)}
         self.lose_result=lose_result
+        self.locked=locked
         self.profiles = {}
     def is_connected(self): return True
     def disconnect(self): pass
     def send_command(self, _command): return True
     def maintenance_request(self,session,operation,bus=0,old_id=0,new_id=0,**kwargs):
-        reply=dict(version=2,status=0,present=0,stage=1)
+        reply=dict(version=3,status=0,present=0,stage=int(self.locked))
         if operation==CAPABILITY: reply['present']=1
         if operation==PROBE:
             self.probes.append((bus, old_id))
             reply['present']=int((bus,old_id) in self.inventory)
-        if operation==APPLY_PROFILE:
-            self.profiles[(bus,old_id)] = (254,254,0)
-        if operation in (READ_PROFILE, APPLY_PROFILE):
-            reply['profile'] = self.profiles.get((bus,old_id),(1,2,3))
         if operation==RENAME:
             assert (bus,old_id) in self.inventory and (bus,new_id) not in self.inventory
             self.inventory.remove((bus,old_id)); self.inventory.add((bus,new_id))
@@ -100,7 +97,8 @@ def test_motor_quick_scan_still_rejects_unscanned_target_or_temporary_conflict(h
     assert not device.writes
 
 
-def test_motor_lost_result_resumes_after_scan_without_duplicate_write(hand,monkeypatch,tmp_path):
+@pytest.mark.parametrize('locked',[True,False])
+def test_motor_lost_result_resumes_after_scan_without_duplicate_write(hand,monkeypatch,tmp_path,locked):
     from desktop.core import id_actions,calibration_snapshot
     monkeypatch.setattr(id_actions,'DEVICE_STATE_DIR',tmp_path)
     monkeypatch.setattr(calibration_snapshot,'invalidate_calibration_snapshot_scope',Mock())
@@ -109,7 +107,7 @@ def test_motor_lost_result_resumes_after_scan_without_duplicate_write(hand,monke
     state=hand._controller.current_state
     state.has_product_fingerprint=True
     state.product_fingerprint=dict(device_id='1234567890ABCDEF',protocol_version=HOST_PROTOCOL_VERSION)
-    device=MotorDevice(lose_result=True); hand._controller.comm=device
+    device=MotorDevice(lose_result=True,locked=locked); hand._controller.comm=device
     finish(hand,hand.request_id_scan())
     result=finish(hand,hand.request_motor_renumber({(0,i):i+5 for i in range(5)}))
     assert result['status']=='FAILED' and device.writes==[(0,0,253)], result
@@ -125,4 +123,4 @@ def test_motor_lost_result_resumes_after_scan_without_duplicate_write(hand,monke
     assert result['status']=='SUCCESS'
     assert device.writes.count((0,0,253))==1
     assert device.inventory=={(0,i) for i in range(5,10)}
-    assert set(device.profiles.values()) == {(254,254,0)}
+    assert not device.profiles  # Profile configuration belongs to online checks.

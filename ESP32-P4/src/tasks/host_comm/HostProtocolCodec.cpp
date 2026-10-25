@@ -15,7 +15,7 @@ size_t encodeServoPositionPacket(uint8_t* buffer,
                                  size_t capacity,
                                  const ServoAngleData_t& position)
 {
-    constexpr size_t length = 3U + SERVO_TOTAL_NUM * 2U + SERVO_TOTAL_NUM * 4U + 4U + 1U;
+    constexpr size_t length = 3U + SERVO_TOTAL_NUM * 4U + 4U + 1U;
     static_assert(length - 2U <= UINT8_MAX,
                   "servo position frame length exceeds wire field");
     if (!buffer || capacity < length) {
@@ -26,12 +26,29 @@ size_t encodeServoPositionPacket(uint8_t* buffer,
     buffer[idx++] = static_cast<uint8_t>(length - 2U);
     buffer[idx++] = PACKET_TYPE_SERVO_POSITION;
     for (uint8_t i = 0; i < SERVO_TOTAL_NUM; ++i) {
-        appendI16BigEndian(buffer, &idx, position.servoRawPositions[i]);
-    }
-    for (uint8_t i = 0; i < SERVO_TOTAL_NUM; ++i) {
         appendI32BigEndian(buffer, &idx, position.servoAngles[i]);
     }
     appendU32BigEndian(buffer, &idx, position.timestamp);
+    buffer[idx++] = PROTOCOL_TAIL;
+    return idx;
+}
+
+size_t encodeServoOnlineStatusPacket(uint8_t* buffer, size_t capacity,
+                                    const ServoTelemetryData_t& telemetry)
+{
+    constexpr size_t length = 3 + SERVO_TOTAL_NUM * 7 + kP4TimestampBytes + 1;
+    if (!buffer || capacity < length) return 0;
+    size_t idx = 0;
+    buffer[idx++] = PROTOCOL_HEADER;
+    buffer[idx++] = length - 2;
+    buffer[idx++] = PACKET_TYPE_SERVO_ONLINE_STATUS;
+    for (uint8_t i = 0; i < SERVO_TOTAL_NUM; ++i) {
+        appendU32BigEndian(buffer, &idx, telemetry.onlineCheck.generation[i]);
+        buffer[idx++] = telemetry.onlineCheck.major[i];
+        buffer[idx++] = telemetry.onlineCheck.minor[i];
+        buffer[idx++] = telemetry.onlineCheck.status[i];
+    }
+    appendU32BigEndian(buffer, &idx, telemetry.timestamp);
     buffer[idx++] = PROTOCOL_TAIL;
     return idx;
 }

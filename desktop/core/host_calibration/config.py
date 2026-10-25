@@ -30,6 +30,17 @@ kMinTravelDeg = 10.0
 # URDF 量程的 56%~109%，2026-10-24 被挡住那次只有 26%。低于这个比例直接
 # 判失败，不把截断的 LUT 写回。
 kMinAaTravelFractionOfRange = 0.45
+# AA 中点回位速度；原 100 被 min(100, servoSpeed) 压住，约 1°/s，太慢。
+kAaMidpointSpeedCountsPerSec = 400
+# AA 中点只要求大致到位：允许偏离中点 ±20% 关节量程。腱的跟随差 + 到达判定
+# 抖动会让 ±2°/3° 级别的门限压线误杀（2026-10-25 J00 偏 3.05° 被中止）。
+# 到达窗和保持门限共用这个比例，只放宽一处会在窗口边缘立刻触发另一处。
+kAaMidpointToleranceFractionOfRange = 0.20
+# 收紧目标接近舵机多圈上限时自动重新设零并重跑该关节。P4 越圈保护线是
+# ±30715，这里留 715 counts 余量，避免目标先进保护带触发整手 STOP。
+kAbsRebaseTriggerCounts = 30000
+# 每次重跑重新获得一个 ±30715 counts 的窗口（约 7.5 圈）。
+kAbsRebaseRetryCounts = 3
 kMaxTravelDeg = 359.0
 kRejectNearFullWrapSpanCounts = 15360
 kLutStartDeg = -5.0

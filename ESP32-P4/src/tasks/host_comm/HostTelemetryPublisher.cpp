@@ -231,28 +231,10 @@ bool sendSystemStatusPacket(SystemRuntimeContext* sharedData)
     appendU32BigEndian(
         buffer, &idx,
         sharedAtomicLoad(&sharedData->feedback_collision_armed_bitmap));
-    // Reset Zero 状态位于碰撞状态快照之后，桌面端按同一 schema 解析。
+    // 原生ABS越界位图；旧圈数复位结果字段已删除。
     appendU32BigEndian(
         buffer, &idx,
         sharedAtomicLoad(&sharedData->servo_turn_overflow_bitmap));
-    appendU32BigEndian(
-        buffer, &idx,
-        sharedAtomicLoad(&sharedData->servo_reset_zero_request_token));
-    appendU32BigEndian(
-        buffer, &idx,
-        sharedAtomicLoad(&sharedData->servo_reset_zero_result_token));
-    appendU32BigEndian(
-        buffer, &idx,
-        sharedAtomicLoad(&sharedData->servo_reset_zero_success_mask));
-    appendU32BigEndian(
-        buffer, &idx,
-        sharedAtomicLoad(&sharedData->servo_reset_zero_failed_mask));
-    appendU32BigEndian(
-        buffer, &idx,
-        sharedAtomicLoad(
-            &sharedData->servo_reset_zero_invalidated_joint_mask));
-    buffer[idx++] =
-        sharedAtomicLoad(&sharedData->servo_reset_zero_status);
     // 状态包时间表示本次状态快照在 P4 侧被序列化的时刻。
     appendU32BigEndian(buffer, &idx, p4::platform::time::monotonicMillis());
     buffer[idx++] = PROTOCOL_TAIL;
@@ -678,15 +660,22 @@ bool sendControlTracePacket(const ControlTraceData_t& trace)
     return FW_SERIAL_WRITE(buffer, idx) == idx;
 }
 
-/** 同一快照 RAW/ABS 合并为一帧，保证两边时间戳严格一致。 */
+/** 原生ABS与采样时间，一帧一个位置来源。 */
 bool sendServoPositionPackets(const ServoAngleData_t& position)
 {
-    uint8_t buffer[3U + SERVO_TOTAL_NUM * 2U + SERVO_TOTAL_NUM * 4U + 4U + 1U];
+    uint8_t buffer[3U + SERVO_TOTAL_NUM * 4U + 4U + 1U];
     const size_t length = encodeServoPositionPacket(buffer, sizeof(buffer), position);
     return length != 0U && FW_SERIAL_WRITE(buffer, length) == length;
 }
 
 /** 100 Hz 遥测不重复携带在线数组，在线状态统一来自 SYSTEM_STATUS。 */
+bool sendServoOnlineStatusPacket(const ServoTelemetryData_t& telemetry)
+{
+    uint8_t buffer[256];
+    const auto length = encodeServoOnlineStatusPacket(buffer, sizeof(buffer), telemetry);
+    return length && FW_SERIAL_WRITE(buffer, length) == length;
+}
+
 bool sendServoTelemetryPacket(const ServoTelemetryData_t& telemetry)
 {
     static_assert(3 + SERVO_TOTAL_NUM * 8 + kP4TimestampBytes + 1 <= 256,

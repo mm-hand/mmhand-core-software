@@ -10,6 +10,7 @@ import pytest
 
 from desktop.core.host_calibration.config import (
     default_auto_calibration_params, finger_aa_joint, joint_motors,
+    kAaMidpointSpeedCountsPerSec, kAaMidpointToleranceFractionOfRange,
 )
 from desktop.core.host_calibration.dual_motor import WorkspaceCacheEntry, POSE_A, WORKSPACE_DUAL_JOINTS
 from desktop.core.host_calibration.finish import dual_lut_targets
@@ -118,11 +119,14 @@ def test_untrusted_unselected_aa_is_rejected_before_reset_or_motion(centered_io,
         state.joint_calib_results[0]['manualSpanCounts'] = 0
     else:
         state.joint_calib_results[0]['tendonLutValid'] = False
-    io.wait_servo_recovery = Mock(side_effect=AssertionError('must preflight before reset'))
+    io.wait_servo_recovery = Mock(return_value=True)
+    io.wait_encoder_recovery = Mock(return_value=True)
+    io._rebase = Mock(side_effect=AssertionError('dependency must pass before any coordinate write'))
+    io.controller.wait_for_multiturn_recovery = Mock(return_value=(False, 'J00 has no saved coordinate'))
     io.finish_session = Mock(return_value=(False, 'stopped'))
     result = flow.run(io, 2, 4, lambda *_: None)
     assert not result.success and 'J00' in result.message
-    io.wait_servo_recovery.assert_not_called()
+    io._rebase.assert_not_called()
     io.publish.assert_not_called()
 
 
@@ -151,6 +155,7 @@ def test_whole_finger_sequence_centers_after_joint_prepare_before_each_search(ce
     events = []
     io.wait_servo_recovery = Mock(return_value=True)
     io.wait_encoder_recovery = Mock(return_value=True)
+    io._rebase = Mock(return_value=True)
     io.prepare_joint = lambda joint, mask: (events.append(('prepare', joint)) is None, '')
     io.finish_session = Mock(return_value=(True, 'done'))
 
@@ -181,20 +186,22 @@ def test_whole_finger_sequence_centers_after_joint_prepare_before_each_search(ce
     assert io.publish.call_count > 6  # Repeated low-speed corrections, then ordinary search batches.
 
 
-def test_midpoint_holds_abort_on_three_distinct_drift_frames(centered_io):
+def test_midpoint_hold_does_not_recheck_aa_drift_after_moving(centered_io):
+    # Field 2026-10-25: J05 aborted because J04 sat 14.57 deg off the midpoint
+    # after the midpoint move. The hold only republishes the locked targets;
+    # there is no post-move drift gate any more.
     io = centered_io
     assert io.prepare_finger_aa(1)[0]
+    fixed = dict(io._aa_hold[3])
     state = io.controller.current_state
-    state.encoders[0].raw_sensor = 7000
+    state.encoders[0].raw_sensor = 6400  # far outside any midpoint window.
     params = default_auto_calibration_params()
-    for _ in range(2):
+    for _ in range(4):
         io.sleep_ms(20)
-        assert io.hold_targets_except((1,), 1, 0, params) is not None
-    # Re-reading one packet does not count as another drift frame.
-    assert io.hold_targets_except((1,), 1, 0, params) is not None
-    io.sleep_ms(20)
-    assert io.hold_targets_except((1,), 1, 0, params) is None
-    assert 'drifted' in io.motion_publish_error
+        held = io.hold_targets_except((1,), 1, 0, params)
+        assert held is not None
+        assert {m: held[m] for m in fixed} == fixed
+    assert io.motion_publish_error == ''
 
 
 @pytest.mark.parametrize('fault', ['stall', 'frozen', 'stale', 'publish', 'cancel', 'load', 'limit'])
@@ -248,7 +255,7 @@ def test_encoder_driven_midpoint_handles_slack_from_either_side(centered_io, aa,
     slack = [120]
 
     def move(targets, speed, acc):
-        assert speed <= 100
+        assert speed == kAaMidpointSpeedCountsPerSec
         delta = targets[primary] - state.servo_angles[primary]
         assert abs(delta) <= 10  # No large jump to a LUT motor position.
         assert targets[secondary] - state.servo_angles[secondary] == -delta
@@ -264,9 +271,10 @@ def test_encoder_driven_midpoint_handles_slack_from_either_side(centered_io, aa,
     assert io.prepare_finger_aa(aa + 1)[0]
     result, center, fixed = io._aa_hold[1:]
     angle = io._finger_aa_feedback(aa, result)[1]
-    assert abs(angle - center) <= 2
+    lo, hi = io.urdf_limits(aa)
+    assert abs(angle - center) <= kAaMidpointToleranceFractionOfRange * (hi - lo)
     assert slack[0] == 0
-    assert io.now_ms() > 1000
+    assert io.now_ms() > 200
     assert fixed == {m: state.servo_angles[m] for m in (primary, secondary)}
     assert fixed != dual_lut_targets(result, (primary, secondary), center)
 
@@ -287,15 +295,11 @@ def test_midpoint_timeout_is_bounded_even_when_angle_keeps_moving(centered_io):
     assert 60000 <= io.now_ms() <= 60100
 
 
-def test_auxiliary_aa_is_not_added_to_reset_scope(centered_io):
+def test_auxiliary_aa_does_not_expand_selected_zero_scope(centered_io):
     io = centered_io
-    selected, reset = io.selected_motor_mask, io.preparation_reset_mask
-    helper = io.finger_aa_motor_mask((1,))
-    io.set_workspace_read_mask(helper)
-    assert io._prepare_workspace_reset_scope()
+    selected = io.selected_motor_mask
+    io.set_workspace_read_mask(io.finger_aa_motor_mask((1,)))
     assert io.selected_motor_mask == selected
-    assert io.preparation_reset_mask == reset & selected
-    assert not io.preparation_reset_mask & helper
 
 
 def test_thumb_cmc_does_not_require_or_move_aa(centered_io):
@@ -373,10 +377,11 @@ def test_unusable_host_snapshot_requests_aa_recalibration(centered_io, fault):
 
 def test_midpoint_may_start_outside_the_trusted_window_and_move_inward(centered_io):
     # 拟合直线的端部外推与实际 ABS 有偏差：起点在窗口外 120 counts 时，
-    # 向窗口内运动必须允许，否则第一次目标下发就中止。
+    # 向窗口内运动必须允许，否则第一次目标下发就中止。raw 6500 同时在中点
+    # 容差窗口外（-58.6 deg），确保真的进入步进分支。
     io = centered_io
     state = io.controller.current_state
-    state.encoders[0].raw_sensor = 7600
+    state.encoders[0].raw_sensor = 6500
     primary, secondary = joint_motors(0)
     state.servo_angles[primary], state.servo_angles[secondary] = -120, 120
     state.motor_abs_limit_min[primary], state.motor_abs_limit_max[primary] = -60, 400
@@ -387,7 +392,7 @@ def test_midpoint_may_start_outside_the_trusted_window_and_move_inward(centered_
 def test_midpoint_still_aborts_when_the_next_target_moves_further_outside(centered_io):
     io = centered_io
     state = io.controller.current_state
-    state.encoders[0].raw_sensor = 7600
+    state.encoders[0].raw_sensor = 6500  # Outside the midpoint window: the first step must run.
     primary, secondary = joint_motors(0)
     state.servo_angles[primary], state.servo_angles[secondary] = 120, -120
     state.motor_abs_limit_min[primary], state.motor_abs_limit_max[primary] = -400, 60

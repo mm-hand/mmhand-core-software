@@ -324,7 +324,6 @@ class HandModel:
     # 最近一帧 PACKET_TYPE_SERVO_POSITION 自带的 P4 时间戳；记录舵机 ABS 时
     # 必须使用该值，不能借用随后到达的其他状态包时间。
     servo_feedback_p4_time_ms: int = 0
-    servo_raw_p4_time_ms: int = 0
     servo_abs_last_rx_ts: float = 0.0
     # 控制跟踪由 P4 10 ms 控制周期一次性封装，禁止与其他状态包时间拼接。
     has_control_trace: bool = False
@@ -364,10 +363,15 @@ class HandModel:
     has_encoder_raw_data: bool = False
     encoder_raw_last_rx_ts: float = 0.0
     encoder_raw_p4_time_ms: int = 0
+    has_servo_online_status: bool = False
+    servo_online_generation: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
+    servo_firmware_major: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
+    servo_firmware_minor: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
+    servo_online_check: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
+    servo_online_check_last_rx_ts: float = 0.0
     servo_telem_p4_time_ms: int = 0
     servo_telem_last_rx_ts: float = 0.0
     has_servo_angle_data: bool = False
-    has_servo_raw_data: bool = False
     has_system_status_data: bool = False
     system_status_last_rx_ts: float = 0.0
     system_status_p4_time_ms: int = 0
@@ -401,9 +405,6 @@ class HandModel:
     has_direct_target_result: bool = False
     # 上位机 JSON 中的可信多圈锚点。该状态不来自 P4 协议，只用于 UI 展示和掉电恢复。
     host_multiturn_valid_mask: int = 0
-    host_multiturn_saved_raw_positions: List[int] = field(
-        default_factory=lambda: [0] * MOTOR_COUNT
-    )
     host_multiturn_status: str = "not loaded"
     manual_reference_valid_bitmap: int = 0
     manual_reference_crc: int = 0
@@ -460,13 +461,6 @@ class HandModel:
     has_feedback_collision_status: bool = False
     # hardware ABS 严格越过 ±30715 时触发 Reset Zero 事务。
     servo_turn_overflow_bitmap: int = 0
-    servo_reset_zero_request_token: int = 0
-    servo_reset_zero_result_token: int = 0
-    servo_reset_zero_success_mask: int = 0
-    servo_reset_zero_failed_mask: int = 0
-    servo_reset_zero_invalidated_joint_mask: int = 0
-    servo_reset_zero_status: int = 0
-    has_servo_reset_zero_status: bool = False
     can_link_online: bool = False
     motor_abs_limit_valid_bitmap: int = 0
     motor_abs_limit_min: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
@@ -500,10 +494,6 @@ class HandModel:
     # 伺服绝对角度来自 SERVO_POSITION；在线状态统一来自 SYSTEM_STATUS 位图。
     servo_angles: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     servo_online: List[bool] = field(default_factory=lambda: [False] * MOTOR_COUNT)
-    # 当前单圈 raw 来自 100 Hz 流；Flash raw 来自保存结果触发的独立快照。
-    servo_raw_positions: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
-    servo_raw_online: List[bool] = field(default_factory=lambda: [False] * MOTOR_COUNT)
-
     # 伺服遥测数据（来自 PACKET_TYPE_SERVO_TELEM）
     servo_speed: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     servo_load: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)

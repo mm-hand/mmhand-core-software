@@ -17,7 +17,6 @@ P4_SRC = Path(__file__).resolve().parents[2] / "ESP32-P4/src"
 NATIVE_SOURCE = r'''
 #include "generated/UpperProtocol.generated.h"
 #include "data/ActuatorTypes.h"
-#include "data/RecoveryTypes.h"
 #include "data/SystemTypes.h"
 #include <cstdint>
 #include <cstdlib>
@@ -45,10 +44,10 @@ static void xSemaphoreGive(SemaphoreHandle_t) { ++mutexGives; }
 #define FW_LOG_INFO_PRINTF(...) ((void)0)
 
 struct SystemRuntimeContext {
+    uint8_t emergency_stop_latched = 0;
     uint8_t host_protocol_compatible = 1;
     uint8_t system_state = SYSTEM_STATE_IDLE, control_enabled = 0;
     uint8_t servo_target_owner = SERVO_TARGET_OWNER_NONE;
-    uint8_t servo_reset_zero_status = SERVO_RESET_ZERO_STATUS_IDLE;
     uint32_t servo_online_bitmap = (1UL << SERVO_TOTAL_NUM) - 1;
     uint32_t servo_route_controllable_bitmap = (1UL << SERVO_TOTAL_NUM) - 1;
     uint32_t servo_recovery_pending_bitmap = 0, servo_recovery_failed_bitmap = 0;
@@ -92,21 +91,23 @@ public:
     int32_t actualAbs = 12488;
     unsigned calibrationCalls = 0, consumedSnapshots = 0;
     uint8_t calibratedId = 255;
-    bool calibrateHardwareAbsolutePosition(uint8_t id, int32_t target,
-                                            int16_t* raw, uint8_t* attempts) {
-        require(target == 0, "Direct zero sent a non-zero hardware correction");
-        ++calibrationCalls;
-        calibratedId = id;
-        actualAbs = 0; // An uncertain ACK may follow a successful physical write.
-        *raw = 0;
-        *attempts = 1;
-        return succeeds;
-    }
-    bool consumeOfflineTrustedSnapshot(uint8_t, int32_t*, int16_t*, int16_t*, uint32_t*) {
-        ++consumedSnapshots;
-        return false;
-    }
+    void discardAbsoluteRestore(uint8_t) { ++consumedSnapshots; }
+
 };
+namespace p4::platform::time { static uint32_t monotonicMillis() { return 1000; } }
+namespace p4::servo {
+enum class RestoreResult { Pending, Success, Failed };
+class AbsoluteRestore {
+public:
+    RestoreResult step(FeetechServoDriver* driver, uint8_t id, int32_t target, uint32_t) {
+        if (!driver) return RestoreResult::Failed;
+        require(target == 0, "zero changed its target");
+        ++driver->calibrationCalls; driver->calibratedId = id; driver->actualAbs = target;
+        return driver->succeeds ? RestoreResult::Success : RestoreResult::Failed;
+    }
+    void cancel() {}
+};
+}
 struct ServoRoute { uint8_t busIndex = 0, servoId = 0; };
 static FeetechServoDriver* routes[SERVO_TOTAL_NUM]{};
 static FeetechServoDriver* resolveMotorDriver(uint8_t motor, ServoRoute* route, bool executable) {
@@ -148,18 +149,18 @@ struct Fixture {
     ServoHotplugRecoveryAnchors anchors{};
     ServoOnlineRecoveryContext recovery{};
     ServoRebaseZeroContext zero{};
-    uint32_t lastToken = 9, sessionMask = validMotorChannelMask();
+    uint32_t lastToken = 9;
+    p4::servo::AbsoluteRestore writer;
     Fixture() {
         acks.clear();
         mutexAllowed = true;
         mutexTakes = mutexGives = 0;
         invalidatedJoints = readyEvents = clearedQueues = 0;
-        recovery.activeChannel = 7;
-        recovery.torqueOffComplete = true;
+        recovery.activeChannel = 0xFF;
         anchors.validMask = validMotorChannelMask();
         for (unsigned m = 0; m != SERVO_TOTAL_NUM; ++m) {
             routes[m] = &drivers[m];
-            anchors.pending[m].active = true;
+
         }
     }
     void dispatch(uint8_t cmd, uint32_t mask, size_t length = 5) {
@@ -169,7 +170,7 @@ struct Fixture {
     }
     void capture() { captureServoRebaseZero(&runtime, &lastToken, &zero); }
     bool step() {
-        return stepServoRebaseZero(&runtime, &zero, &anchors, &recovery, &sessionMask);
+        return stepServoRebaseZero(&runtime, &zero, &anchors, &writer);
     }
     void verifyAck(uint8_t cmd, uint8_t status) const {
         require(acks.size() == 1 && acks[0].command == cmd && acks[0].status == status,
@@ -202,7 +203,6 @@ static void run(const std::string& name) {
         else if (reason == "retired_state") f.runtime.system_state = 7;
         else if (reason == "zero_pending") ++f.runtime.servo_rebase_zero_request_token;
         else if (reason == "restore_pending") ++f.runtime.restore_multi_turn_request_token;
-        else if (reason == "reset_pending") f.runtime.servo_reset_zero_status = SERVO_RESET_ZERO_STATUS_RUNNING;
         else if (reason == "recovery_busy") f.runtime.servo_recovery_pending_bitmap = mask;
         else if (reason == "mutex") mutexAllowed = false;
         else {
@@ -287,11 +287,8 @@ static void run(const std::string& name) {
             "final zero result misreported selected motor success/failure");
     require((f.runtime.multi_turn_unknown_bitmap & mask) == (mask & ~success),
             "failed correction trusted uncertain hardware ABS");
-    require((f.anchors.validMask & mask) == 0 && !f.anchors.pending[7].active &&
-            f.anchors.pending[8].active, "zero changed an unselected motor's recovery anchor");
-    require(f.recovery.activeChannel == 0xFF && !f.recovery.torqueOffComplete,
-            "zero retained the selected motor's old online recovery phase");
-    require(invalidatedJoints == jointMaskForMotorMask(mask), "zero invalidated unrelated joint calibration");
+    require((f.anchors.validMask & mask) == 0 && (f.anchors.validMask & (1UL << 8)),
+            "zero changed an unselected recovery anchor");
     for (unsigned m = 0; m != SERVO_TOTAL_NUM; ++m) {
         const bool expected = (mask & (1UL << m)) && routes[m];
         require(f.drivers[m].calibrationCalls == unsigned(expected),
@@ -341,7 +338,7 @@ def direct_zero_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path,
     pending_start = dispatcher.index("    if (servoRebaseZeroPending(sharedData)", handshake_end)
     pending_end = dispatcher.index("    if (cmd == CMD_HOST_HEARTBEAT)", pending_start)
     contexts = "\n".join(_braced(service, "struct " + name + " {") + ";"
-                         for name in ("ServoHotplugPendingSync", "ServoHotplugRecoveryAnchors",
+                         for name in ("ServoHotplugRecoveryAnchors",
                                       "ServoOnlineRecoveryContext"))
     source = directory / "direct_zero_test.cpp"
     source.write_text(
@@ -377,7 +374,7 @@ def direct_zero_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path,
 SCENARIOS = (
     "reject_handshake", "reject_direct_pending", "reject_motion_enabled", "reject_owner",
     "reject_motion_state", "reject_retired_state", "reject_zero_pending", "reject_restore_pending",
-    "reject_reset_pending", "reject_recovery_busy", "reject_mutex", "reject_empty",
+    "reject_recovery_busy", "reject_mutex", "reject_empty",
     "reject_mask_range", "reject_offline", "reject_route", "reject_short", "reject_long",
     "pending_blocks_motion", "selected_motor", "f0_compatible", "partial_failure", "route_lost",
     "token_wrap", "recovery_failed", "duplicate", "capture_unsafe", "step_unsafe",

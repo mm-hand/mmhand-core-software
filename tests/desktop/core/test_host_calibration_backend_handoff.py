@@ -73,7 +73,7 @@ def backend(monkeypatch):
 
 def _begin(backend):
     return backend.begin_calibration_workflow(
-        joint_mask=1, motor_mask=1, reset_motor_mask=3
+        joint_mask=1, motor_mask=1
     )
 
 
@@ -103,7 +103,6 @@ def test_calibration_entry_revokes_external_sources_before_workflow_submission(b
     assert _begin(backend)
     assert backend._calibration_workflow.calls[0]["joint_mask"] == 1
     assert backend._calibration_workflow.calls[0]["motor_mask"] == 1
-    assert backend._calibration_workflow.calls[0]["reset_motor_mask"] == 3
     assert isinstance(backend._calibration_workflow.calls[0]["baseline_state"], HandModel)
 
 

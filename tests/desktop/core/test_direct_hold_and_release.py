@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, call
 import pytest
 
 from desktop.core import core_logic
-from desktop.core.core_logic import HandController
+from desktop.core.core_logic import HandController, ServoRebaseZeroResult
 from desktop.core.protocol import MOTOR_COUNT, SYSTEM_STATE_IDLE
 
 
@@ -92,7 +92,6 @@ def test_direct_enable_rejects_untrusted_or_clamped_hold(fault):
         state.servo_route_controllable_bitmap = 0
     elif fault == "raw_only":
         state.has_servo_angle_data = False
-        state.has_servo_raw_data = True
     assert not controller.enable_direct_hold(8)[0]
     controller.comm.send_command.assert_not_called()
 
@@ -100,9 +99,7 @@ def test_direct_enable_rejects_untrusted_or_clamped_hold(fault):
 def test_release_only_connected_motor(monkeypatch):
     controller = controller_with_motor()
     state = controller.current_state
-    state.servo_raw_positions[3] = 3000
-    state.servo_raw_online[3] = True
-    controller.prepare_calibration_turn_zero = MagicMock(return_value=(True, "ok", 8, 0))
+    controller.rebase_servo_abs_zero = MagicMock(return_value=ServoRebaseZeroResult(True, "ok", 1, 8, 0))
     controller.set_active_scope = MagicMock(return_value=True)
     invalidate = MagicMock(return_value="saved")
     monkeypatch.setattr(core_logic, "invalidate_calibration_snapshot_scope", invalidate)
@@ -131,7 +128,7 @@ def test_partial_reset_invalidates_only_success_without_motion(monkeypatch):
     controller = controller_with_motor()
     state = controller.current_state
     state.servo_online_bitmap = state.servo_route_controllable_bitmap = 24
-    controller.prepare_calibration_turn_zero = MagicMock(return_value=(False, "partial", 8, 16))
+    controller.rebase_servo_abs_zero = MagicMock(return_value=ServoRebaseZeroResult(False, "partial", 1, 8, 16))
     invalidate = MagicMock(return_value="saved")
     monkeypatch.setattr(core_logic, "invalidate_calibration_snapshot_scope", invalidate)
     result = controller.manual_prepare_all_motors()
@@ -143,10 +140,10 @@ def test_partial_reset_invalidates_only_success_without_motion(monkeypatch):
 def test_release_rejects_missing_identity_before_reset_or_motion():
     controller = controller_with_motor()
     controller.current_state.has_product_fingerprint = False
-    controller.prepare_calibration_turn_zero = MagicMock()
+    controller.rebase_servo_abs_zero = MagicMock()
     result = controller.manual_prepare_all_motors()
     assert not result.ok
-    controller.prepare_calibration_turn_zero.assert_not_called()
+    controller.rebase_servo_abs_zero.assert_not_called()
     controller.comm.send_command.assert_not_called()
 
 
@@ -154,10 +151,8 @@ def test_selected_release_never_resets_invalidates_or_moves_other_motors(monkeyp
     controller = controller_with_motor()
     state = controller.current_state
     state.servo_online_bitmap = state.servo_route_controllable_bitmap = 24
-    state.servo_raw_positions[3] = state.servo_angles[3]
-    state.servo_raw_online[3] = True
     state.servo_angles[4] = 2500
-    controller.prepare_calibration_turn_zero = MagicMock(return_value=(True, 'ok', 8, 0))
+    controller.rebase_servo_abs_zero = MagicMock(return_value=ServoRebaseZeroResult(True, 'ok', 1, 8, 0))
     controller.set_active_scope = MagicMock(return_value=True)
     invalidate = MagicMock(return_value='saved')
     monkeypatch.setattr(core_logic, 'invalidate_calibration_snapshot_scope', invalidate)
@@ -177,7 +172,7 @@ def test_selected_release_never_resets_invalidates_or_moves_other_motors(monkeyp
     with live_servo_feedback(state):
         result = controller.manual_prepare_all_motors(motor_mask=8)
     assert result.ok and result.reset_motor_mask == result.reached_motor_mask == 8
-    assert controller.prepare_calibration_turn_zero.call_args.args[0] == 8
+    assert controller.rebase_servo_abs_zero.call_args.args[0] == 8
     assert invalidate.call_args.kwargs['motor_mask'] == 8
     assert invalidate.call_args.kwargs['joint_mask'] == 4
     controller.set_active_scope.assert_called_once_with(8, 0, False)
@@ -186,8 +181,8 @@ def test_selected_release_never_resets_invalidates_or_moves_other_motors(monkeyp
 
 def test_selected_release_requires_every_requested_motor_before_any_write():
     controller = controller_with_motor()
-    controller.prepare_calibration_turn_zero = MagicMock()
+    controller.rebase_servo_abs_zero = MagicMock()
     result = controller.manual_prepare_all_motors(motor_mask=24)
     assert not result.ok and 'offline or unroutable' in result.message
-    controller.prepare_calibration_turn_zero.assert_not_called()
+    controller.rebase_servo_abs_zero.assert_not_called()
     controller.comm.send_command.assert_not_called()

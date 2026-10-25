@@ -1,4 +1,4 @@
-"""Compile the production codec to verify the existing RAW/ABS wire contract."""
+"""Compile the production codec to verify the native ABS wire contract."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 P4_SRC = REPO_ROOT / "ESP32-P4/src"
 
 
-def test_position_pair_preserves_wire_frames_and_atomic_capacity(tmp_path: Path) -> None:
+def test_native_abs_preserves_wire_frames_and_atomic_capacity(tmp_path: Path) -> None:
     compiler = shutil.which("g++") or shutil.which("clang++") or shutil.which("cl")
     if compiler is None:
         pytest.skip("C++ compiler is unavailable")
@@ -36,31 +36,42 @@ int main()
     ServoAngleData_t position = {};
     position.timestamp = 0xFEDCBA98U;
     for (unsigned i = 0; i < 27; ++i) {
-        position.servoRawPositions[i] = short(i * 157);
         position.servoAngles[i] = -70000 + int(i) * 5007;
     }
-    position.servoRawPositions[0] = SHRT_MIN;
-    position.servoRawPositions[1] = SHRT_MAX;
-    position.servoRawPositions[2] = -1;
-    position.servoRawPositions[26] = 4095;
     position.servoAngles[0] = INT_MIN;
     position.servoAngles[26] = INT_MAX;
     unsigned char buffer[180];
     std::memset(buffer, 0xA5, sizeof(buffer));
-    assert(p4::host::encodeServoPositionPacket(buffer, 169, position) == 0);
+    assert(p4::host::encodeServoPositionPacket(buffer, 115, position) == 0);
     for (auto value : buffer) assert(value == 0xA5);
     assert(p4::host::encodeServoPositionPacket(nullptr, sizeof(buffer), position) == 0);
-    assert(p4::host::encodeServoPositionPacket(buffer, sizeof(buffer), position) == 170);
-    // One frame: FE/length/03/27 raw/time/27 ABS/time/FF.
-    assert(buffer[0] == 0xFE && buffer[1] == 168 && buffer[2] == 0x03);
-    assert(buffer[169] == 0xFF && buffer[170] == 0xA5 && buffer[171] == 0xA5);
+    assert(p4::host::encodeServoPositionPacket(buffer, sizeof(buffer), position) == 116);
+    // One frame: FE/length/03/27 native ABS/time/FF.
+    assert(buffer[0] == 0xFE && buffer[1] == 114 && buffer[2] == 0x03);
+    assert(buffer[115] == 0xFF && buffer[116] == 0xA5 && buffer[117] == 0xA5);
     for (unsigned i = 0; i < 27; ++i) {
-        const unsigned char* raw = buffer + 3 + i * 2;
-        const unsigned rawBits = (unsigned(raw[0]) << 8) | raw[1];
-        assert(rawBits == static_cast<unsigned short>(position.servoRawPositions[i]));
-        assert(read32(buffer + 57 + i * 4) == static_cast<unsigned>(position.servoAngles[i]));
+        assert(read32(buffer + 3 + i * 4) == static_cast<unsigned>(position.servoAngles[i]));
     }
-    assert(read32(buffer + 165) == position.timestamp);
+    assert(read32(buffer + 111) == position.timestamp);
+    ServoTelemetryData_t telemetry = {};
+    telemetry.timestamp = 0xABCDEF12;
+    for (unsigned i = 0; i < 27; ++i) {
+        telemetry.onlineCheck.generation[i] = 0x11223300 + i;
+        telemetry.onlineCheck.major[i] = 3;
+        telemetry.onlineCheck.minor[i] = i;
+        telemetry.onlineCheck.status[i] = i % 5;
+    }
+    unsigned char online[200];
+    std::memset(online, 0xA5, sizeof(online));
+    assert(p4::host::encodeServoOnlineStatusPacket(online, 196, telemetry) == 0);
+    for (auto value : online) assert(value == 0xA5);
+    assert(p4::host::encodeServoOnlineStatusPacket(online, sizeof(online), telemetry) == 197);
+    assert(online[0] == 0xFE && online[1] == 195 && online[2] == 0x20 && online[196] == 0xFF);
+    for (unsigned i = 0; i < 27; ++i) {
+        assert(read32(online + 3 + 7 * i) == 0x11223300 + i);
+        assert(online[7 + 7 * i] == 3 && online[8 + 7 * i] == i && online[9 + 7 * i] == i % 5);
+    }
+    assert(read32(online + 192) == 0xABCDEF12 && online[197] == 0xA5);
     return 0;
 }
 ''', encoding="utf-8",

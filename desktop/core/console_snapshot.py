@@ -16,6 +16,7 @@ from .host_calibration.config import joint_motors
 from .motor_mapping import MOTOR_TO_JOINT_INDEX
 from .calibration_snapshot import parse_mask
 from .protocol import (
+    ServoOnlineCheck,
     DUAL_TENDON_JOINT_INDICES, ControlMode, SERVO_TARGET_OWNER_CONTROL,
     SYSTEM_STATE_RUN_FEEDBACK, SYSTEM_STATE_RUN_DIRECT,
 )
@@ -157,10 +158,7 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
                 limits = [lo, hi]
         row.update(joint=MOTOR_TO_JOINT_INDEX[m], limits=limits,
                    bus=state.servo_route_bus[m] if fresh and state.has_servo_route_status else None,
-                   route=state.servo_route_state[m] if fresh and state.has_servo_route_status else None,
-                   raw=state.servo_raw_positions[m] if fresh and state.has_servo_raw_data and row['abs'] is not None and state.servo_raw_p4_time_ms == state.servo_feedback_p4_time_ms else None,
-                   saved_raw=state.host_multiturn_saved_raw_positions[m] if state.host_multiturn_valid_mask & (1 << m) else None,
-                   turn=(state.servo_angles[m] // 4096) if row['abs'] is not None and state.has_connectivity_status and not state.multi_turn_unknown_bitmap & (1 << m) else None)
+                   route=state.servo_route_state[m] if fresh and state.has_servo_route_status else None)
     snapshot['selected_motors'] = list(hand._selected_motors)
     trace = hand._replay_service.trace() if hand._replay_service else None
     snapshot['replay']['file'] = dict(name=trace.name, frames=trace.frame_count, duration_s=trace.duration_s,
@@ -196,6 +194,15 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
         'Collision': 'HOLD' if fresh and state.feedback_collision_hold_bitmap else 'ARMED' if fresh and state.feedback_collision_armed_bitmap else 'OFF' if fresh and state.has_feedback_collision_status else 'UNKNOWN',
         'Multi-turn': 'UNKNOWN' if not fresh or not state.has_connectivity_status or not state.servo_online_bitmap else 'MISSING' if state.multi_turn_unknown_bitmap & state.servo_online_bitmap else 'KNOWN'}
     snapshot['direct_zero_required'] = direct_zero_required(state, fresh)
+    snapshot['motor_firmware_device'] = state.product_fingerprint.get('device_id', '')
+    snapshot['motor_firmware_alerts'] = [
+        dict(motor=m, generation=state.servo_online_generation[m],
+             version=f'{state.servo_firmware_major[m]}.{state.servo_firmware_minor[m]}',
+             bus=state.servo_route_bus[m])
+        for m in range(27)
+        if fresh and state.has_servo_online_status and state.servo_online_bitmap & (1 << m)
+        and state.servo_online_check[m] == ServoOnlineCheck.UNSUPPORTED_FIRMWARE
+    ]
     snapshot['import_preview'] = None
     for token, preview in hand._import_previews.items():
         payload = preview['payload']

@@ -16,7 +16,7 @@ from enum import IntEnum
 from .. import protocol as p
 from .config import (
     AutoCalibrationParams, ENCODER_COUNT, MOTOR_COUNT,
-    primary_motor, shorten_sign, load_magnitude,
+    primary_motor, joint_motors, shorten_sign, load_magnitude,
     motor_apply_tendon_delta, single_tendon_release_counts,
     kInitialFeedbackWaitMs, kSingleTendonMaxReleaseCounts,
     kReverseMinFollowDeg, kAngleStallStableSamples,
@@ -313,9 +313,6 @@ def step_single(ctx: JointCalibContext, io, params: AutoCalibrationParams,
                   p.CALIB_DIAG_PHASE_INIT, a=int(encoder_ok), b=int(abs_ok), c=int(raw_ok),
                   bitmap=int(getattr(io, "multi_turn_unknown_bitmap", 0)))
             return
-        turn = (actual - actual % 4096) // 4096
-        if turn:
-            io.trace("SKIP_NORMALIZE_TURN", ctx.joint, ctx.motor, abs=actual, raw=servo_raw, turn=turn)
         if not _initialize_tighten(ctx, io, params):
             _feedback_lost(ctx, io, "missing feedback after init", p.CALIB_DIAG_PHASE_INIT)
         return
@@ -505,6 +502,10 @@ def run_single(io, joint: int, params: AutoCalibrationParams,
     if not prepared:
         return {"success": False, "aborted": True, "reason": message,
                 "result": None, "limits": {}}
+    # AA 中点保持阶段不参与 ABS 触顶判定；从属关节自己的收紧才需要自动重设零。
+    setter = getattr(io, 'set_active_calibration_motors', None)
+    if callable(setter):
+        setter(sum(1 << motor for motor in joint_motors(joint)))
     ctx = JointCalibContext(joint)
     io.trace("SEQUENCE_SERIAL_BEGIN", joint, 255, sequence_index=sequence_index,
              joint_count=len(ordered_joints))

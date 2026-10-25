@@ -67,6 +67,7 @@ from .protocol import (
     PACKET_TYPE_SERVO_LOGICAL_RANGE,
     PACKET_TYPE_SERVO_POSITION,
     PACKET_TYPE_SERVO_TELEM,
+    PACKET_TYPE_SERVO_ONLINE_STATUS,
     PACKET_TYPE_SYSTEM_STATUS,
     PACKET_TYPE_TASK_DIAG,
     PACKET_TYPE_TACTILE,
@@ -85,7 +86,6 @@ from .protocol import (
     build_calib_load_limits_cmd,
     build_clear_calibration_cmd,
     build_clear_calibration_scope_cmd,
-    build_servo_reset_zero_cmd,
     build_servo_rebase_zero_cmd,
     build_motor_abs_zero_cmd,
     build_motor_direct_release_cmd,
@@ -188,6 +188,7 @@ P4_PACKET_KINDS = {
     PACKET_TYPE_ENCODER_RAW: "encoder_raw",
     PACKET_TYPE_SERVO_POSITION: "servo_position",
     PACKET_TYPE_SERVO_TELEM: "servo_telemetry",
+    PACKET_TYPE_SERVO_ONLINE_STATUS: "servo_online_status",
     PACKET_TYPE_FAULT_STATUS: "fault_status",
     PACKET_TYPE_SYSTEM_STATUS: "system_status",
     PACKET_TYPE_PRODUCT_FINGERPRINT: "product_fingerprint",
@@ -1108,8 +1109,8 @@ class LowerComputerComm:
         model.feedback_collision_hold_bitmap = 0
         model.has_connectivity_status = False
         model.has_encoder_health_status = False
+        model.has_servo_online_status = False
         model.has_servo_angle_data = False
-        model.has_servo_raw_data = False
         model.has_encoder_raw_data = False
         model.encoder_raw_p4_time_ms = 0
         model.servo_telem_p4_time_ms = 0
@@ -1134,7 +1135,6 @@ class LowerComputerComm:
         model.encoder_fault_bitmap = 0
         model.can_link_online = False
         model.servo_online = [False] * MOTOR_COUNT
-        model.servo_raw_online = [False] * MOTOR_COUNT
         model.servo_telem_online = [False] * MOTOR_COUNT
         for motor in model.motors:
             motor.error = True
@@ -1606,8 +1606,6 @@ class LowerComputerComm:
                 online = (servo_mask & (1 << i)) != 0
                 if i < len(model.servo_online):
                     model.servo_online[i] = online
-                if i < len(model.servo_raw_online):
-                    model.servo_raw_online[i] = online
                 if i < len(model.servo_telem_online):
                     model.servo_telem_online[i] = online
                 if i < len(model.motors):
@@ -1876,11 +1874,6 @@ class LowerComputerComm:
             and cmd[0] == "clear_calibration_scope"
         ):
             return build_clear_calibration_scope_cmd(cmd[1])
-        if (
-            isinstance(cmd, tuple) and len(cmd) == 2
-            and cmd[0] == "servo_reset_zero"
-        ):
-            return build_servo_reset_zero_cmd(cmd[1])
         if (
             isinstance(cmd, tuple) and len(cmd) == 2
             and cmd[0] == "servo_rebase_zero"

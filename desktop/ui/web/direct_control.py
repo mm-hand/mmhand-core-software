@@ -94,7 +94,7 @@ def build(hand, act, confirm, leave=None):
                             number.set_value(row['abs'])
                             zero_generations[m] = generation
                             initialized.add(m)
-                        feedback.set_text(f"BUS: {show(row['bus'])}   Route: {show(row['route'])}   Turn: {show(row['turn'])}\nRawNow: {show(row['raw'])}   SavedRaw: {show(row['saved_raw'])}   AbsNow: {show(row['abs'])}   Load: {show(row['load'])}   Joint Angle: {show(snapshot['joints'][row['joint']]['angle'], '°')}")
+                        feedback.set_text(f"ABS: {show(row['abs'])}   Load: {show(row['load'])}   Joint Angle: {show(snapshot['joints'][row['joint']]['angle'], '°')}")
                         valid = row['limits'] is not None and row['abs'] is not None
                         number.set_enabled(valid); slider.set_enabled(valid); send.set_enabled(valid)
                         if valid:

@@ -4,13 +4,11 @@ import pytest
 
 from desktop.core.protocol import (
     CMD_MANUAL_ENCODER_REFERENCE,
-    CMD_SERVO_RESET_ZERO,
     ENCODER_COUNT,
     PROTOCOL_HEADER,
     PROTOCOL_TAIL,
     build_clear_manual_encoder_reference_cmd,
     build_manual_encoder_reference_cmd,
-    build_servo_reset_zero_cmd,
     parse_manual_encoder_reference_packet,
     parse_system_status_packet,
 )
@@ -55,7 +53,7 @@ def test_system_status_requires_current_length_and_parses_manual_fields():
     assert parsed_legacy is None
 
     extended = legacy + struct.pack(">III", 0x001FFFFF, 0x12345678, 7) + bytes([1])
-    parsed = parse_system_status_packet(bytes(extended).ljust(173, b"\x00"))
+    parsed = parse_system_status_packet(bytes(extended).ljust(152, b"\x00"))
     assert parsed is not None
     assert parsed[19:24] == (
         0x001FFFFF,
@@ -77,7 +75,7 @@ def test_system_status_parses_calibration_assembly_warning_extension():
     for offset in offsets:
         payload.extend(struct.pack(">h", offset))
 
-    parsed = parse_system_status_packet(bytes(payload).ljust(173, b"\x00"))
+    parsed = parse_system_status_packet(bytes(payload).ljust(152, b"\x00"))
 
     assert parsed is not None
     assert parsed[4] == 4
@@ -91,7 +89,7 @@ def test_system_status_parses_feedback_admission_extension():
     payload.extend(struct.pack(">I", 42))
     payload.extend(bytes([3, 4]))
 
-    parsed = parse_system_status_packet(bytes(payload).ljust(173, b"\x00"))
+    parsed = parse_system_status_packet(bytes(payload).ljust(152, b"\x00"))
 
     assert parsed is not None
     # The calibration warning fields deliberately remain at the tuple tail for
@@ -106,7 +104,7 @@ def test_system_status_parses_feedback_collision_extension():
     payload.extend(struct.pack(">II", dual_hold_mask, 9))
     payload.extend(struct.pack(">I", armed_mask))
 
-    parsed = parse_system_status_packet(bytes(payload).ljust(173, b"\x00"))
+    parsed = parse_system_status_packet(bytes(payload).ljust(152, b"\x00"))
 
     assert parsed is not None
     assert parsed[-7:-3] == (
@@ -117,43 +115,8 @@ def test_system_status_parses_feedback_collision_extension():
     )
 
 
-def test_system_status_parses_servo_reset_zero_extension():
-    payload = bytearray(173)
-    overflow_mask = (1 << 2) | (1 << 24)
-    success_mask = 1 << 24
-    failed_mask = 1 << 2
-    invalidated_joint_mask = (1 << 19) | (1 << 20)
-    payload[148:152] = struct.pack(">I", overflow_mask)
-    payload[152:156] = struct.pack(">I", 7)
-    payload[156:160] = struct.pack(">I", 6)
-    payload[160:164] = struct.pack(">I", success_mask)
-    payload[164:168] = struct.pack(">I", failed_mask)
-    payload[168:172] = struct.pack(">I", invalidated_joint_mask)
-    payload[172] = 3
-
-    parsed = parse_system_status_packet(bytes(payload).ljust(173, b"\x00"))
-
-    assert parsed is not None
-    assert parsed[36:44] == (
-        overflow_mask,
-        7,
-        6,
-        success_mask,
-        failed_mask,
-        invalidated_joint_mask,
-        3,
-        True,
-    )
 
 
-def test_servo_reset_zero_command_contains_big_endian_motor_mask():
-    motor_mask = (1 << 0) | (1 << 16) | (1 << 26)
-    frame = build_servo_reset_zero_cmd(motor_mask)
-
-    assert frame[0] == PROTOCOL_HEADER
-    assert frame[2] == CMD_SERVO_RESET_ZERO
-    assert frame[-1] == PROTOCOL_TAIL
-    assert struct.unpack(">I", frame[3:-1])[0] == motor_mask
 
 
 def test_manual_reference_snapshot_parses_all_21_pairs():
