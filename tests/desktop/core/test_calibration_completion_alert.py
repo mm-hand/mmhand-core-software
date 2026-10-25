@@ -38,11 +38,15 @@ def test_failed_calibration_keeps_actual_root_cause_and_failed_joints(hand, term
     assert hand._application_busy is None
 
 
-def test_failed_joint_list_falls_back_to_incomplete_selected_joints(hand):
+def test_incomplete_selected_joints_are_not_reported_as_failed(hand):
+    """准备/中断阶段没开始的关节不是“失败”，也不再列成长名单。"""
     item = begin_operation(hand)
     completion(hand, ok=False, message='calibration interrupted', terminal_status='HOST_FAILED',
                joint_mask=(1 << 1) | (1 << 4), completed_joint_mask=1 << 1)
-    assert 'Failed joints: J04' in item['calibration_alert']['message']
+    message = item['calibration_alert']['message']
+    assert 'calibration interrupted' in message
+    assert 'Failed joints' not in message
+    assert 'Please try again.' in message
 
 
 def test_failure_includes_record_joint_and_retains_successful_joint_warning(hand):

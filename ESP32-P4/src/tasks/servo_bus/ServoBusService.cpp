@@ -226,6 +226,14 @@ static ServoBatchApplyResult applyServoTargetBatch(
                                           commandDecisions[i].appliedAbs,
                                           cmd.speed,
                                           cmd.acc)) {
+            FW_LOG_WARN_PRINTF(
+                "[SERVO TARGET] reject ch=%u id=%u online=%u reliable=%u mt=%u torqueOff=%u\r\n",
+                (unsigned)cmd.motorChannel,
+                (unsigned)commandRoutes[i].servoId,
+                (unsigned)commandDrivers[i]->isOnline(commandRoutes[i].servoId),
+                (unsigned)commandDrivers[i]->isAbsoluteReliable(commandRoutes[i].servoId),
+                (unsigned)commandDrivers[i]->isMultiTurnConfigured(commandRoutes[i].servoId),
+                (unsigned)commandDrivers[i]->isTorqueDisabled(commandRoutes[i].servoId));
             for (uint8_t busIndex = 0; busIndex < NUM_BUSES; ++busIndex) {
                 FeetechServoDriver* driver = servoBusRegistry().driver(busIndex);
                 if (driver) driver->clearQueuedTargets();

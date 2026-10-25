@@ -513,7 +513,9 @@ def test_import_activates_only_after_readback_and_resets_only_file_scope(hand, m
     assert (0 not in hand._manual_drafts) == ok
     assert 1 in hand._manual_drafts
     if not ok:
-        assert hand.application_snapshot()['joints'][0]['joint_quality'] == ['FAILED']
+        # 整包加载失败时没有关节被实际尝试；不能把关节标成校准失败。
+        assert hand.application_snapshot()['joints'][0]['joint_quality'] == ['PENDING']
+        assert 0 not in hand._joint_transactions
 
 def test_cancelled_import_remains_busy_until_worker_leaves_and_never_activates(hand, monkeypatch):
     monkeypatch.setattr('desktop.core.calibration_workflow.validate_calibration_snapshot_for_load', lambda _: None)

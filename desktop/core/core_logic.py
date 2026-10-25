@@ -2126,7 +2126,9 @@ class HandController:
             if not remaining:
                 return True, plan.success_message, success, 0, result_token
             if self._servo_rebase_zero_capture_mask:
-                return rejected(f"{plan.label} partly completed; new trusted feedback/JSON save unconfirmed")
+                return rejected(
+                    f"{plan.label} partly completed; failed: {self._format_motor_mask(remaining)}; "
+                    "new trusted feedback/JSON save unconfirmed")
             return rejected(f"{plan.label} failed: {self._format_motor_mask(remaining)}")
         except (OSError, DeviceStateStoreError, CalibrationSnapshotError) as exc:
             return rejected(f"{plan.label} anchor invalidation failed: {exc}")

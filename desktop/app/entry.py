@@ -19,4 +19,11 @@ def build_parser():
 def main(argv=None):
     args = build_parser().parse_args(argv)
     from desktop.app.ui_runner import run_ui
-    return run_ui(ros2_enabled=not args.no_ros2)
+    from desktop.core.session_log import close_session_log, log_session, start_session_log
+    session_path = start_session_log()
+    if session_path:
+        log_session('SESSION', f'log file {session_path}')
+    try:
+        return run_ui(ros2_enabled=not args.no_ros2)
+    finally:
+        close_session_log()

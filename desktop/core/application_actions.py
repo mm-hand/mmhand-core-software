@@ -27,7 +27,7 @@ from .calibration_diagnostics import (
 )
 from .data_recording.recorder import DataSessionRecorder
 from .host_calibration.config import joint_motors, shorten_sign
-from .session_log import log_session, session_log_since
+from .session_log import close_session_log, log_session, session_log_since
 from .communication.connection_diagnostics import describe_connection_failure
 from .console_snapshot import enrich_snapshot, motor_quality
 from .id_actions import IdResetActions
@@ -70,6 +70,30 @@ def validate_manual_pair(minimum: int, maximum: int) -> int:
     if not 0 < span < 8192:
         raise ValueError('Manual endpoints are equal or reversed. Capture again; endpoints are never swapped automatically.')
     return span
+
+
+RETRY_HINT = 'Please try again.'
+# 只有“原样再点一次可能成功”的失败才提示重试。显式操作、固件/版本、
+# 输入校验、取消和越界夹紧都需要先做别的事，提示重试会误导。
+RETRY_HINT_EXCLUDED = (
+    'clear faults', 'e-stop', 'estop', 'latched', 'stopped', 'firmware',
+    'invalid', 'exceeds', 'must contain', 'select', 'no automatic retry',
+    'shutting down', 'still finishing', 'cancelled',
+    'would require clamping', 'outside the permitted workspace',
+)
+
+
+def retry_hint(message: str) -> str:
+    """给可重试的失败消息追加统一提示；不适用时原样返回。"""
+    text = str(message or '').strip()
+    if not text:
+        return text
+    lowered = text.lower()
+    if any(marker in lowered for marker in RETRY_HINT_EXCLUDED):
+        return text
+    if lowered.endswith(RETRY_HINT.lower()):
+        return text
+    return f'{text} {RETRY_HINT}'
 
 
 class ApplicationActions(IdResetActions):
@@ -283,6 +307,7 @@ class ApplicationActions(IdResetActions):
         self.disconnect_tactile_serial()
         self.shutdown(stop_lower=True)
         self._calibration_workflow._executor.shutdown(wait=True, cancel_futures=True)
+        close_session_log()
 
     def acknowledge_calibration_alert(self, operation_id):
         """Mark one calibration result dialog as shown; survives page reloads."""
@@ -1006,19 +1031,19 @@ class ApplicationActions(IdResetActions):
         self._recorder.event('calibration_phase', source='CALIB', detail=f'{event.phase}: {event.message}')
         with self._application_lock:
             if self._import_operation_id and event.phase == 'import':
+                # 导入是整包操作。数据已安装但坐标恢复失败时，只报告恢复问题，
+                # 不能把文件范围内所有关节标成校准失败（它们的数据没有被逐个尝试）。
+                installed = bool(event.ok or event.details.get('activated'))
                 for j in range(ENCODER_COUNT):
-                    if self._import_scope & (1 << j):
-                        if event.ok:
-                            self._manual_drafts.pop(j, None)
-                            self._joint_transactions.pop(j, None)
-                            self._motor_transactions.pop(j, None)
-                            pair = self._import_manual_pairs.get(j)
-                            if pair is not None:
-                                self._manual_saved_pairs[j] = pair
-                            else:
-                                self._manual_saved_pairs.pop(j, None)
+                    if installed and self._import_scope & (1 << j):
+                        self._manual_drafts.pop(j, None)
+                        self._joint_transactions.pop(j, None)
+                        self._motor_transactions.pop(j, None)
+                        pair = self._import_manual_pairs.get(j)
+                        if pair is not None:
+                            self._manual_saved_pairs[j] = pair
                         else:
-                            self._joint_transactions[j] = self._motor_transactions[j] = 'FAILED'
+                            self._manual_saved_pairs.pop(j, None)
                 self._finish_application_operation(self._import_operation_id, event.ok, event.message, phase='import')
                 self._import_operation_id = None
                 return
@@ -1061,12 +1086,13 @@ class ApplicationActions(IdResetActions):
                 warned = (terminal == 'WARN' or summary['active']
                           or any(record.get('status') == 'WARN' for record in records))
                 if failed or warned:
-                    if failed and not failed_mask and not event.ok:
-                        failed_mask = event.joint_mask & ~int(event.details.get('completed_joint_mask', 0) or 0)
+                    # 只列真正失败过的关节；准备阶段失败时没有关节开始，不能再把整批列成 FAILED。
                     messages = [event.message]
                     joints = [f'J{j:02d}' for j in range(ENCODER_COUNT) if failed_mask & (1 << j)]
                     if joints:
                         messages.append('Failed joints: ' + ', '.join(joints))
+                    if failed and retry_hint(event.message) != event.message:
+                        messages.append(RETRY_HINT)
                     if summary['active']:
                         messages.append(summary['message'])
                     elif warned:

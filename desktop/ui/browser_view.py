@@ -9,6 +9,7 @@
 """
 import time
 from nicegui import core, ui
+from desktop.core.application_actions import retry_hint
 from . import refresh_policy as policy
 from .web import renumber_motors, renumber_tactile, joint_calibration, motor_calibration, feedback_control, direct_control
 from .web import replay, plots, tactile, diagnostics, control_parameters
@@ -274,12 +275,30 @@ def build_page(hand):
             calibration_message.set_text(alert['message'])
             hand.acknowledge_calibration_alert(operation_id)
             calibration_dialog.open()
+
+    displayed_failed_operations = None
+    def refresh_operation_failures(snapshot):
+        """异步操作失败也立即提示；历史失败只在首次刷新时登记，不重复弹。"""
+        nonlocal displayed_failed_operations
+        failed = [op for op in snapshot.get('operations', ()) if op.get('status') == 'FAILED']
+        if displayed_failed_operations is None:
+            displayed_failed_operations = {op['operation_id'] for op in failed}
+            return
+        for operation in failed:
+            operation_id = operation['operation_id']
+            if operation_id in displayed_failed_operations:
+                continue
+            displayed_failed_operations.add(operation_id)
+            if operation.get('calibration_alert'):
+                continue
+            ui.notify(retry_hint(operation.get('message') or 'Operation failed'),
+                      type='negative', timeout=8000)
     def act(action):
         try:
             result = action()
             if not result.accepted:
                 hand.log_operation('Rejected: ' + result.message)
-                ui.notify(result.message, type='warning')
+                ui.notify(retry_hint(result.message), type='warning')
         except Exception as exc:
             hand.log_operation(f'Operation failed: {exc}')
             ui.notify(str(exc), type='negative')
@@ -446,6 +465,7 @@ def build_page(hand):
         snapshot = hand.application_snapshot(include_curves=False)
         refresh_firmware_alerts(snapshot)
         refresh_calibration_alerts(snapshot)
+        refresh_operation_failures(snapshot)
         choices = {d['port']: f"{d['port']} · {d['description']}" for d in snapshot['devices']}
         for name, state in snapshot['connections'].items():
             selector = selectors[name]

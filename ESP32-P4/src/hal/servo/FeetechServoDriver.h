@@ -147,7 +147,13 @@ public:
             return false;
         }
         if (_torqueDisabled[id]) {
-            if (!setTorqueEnabled(id, true)) return false;
+            // 单台舵机偶发丢一次 ACK 不应否决整批目标；确认成功后才继续。
+            bool enabled = false;
+            for (uint8_t attempt = 0; attempt < 3 && !enabled; ++attempt) {
+                if (attempt != 0) delay(kMultiTurnConfigDelayMs);
+                enabled = setTorqueEnabled(id, true);
+            }
+            if (!enabled) return false;
         }
 
         _writeIDs[_writeCount] = id;
@@ -437,6 +443,11 @@ public:
         return id <= MAX_SERVO_ID && _multiTurnConfigured[id];
     }
 
+    bool isTorqueDisabled(uint8_t id) const
+    {
+        return id <= MAX_SERVO_ID && _torqueDisabled[id];
+    }
+
     /** 开关单台舵机扭矩，并同步维护驱动侧扭矩缓存。 */
     bool setTorqueEnabled(uint8_t id, bool enabled)
     {
@@ -475,14 +486,19 @@ public:
         return true;
     }
 
-    /** 完整ABS必须精确匹配；禁止取模匹配或软件补圈。 */
+    /** 完整ABS必须匹配；只容忍关扭矩回弹的少量计数，禁止取模/整圈兼容。 */
     bool confirmAbsoluteRestore(uint8_t id, uint32_t baselineSequence)
     {
         if (id > MAX_SERVO_ID) return false;
         ServoFeedbackInternal& fb = _feedback[id];
         if (!fb.restorePending || !fb.online || !_multiTurnConfigured[id] ||
-            fb.feedbackSequence == baselineSequence ||
-            fb.absolutePosition != fb.restoreTarget) return false;
+            fb.feedbackSequence == baselineSequence) return false;
+        // 0x0B 写入后偶尔回弹 1–3 个计数（约 0.09°–0.26°）；整圈差是 4096，
+        // 远大于该容差，所以仍不会放过单圈相位或差整圈的值。
+        constexpr int32_t kRestoreToleranceCounts = 4;
+        const int32_t restoreError = fb.absolutePosition - fb.restoreTarget;
+        if (restoreError < -kRestoreToleranceCounts ||
+            restoreError > kRestoreToleranceCounts) return false;
         fb.restorePending = false;
         fb.absoluteReliable = true;
         fb.offlineLastTrustedAbs = fb.absolutePosition;

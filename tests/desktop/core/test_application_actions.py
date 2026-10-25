@@ -6,7 +6,7 @@ import time
 import queue
 from unittest.mock import Mock
 import pytest
-from desktop.core.application_actions import validate_manual_pair
+from desktop.core.application_actions import retry_hint, validate_manual_pair
 from desktop.core.hand_backend import HandBackend
 from desktop.core.protocol import SYSTEM_STATE_READY, SYSTEM_STATE_RUN_DIRECT, HOST_PROTOCOL_VERSION, STATE_SYNC_ALL
 from desktop.core.core_logic import HandController, ServoRebaseZeroResult
@@ -722,3 +722,21 @@ def test_port_discovery_failure_clears_stale_choices(hand):
         time.sleep(0.01)
     assert snapshot['devices'] == []
     assert 'USB enumeration failed' in snapshot['discovery_error']
+
+
+def test_retry_hint_only_for_retryable_failures():
+    assert retry_hint('Enable preparation was not confirmed. Check the P4 rejection reason.').endswith(
+        'Please try again.')
+    assert retry_hint('workspace servo feedback recovery failed: partly completed').endswith(
+        'Please try again.')
+    for text in (
+        'Device is stopped (E-STOP latched); use the top-right Clear Faults button first',
+        'Enable blocked: holding the current pose would require clamping. J00, J20',
+        'Enable blocked: current pose is outside the permitted workspace.',
+        'M00 firmware 3.9 is older than 3.10',
+        'J00 target exceeds URDF limits [-10, 10]',
+        'No joint selected',
+        'ABS zero may have completed; new trusted feedback/JSON save is unconfirmed. No automatic retry.',
+        'Application is shutting down',
+    ):
+        assert retry_hint(text) == text
