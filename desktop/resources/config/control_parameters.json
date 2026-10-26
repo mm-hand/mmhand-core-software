@@ -1,13 +1,13 @@
 {
   "schema_version": 7,
-  "revision": 555,
-  "ramp_revision": 134,
+  "revision": 559,
+  "ramp_revision": 138,
   "joint_kp": {
-    "aa": 0.4,
-    "mcp": 0.8,
-    "pip": 0.8,
-    "dip": 0.8,
-    "cmc": 0.8
+    "aa": 0.45,
+    "mcp": 1.0,
+    "pip": 1.0,
+    "dip": 1.0,
+    "cmc": 1.0
   },
   "joint_ki": {
     "aa": 0.0,
@@ -97,7 +97,7 @@
     "max_gap_ms": 500
   },
   "adaptive_kp": {
-    "enabled": 0,
+    "enabled": 1,
     "lag_limit_s": 0.12,
     "overshoot_deg": 2.0
   }
