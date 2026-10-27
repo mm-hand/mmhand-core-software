@@ -11,15 +11,54 @@ measurements remain unknown; presentation labels never authorize motion.
 状态所有权：不拥有设备状态，不授权控制。
 禁止依赖：禁止依赖 UI 或改变硬件判据。
 """
+import math
+
 from .host_calibration.math import forward_encoder_delta, deg_to_encoder_count, f32
 from .host_calibration.config import joint_motors
 from .motor_mapping import MOTOR_TO_JOINT_INDEX
 from .calibration_snapshot import parse_mask
+from .angle_mapping import get_spec
+from .data_models import resolve_joint_workspace_range
 from .protocol import (
+    ENCODER_COUNT,
     ServoOnlineCheck,
     DUAL_TENDON_JOINT_INDICES, ControlMode, SERVO_TARGET_OWNER_CONTROL,
     SYSTEM_STATE_RUN_FEEDBACK, SYSTEM_STATE_RUN_DIRECT,
 )
+
+_SYSTEM_STATE_LABELS = {
+    0: 'LOCKED', 1: 'IDLE', 2: 'RUN', 4: 'CALIB', 5: 'READY', 6: 'DIRECT',
+    8: 'ROPE INIT', 9: 'RECOVERY',
+}
+
+
+def p4_state_badge(state, hand, fresh=True):
+    """P4 状态编号，以及未就绪时的第一个越界关节；解释 Enable 为什么被拒。"""
+    if not fresh or not getattr(state, 'has_system_status_data', False):
+        return 'UNKNOWN'
+    code = int(getattr(state, 'system_state', -1))
+    label = f'{_SYSTEM_STATE_LABELS.get(code, str(code))} ({code})'
+    if code in (2, 5, 6, 8):
+        return label
+    mapping_version = getattr(hand, '_workspace_mapping_version', 0)
+    urdf_crc = getattr(hand, '_workspace_urdf_crc', 0)
+    violation = ''
+    for joint in range(ENCODER_COUNT):
+        encoder = state.encoders[joint]
+        value = encoder.current_angle_deg
+        if encoder.angle_error or not isinstance(value, (int, float)) or not math.isfinite(value):
+            continue
+        lo, hi = get_spec(joint).urdf_range_deg
+        workspace = resolve_joint_workspace_range(state, joint, lo, hi, mapping_version, urdf_crc)
+        if not workspace.ready:
+            return f'{label}: J{joint:02d} {workspace.reason}'
+        if value < lo:
+            violation = f'J{joint:02d} low by {lo - value:.2f}°'
+            break
+        if value > hi:
+            violation = f'J{joint:02d} high by {value - hi:.2f}°'
+            break
+    return f'{label}: {violation}' if violation else label
 
 
 def joint_quality(valid, span, urdf_span, draft_status='', fresh=True):
@@ -190,6 +229,7 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
     calibration_badge = calibration_status_badge(state, fresh)
     snapshot['badges'] = {
         'System': snapshot['device'], 'Calibration': calibration_badge,
+        'P4': p4_state_badge(state, hand, fresh),
         'Overload': 'ACTIVE' if fault_fresh and any(state.servo_overload_fault) or fresh and state.has_servo_route_status and state.servo_bus_overload_mask else 'CLEAR' if fault_fresh and state.has_servo_route_status else 'UNKNOWN',
         'Collision': 'HOLD' if fresh and state.feedback_collision_hold_bitmap else 'ARMED' if fresh and state.feedback_collision_armed_bitmap else 'OFF' if fresh and state.has_feedback_collision_status else 'UNKNOWN',
         'Multi-turn': 'UNKNOWN' if not fresh or not state.has_connectivity_status or not state.servo_online_bitmap else 'MISSING' if state.multi_turn_unknown_bitmap & state.servo_online_bitmap else 'KNOWN'}

@@ -51,3 +51,6 @@ docs/debug/pid-autotuning-*.md
 # Runtime diagnostics and recordings share the repository logs tree
 /logs/
 desktop/resources/config/backups/
+
+# Arduino build directory used on Linux (.build/p4)
+.build/

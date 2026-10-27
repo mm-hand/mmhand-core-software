@@ -662,6 +662,9 @@ class ApplicationActions(IdResetActions):
         motors = sum(1 << m for j in joints for m in joint_motors(j))
         if not mask or not self.set_active_scope(motors, mask, True):
             return False, 'Scope setup failed. Check online devices, feedback and calibration.'
+        recovered, recovery_message = self._recover_enable_workspace(joints, mask, epoch)
+        if not recovered:
+            return False, recovery_message
         with self._application_lock:
             if epoch != self._application_epoch:
                 return False, 'Enable cancelled'
@@ -674,7 +677,7 @@ class ApplicationActions(IdResetActions):
         ok = self._wait_application(
             lambda s: self.is_comm_connected() and s.protocol_compatible
             and s.has_system_status_data
-            and s.system_state in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY)
+            and s.system_state == SYSTEM_STATE_READY
             and not s.control_enabled and not s.servo_target_owner
             and s.control_mode == ControlMode.JOINT_ANGLE.value
             and s.has_active_scope_status
@@ -700,6 +703,9 @@ class ApplicationActions(IdResetActions):
                 details.append(f'Manual calibration missing for joint mask 0x{missing_manual:06X}')
             if missing_auto:
                 details.append(f'Motor calibration missing for joint mask 0x{missing_auto:06X}')
+            ws_blocked, ws_clamped, ws_message = self._enable_holding_workspace(state, joints, mask)
+            if (ws_blocked or ws_clamped) and ws_message:
+                details.append(ws_message)
             return False, 'Enable preparation was not confirmed. ' + ('; '.join(details) if details else 'Check the P4 rejection reason; clear a latched STOP explicitly with Clear Faults.')
         state = self.get_state_snapshot()
         if not self._mapped_feedback_fresh(state):
@@ -752,6 +758,48 @@ class ApplicationActions(IdResetActions):
 
         return confirmed, 'Selected joints enabled; closed-loop holding the current pose' if confirmed else 'P4 did not enter closed-loop hold; inspect its rejection reason'
 
+    def _enable_holding_workspace(self, state, joints, mask):
+        """以“当前姿态”为保持目标做一次工作区检查；返回 (blocked, clamped, message)。"""
+        values = list(state.target_angles)
+        for joint in joints:
+            encoder = state.encoders[joint]
+            if encoder.angle_error or not math.isfinite(encoder.current_angle_deg):
+                continue
+            values[joint] = encoder.current_angle_deg
+        _, blocked, clamped, message = self._apply_joint_workspace_guard(
+            state, values, source='Enable', command_joint_mask=mask)
+        return blocked, clamped, message
+
+    def _recover_enable_workspace(self, joints, mask, epoch):
+        """Enable 前把低于下界的关节拉回工作区；返回 (ok, failure_message)。
+
+        P4 的 Rope Init（0xE9）就是为此设计的动作：只收绳、8 秒超时、连续 3 帧
+        进入工作区才算成功。这里不暴露给操作员，Enable 自动执行一次。
+        """
+        state = self.get_state_snapshot()
+        blocked, clamped, message = self._enable_holding_workspace(state, joints, mask)
+        if blocked or not clamped:
+            # 缺标定/映射问题 Rope Init 修不了；不越界则无需回正。
+            return True, ''
+        self._wait_application(
+            lambda s: s.system_state in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY,
+                                        SYSTEM_STATE_RECOVERY_REQUIRED),
+            epoch, 1)
+        baseline = int(self.get_state_snapshot().rope_init_sequence)
+        if not self.rope_init(mask):
+            return False, f'Enable blocked: {message}. Automatic recovery was not accepted by the P4.'
+        if not self._wait_application(
+                lambda s: s.rope_init_sequence != baseline and s.rope_init_status in (2, 3),
+                epoch, 10):
+            return False, f'Enable blocked: {message}. Automatic recovery did not finish within 10 s.'
+        state = self.get_state_snapshot()
+        if int(state.rope_init_status) != 2:
+            return False, (f'Enable blocked: {message}. Automatic recovery failed '
+                           f'(P4 reason={int(state.rope_init_reason)}).')
+        blocked, clamped, message = self._enable_holding_workspace(state, joints, mask)
+        if blocked or clamped:
+            return False, f'Enable blocked: {message}. Automatic recovery left the joint outside its workspace.'
+        return True, ''
 
     def stop_motion(self, *, emergency=False, source='global STOP'):
         # 不排在任何阻塞事务之后；新操作仍须等旧 worker 收尾。

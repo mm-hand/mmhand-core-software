@@ -112,9 +112,8 @@ def joint_preparation_device(hand, monkeypatch, *, ready_state=SYSTEM_STATE_READ
     return comm, scope_writer
 
 
-@pytest.mark.parametrize('ready_state', [SYSTEM_STATE_IDLE, SYSTEM_STATE_READY])
-def test_joint_enable_holds_current_pose_and_confirms_actual_motion_owner(hand, monkeypatch, ready_state):
-    comm, scope = joint_preparation_device(hand, monkeypatch, ready_state=ready_state)
+def test_joint_enable_holds_current_pose_and_confirms_actual_motion_owner(hand, monkeypatch):
+    comm, scope = joint_preparation_device(hand, monkeypatch)
     hand._selected_joints = (3,)
     comm.tx_queue.put_nowait(('motor_pos_abs_one', 3, 500))
     comm.tx_queue.put_nowait('start')
@@ -196,10 +195,26 @@ def test_joint_enable_never_clamps_the_current_pose(hand, monkeypatch):
     comm, _ = joint_preparation_device(hand, monkeypatch)
     monkeypatch.setattr(hand, '_apply_joint_workspace_guard',
                         lambda state, values, **kwargs: (values, [], [3], 'J03 outside limits'))
+    # 回正被 P4 拒绝时 Enable 仍然只能失败：绝不把夹回后的目标当成“保持当前姿态”。
+    monkeypatch.setattr(hand, 'rope_init', lambda mask: False)
     item = wait_operation(hand, hand.request_enable())
     assert item['status'] == 'FAILED'
     assert 'J03 outside limits' in item['message']
-    assert list(comm.tx_queue.queue) == ['start']
+    assert not any(isinstance(c, tuple) and c[0] == 'joint_target_run_masked'
+                   for c in comm.tx_queue.queue)
+
+
+def test_joint_enable_waits_for_ready_not_idle(hand, monkeypatch):
+    """P4 在 IDLE 与 RECOVERY_REQUIRED 之间抖动时，主机不得把 IDLE 当成“已就绪”。"""
+    comm, _ = joint_preparation_device(hand, monkeypatch, ready_state=SYSTEM_STATE_IDLE)
+    original = hand._wait_application
+    monkeypatch.setattr(hand, '_wait_application',
+                        lambda predicate, epoch, timeout=0: original(predicate, epoch, 0.1))
+    item = wait_operation(hand, hand.request_enable())
+    assert item['status'] == 'FAILED'
+    assert 'not confirmed' in item['message']
+    assert not any(isinstance(c, tuple) and c[0] == 'joint_target_run_masked'
+                   for c in comm.tx_queue.queue)
 
 
 @pytest.mark.parametrize('status_ms,sample_ms,age,expected', [

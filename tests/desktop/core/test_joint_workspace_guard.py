@@ -633,3 +633,17 @@ def test_hold_or_passive_joint_target_keeps_direct_mode_guard(
     assert not result.sent
     assert controller.get_control_mode() == ControlMode.DIRECT_MOTOR
     assert list(comm.tx_queue.queue) == queued_before
+
+
+def test_workspace_clamp_message_names_joint_and_delta():
+    """Enable 失败信息必须说清哪个关节、差多少，而不是只报 clamped。"""
+    state = _ready_state()
+    backend = HandBackend(controller=_Controller(state))
+    lo = get_spec(0).urdf_range_deg[0]
+    targets = [lo - 0.62] + [0.0] * (ENCODER_COUNT - 1)
+
+    result = backend.send_joint_targets(targets, source='Enable', live=False)
+
+    assert result.clamped == [0]
+    assert 'J00' in result.message and 'below min' in result.message
+    assert '0.62' in result.message

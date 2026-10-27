@@ -150,8 +150,10 @@ void stepRopeInitController(SystemRuntimeContext* sharedData, uint32_t nowMs)
             finish(sharedData, false, ROPE_INIT_REASON_AUTO_REQUIRED, nowMs);
             return;
         }
-        if (mapped.outsideCounts[joint] >=
-            -kFeedbackReadyEnterOutsideToleranceCounts) {
+        // Enable 把“当前姿态”当保持目标下发，上位机要求角度 >= URDF 下限（0 容差）。
+        // 所以回正必须收进下限里侧（outsideCounts 归零），不能像 READY 那样停在
+        // −24 counts 的容差带里，否则回正完主机仍然会夹回。
+        if (mapped.outsideCounts[joint] >= 0) {
             continue;
         }
 

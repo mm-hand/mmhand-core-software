@@ -364,7 +364,7 @@ def build_page(hand):
             save = ui.button('Save Data: ON', on_click=lambda: act(lambda: hand.request_recording(not hand.application_snapshot(include_curves=False)['recording']['enabled']))).props('dense outline')
             top_stop = ui.button('■ STOP', on_click=top_stop_action, color='negative').props('dense').classes('font-bold px-5')
         with ui.row().classes('status-bar items-center w-full'):
-            badges = {name: ui.label().classes('status-chip text-xs cursor-pointer') for name in ['System', 'Calibration', 'Mode', 'Overload', 'Collision', 'Multi-turn']}
+            badges = {name: ui.label().classes('status-chip text-xs cursor-pointer') for name in ['System', 'P4', 'Calibration', 'Mode', 'Overload', 'Collision', 'Multi-turn']}
         with ui.tabs(value=TABS[0]).classes('console-tabs w-full').props('dense no-caps active-color=primary outside-arrows mobile-arrows') as tabs:
             for name in TABS: ui.tab(name)
         def leave_direct_control():

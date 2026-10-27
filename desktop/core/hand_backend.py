@@ -405,6 +405,7 @@ class HandBackend(ApplicationActions):
         blocked: List[int] = []
         clamped: List[int] = []
         reasons: List[str] = []
+        outside: List[str] = []
         for joint_idx in range(ENCODER_COUNT):
             # 单行UI、Replay和ROS2均只校验本帧真正控制的关节，未参与关节不应拖垮整包。
             if (guard_mask & (1 << joint_idx)) == 0:
@@ -422,8 +423,14 @@ class HandBackend(ApplicationActions):
                 blocked.append(joint_idx)
                 reasons.append(f"J{joint_idx:02d} {workspace.reason}")
                 continue
-            bounded = workspace.clamp(guarded[joint_idx])
-            if abs(bounded - guarded[joint_idx]) > 1e-6:
+            requested = guarded[joint_idx]
+            bounded = workspace.clamp(requested)
+            if abs(bounded - requested) > 1e-6:
+                lo, hi = spec.urdf_range_deg
+                if requested < lo:
+                    outside.append(f"J{joint_idx:02d} {requested:+.2f}° below min {lo:.2f}° by {lo - requested:.2f}°")
+                else:
+                    outside.append(f"J{joint_idx:02d} {requested:+.2f}° above max {hi:.2f}° by {requested - hi:.2f}°")
                 guarded[joint_idx] = bounded
                 clamped.append(joint_idx)
 
@@ -435,9 +442,8 @@ class HandBackend(ApplicationActions):
 
         message = ""
         if clamped:
-            joints = ", ".join(f"J{idx:02d}" for idx in clamped)
             suffix = f" ({source})" if source else ""
-            message = f"Joint targets clamped to [URDF Min, URDF Max]: {joints}{suffix}"
+            message = "Joint targets outside [URDF Min, URDF Max]: " + "; ".join(outside) + suffix
         return guarded, blocked, clamped, message
 
     def send_joint_targets(
