@@ -35,8 +35,6 @@ namespace p4::safety { /* PRODUCTION_RULE_MAPPING */ }
 static int16_t normalizeServoRawSingleTurn(int32_t value) { return mmhand::servo::normalizeRawSingleTurn(value); }
 struct SystemRuntimeContext {
     uint32_t multi_turn_unknown_bitmap = 3;
-    uint32_t restore_multi_turn_restored_mask = 0, restore_multi_turn_rejected_mask = 0;
-    uint32_t restore_multi_turn_result_token = 0;
 };
 static void sharedAtomicFetchAnd(uint32_t* value, uint32_t mask) { *value &= mask; }
 static void sharedAtomicStore(uint32_t* value, uint32_t data) { *value = data; }
@@ -166,20 +164,6 @@ static void recoveryScenario(const std::string& name) {
     if (name == "unsafe") safe=false;
     if (name == "failure") driver.fail=true;
     if (name == "pending") writer.defer=true;
-    if (name.rfind("host_",0)==0) {
-        ServoHostRestoreContext request{}; request.active=true; request.token=7;
-        request.requestMask=request.pendingMask=1; request.logicalAbs[0]=8392;
-        if (name=="host_failure") driver.fail=true;
-        if (name=="host_unsafe") safe=false;
-        if (name=="host_pending") writer.defer=true;
-        stepHostMultiTurnRestore(&runtime,&request,&anchors,&writer);
-        if (name=="host_pending") require(request.active && runtime.restore_multi_turn_result_token==0,
-            "unfinished transaction published success");
-        else require(!request.active && runtime.restore_multi_turn_result_token==7 &&
-            (driver.fail || !safe ? runtime.restore_multi_turn_rejected_mask==1 : runtime.restore_multi_turn_restored_mask==1),
-            "host completion lost its per-motor outcome");
-        return;
-    }
     processServoOnlineTransitions(&runtime,&anchors,&online,&writer);
     if (name=="no_anchor" || name=="unsafe") require(driver.writes==0 && runtime.multi_turn_unknown_bitmap==3,
         "missing basis or unsafe state changed hardware");
@@ -219,10 +203,10 @@ def hotplug_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dic
     assert compiler is not None, "A native C++ compiler is required; this test may not skip"
     directory = tmp_path_factory.mktemp("servo-hotplug-native")
     service = (P4_SRC / "tasks/servo_bus/ServoBusService.cpp").read_text(encoding="utf-8")
-    names = ("struct ServoHostRestoreContext {", "struct ServoHotplugRecoveryAnchors {",
-             "struct ServoOnlineRecoveryContext {", "static void finishHostMultiTurnRestore(",
+    names = ("struct ServoHotplugRecoveryAnchors {",
+             "struct ServoOnlineRecoveryContext {",
              "static int32_t restoreTargetFromAnchor(", "static void processServoOnlineTransitions(",
-             "static uint32_t cacheServoPowerLossSnapshots(", "static bool stepHostMultiTurnRestore(")
+             "static uint32_t cacheServoPowerLossSnapshots(")
     code = "\n".join(_production_function(service, name) + (";" if name.startswith("struct") else "") for name in names)
     mapping = _production_function((P4_SRC / "safety/SafetyRuleRegistry.cpp").read_text(), "SafetyRuleId ruleForServoRejectReason(")
     source = directory / "servo_hotplug_test.cpp"
@@ -243,7 +227,7 @@ def hotplug_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dic
 
 SCENARIOS = ("safety_checked_conversion", "safety_identity", "safety_hard_boundary",
     "safety_unknown_before_range", "safety_overflow", "nearest", "freeze", "success",
-    "no_anchor", "unsafe", "failure", "pending", "host_success", "host_failure", "host_unsafe", "host_pending")
+    "no_anchor", "unsafe", "failure", "pending")
 
 @pytest.mark.parametrize("scenario", SCENARIOS)
 def test_abs_safety_and_hotplug_recovery(

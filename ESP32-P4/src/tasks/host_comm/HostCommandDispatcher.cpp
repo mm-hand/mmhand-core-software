@@ -249,7 +249,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
     if (sharedAtomicLoad(&sharedData->direct_target_request_generation) !=
             sharedAtomicLoad(&sharedData->direct_target_result_generation) &&
         (cmd == CMD_MOTOR_ABS_ZERO ||
-         cmd == CMD_RESTORE_MULTITURN || cmd == CMD_ACTIVE_SCOPE)) {
+         cmd == CMD_TRUST_MULTITURN || cmd == CMD_ACTIVE_SCOPE)) {
         sendProtoAckPacket(cmd, sharedData->system_state,
                            PROTO_ACK_STATUS_UNSUPPORTED_MODE);
         return;
@@ -489,63 +489,42 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         return;
     }
 
-    if (cmd == CMD_RESTORE_MULTITURN)
+    if (cmd == CMD_TRUST_MULTITURN)
     {
         uint8_t status = PROTO_ACK_STATUS_OK;
-        if (frameLen < 1 + kRestoreMultiTurnPayloadBytes) {
+        const uint8_t state = sharedData->system_state;
+        const bool idle = state == SYSTEM_STATE_UNCONTROLLABLE ||
+                          state == SYSTEM_STATE_IDLE ||
+                          state == SYSTEM_STATE_READY ||
+                          state == SYSTEM_STATE_RECOVERY_REQUIRED;
+        const uint32_t motorMask =
+            frameLen >= 1 + kTrustMultiTurnPayloadBytes
+                ? (readU32BigEndian(frame + 1) & validMotorChannelMask())
+                : 0;
+        if (frameLen < 1 + kTrustMultiTurnPayloadBytes || motorMask == 0) {
+            status = PROTO_ACK_STATUS_INVALID_DATA;
+        } else if (!idle || sharedData->control_enabled != 0 ||
+                   sharedData->servo_target_owner != SERVO_TARGET_OWNER_NONE ||
+                   sharedAtomicLoad(&sharedData->emergency_stop_latched) != 0) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-        } else if (sharedAtomicLoad(&sharedData->restore_multi_turn_request_token) !=
-                   sharedAtomicLoad(&sharedData->restore_multi_turn_result_token)) {
-            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-        } else if (servoRebaseZeroPending(sharedData)) {
-            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-        } else if ((sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap) &
-                    validMotorChannelMask()) == 0) {
-            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-            FW_LOG_INFO_PRINTLN(
-                "[UPPER] RESTORE_MULTITURN rejected: all motor turns are already trusted");
         } else {
-            const uint32_t motorMask = readU32BigEndian(frame + 1);
-            const uint32_t unknownMask =
-                sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap) &
-                validMotorChannelMask();
-            const uint32_t onlineMask =
-                sharedAtomicLoad(&sharedData->servo_online_bitmap) &
-                validMotorChannelMask();
-            int32_t motorAbs[SERVO_TOTAL_NUM] = {0};
-            // 仅接受在线且坐标未知的通道；配置和恢复统一由ServoBus串行执行。
-            if (motorMask == 0 ||
-                (motorMask & ~unknownMask) != 0 ||
-                (motorMask & ~onlineMask) != 0 ||
-                (motorMask & ~sharedAtomicLoad(&sharedData->servo_logical_range_valid_bitmap)) != 0) {
-                status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-            } else if (!parseInt32ArrayBigEndian(frame + 5,
-                                                 frameLen - 5,
-                                                 motorAbs,
-                                                 SERVO_TOTAL_NUM)) {
+            SemaphoreHandle_t lock = sharedData->commandStateMutex;
+            if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
                 status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
             } else {
-                SemaphoreHandle_t lock = sharedData->commandStateMutex;
-                if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
-                    status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-                } else {
-                    memcpy(sharedData->restore_multi_turn_abs,
-                           motorAbs,
-                           sizeof(sharedData->restore_multi_turn_abs));
-                    sharedData->restore_multi_turn_mask =
-                        motorMask & validMotorChannelMask();
-                    sharedAtomicAddFetch(&sharedData->restore_multi_turn_request_token, (uint32_t)1);
-                    if (lock) {
-                        xSemaphoreGive(lock);
-                    }
+                sharedData->trust_multi_turn_request_mask = motorMask;
+                sharedAtomicAddFetch(&sharedData->trust_multi_turn_request_token,
+                                     (uint32_t)1);
+                if (lock) {
+                    xSemaphoreGive(lock);
                 }
             }
         }
-        FW_LOG_INFO_PRINTF("[UPPER] RESTORE_MULTITURN request status=%u mask=0x%08lX token=%lu\r\n",
-                      (unsigned)status,
-                      (unsigned long)sharedData->restore_multi_turn_mask,
-                      (unsigned long)sharedAtomicLoad(&sharedData->restore_multi_turn_request_token));
-        sendProtoAckPacket(CMD_RESTORE_MULTITURN, sharedData->system_state, status);
+        FW_LOG_INFO_PRINTF(
+            "[UPPER] TRUST_MULTITURN request status=%u mask=0x%08lX\r\n",
+            (unsigned)status,
+            (unsigned long)sharedData->trust_multi_turn_request_mask);
+        sendProtoAckPacket(CMD_TRUST_MULTITURN, sharedData->system_state, status);
         return;
     }
 
@@ -905,7 +884,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                 ? (readU32BigEndian(frame + 1) & validMotorChannelMask())
                 : 0;
         const uint32_t restoredMask =
-            sharedAtomicLoad(&sharedData->restore_multi_turn_restored_mask) &
+            ~sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap) &
             validMotorChannelMask();
         const uint32_t jointMask = jointMaskForMotorMask(motorMask);
         if (sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
@@ -922,8 +901,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                 (unsigned long)jointMask);
         } else {
             invalidateAutomaticCalibration(sharedData, jointMask);
-            sharedAtomicFetchAnd(
-                &sharedData->restore_multi_turn_restored_mask, ~motorMask);
             postSystemEvent(sharedData, SYSTEM_EVENT_REEVALUATE_READY);
             FW_LOG_INFO_PRINTF(
                 "[UPPER] CLEAR_CALIBRATION_SCOPE motors=0x%08lX joints=0x%08lX remainingAuto=0x%08lX\r\n",
@@ -982,8 +959,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
             } else if (!safeState || sharedData->control_enabled != 0 ||
                        sharedData->servo_target_owner != SERVO_TARGET_OWNER_NONE ||
                        servoRebaseZeroPending(sharedData) ||
-                       sharedAtomicLoad(&sharedData->restore_multi_turn_request_token) !=
-                           sharedAtomicLoad(&sharedData->restore_multi_turn_result_token) ||
                        (requestedMask & recoveryBusyMask) != 0) {
                 status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
             } else {

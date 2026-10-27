@@ -790,24 +790,6 @@ bool sendTactileFullPackets(const RemoteTactileData_t& tactile)
     return true;
 }
 
-bool sendMultiTurnRestoreResultPacket(uint32_t resultToken,
-                                      uint32_t restoredMask,
-                                      uint32_t rejectedMask)
-{
-    uint8_t buffer[24];
-    size_t idx = 0;
-    buffer[idx++] = PROTOCOL_HEADER;
-    buffer[idx++] = 0;
-    buffer[idx++] = PACKET_TYPE_MULTITURN_RESTORE_RESULT;
-    appendU32BigEndian(buffer, &idx, resultToken);
-    appendU32BigEndian(buffer, &idx, restoredMask);
-    appendU32BigEndian(buffer, &idx, rejectedMask);
-    appendU32BigEndian(buffer, &idx, p4::platform::time::monotonicMillis());
-    buffer[idx++] = PROTOCOL_TAIL;
-    buffer[1] = static_cast<uint8_t>(idx - 2U);
-    return FW_SERIAL_WRITE(buffer, idx) == idx;
-}
-
 bool sendDirectTargetResultPacket(uint32_t token,
                                            uint32_t requestedMask,
                                            uint32_t appliedMask,

@@ -29,12 +29,8 @@ struct ServoRuntimeState {
     volatile uint32_t servo_logical_range_valid_bitmap; ///< 会话可达范围有效 Mxx。
     int32_t servo_logical_range_min[SERVO_TOTAL_NUM]; ///< 会话最小 logical ABS。
     int32_t servo_logical_range_max[SERVO_TOTAL_NUM]; ///< 会话最大 logical ABS。
-    int32_t restore_multi_turn_abs[SERVO_TOTAL_NUM]; ///< New Device 候选 logical ABS。
-    volatile uint32_t restore_multi_turn_mask; ///< 请求恢复 Mxx。
-    volatile uint32_t restore_multi_turn_request_token; ///< 恢复请求代际。
-    volatile uint32_t restore_multi_turn_result_token; ///< 恢复完成代际。
-    volatile uint32_t restore_multi_turn_restored_mask; ///< 成功恢复 Mxx。
-    volatile uint32_t restore_multi_turn_rejected_mask; ///< 拒绝恢复 Mxx。
+    volatile uint32_t trust_multi_turn_request_mask; ///< 上位机对账后认账的 Mxx。
+    volatile uint32_t trust_multi_turn_request_token; ///< 认账请求代际。
     volatile uint32_t servo_rebase_zero_request_mask; ///< 当前 logical ABS 归零请求 Mxx。
     volatile uint32_t servo_rebase_zero_request_token; ///< 非零请求代际，与结果不同表示事务未完成。
     volatile uint32_t servo_rebase_zero_result_token; ///< 实际置数/标定失效均完成后发布的结果代际。

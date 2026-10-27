@@ -144,7 +144,6 @@ def test_zero_interval_disables_throttle(clock, monkeypatch):
         "joint_calibration_snapshot",
         "manual_reference",
         "servo_rebase_zero_result",
-        "multiturn_restore_result",
         "safety_event",
         "fault_status",
     ],

@@ -1,9 +1,10 @@
 {
   "schema_version": 1,
-  "protocol_version": 6,
+  "protocol_version": 7,
   "retired_command_values": [
     202,
     217,
+    218,
     222,
     231,
     234,
@@ -144,12 +145,6 @@
       "description": "去重后的结构化安全规则事件"
     },
     {
-      "name": "PACKET_TYPE_MULTITURN_RESTORE_RESULT",
-      "value": 23,
-      "timestamp": true,
-      "description": "桌面 JSON 多圈恢复异步最终结果"
-    },
-    {
       "name": "PACKET_TYPE_CONTROL_TRACE",
       "value": 24,
       "timestamp": true,
@@ -245,13 +240,6 @@
       "value": 216,
       "payload_bytes": 0,
       "description": "申请状态机进入负反馈运行"
-    },
-    {
-      "name": "CMD_RESTORE_MULTITURN",
-      "requires_handshake": true,
-      "value": 218,
-      "payload_bytes": 112,
-      "description": "按位图提交27路原生ABS恢复锚点；P4统一计算最近圈并执行"
     },
     {
       "name": "CMD_HOST_HEARTBEAT",
@@ -364,6 +352,13 @@
       "payload_bytes": 73,
       "requires_handshake": true,
       "description": "原子设置16个渐进快速换向参数（B0/vB/负载阈值/超时），版本1、修订、浮点数组、CRC32"
+    },
+    {
+      "name": "CMD_TRUST_MULTITURN",
+      "value": 225,
+      "payload_bytes": 4,
+      "requires_handshake": true,
+      "description": "按电机位图把当前原生ABS认作标定坐标系（不写电机）；上位机对账平移标定后使用，P4清除对应多圈未知位"
     }
   ],
   "proto_ack_status": {

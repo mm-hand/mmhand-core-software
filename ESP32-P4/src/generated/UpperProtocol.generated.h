@@ -11,7 +11,7 @@
 #include "../config/DimensionsConfig.h"
 
 inline constexpr uint8_t PROTOCOL_HEADER = 0xFE;
-inline constexpr uint8_t kHostProtocolVersion = 6;
+inline constexpr uint8_t kHostProtocolVersion = 7;
 inline constexpr uint8_t PROTOCOL_TAIL = 0xFF;
 inline constexpr int16_t PROTOCOL_DISCONNECT_SENTINEL = 32767;
 inline constexpr size_t kP4TimestampBytes = 4;
@@ -52,7 +52,6 @@ inline constexpr uint8_t PACKET_TYPE_SERVO_LOGICAL_RANGE = 0x13; ///< 27 路会�
 inline constexpr uint8_t PACKET_TYPE_PRODUCT_FINGERPRINT = 0x14; ///< 产品配置指纹
 inline constexpr uint8_t PACKET_TYPE_SERVO_ROUTE_STATUS = 0x15; ///< 动态舵机 BUS 路由、冲突、容量和扫描状态
 inline constexpr uint8_t PACKET_TYPE_SAFETY_EVENT = 0x16; ///< 去重后的结构化安全规则事件
-inline constexpr uint8_t PACKET_TYPE_MULTITURN_RESTORE_RESULT = 0x17; ///< 桌面 JSON 多圈恢复异步最终结果
 inline constexpr uint8_t PACKET_TYPE_CONTROL_TRACE = 0x18; ///< 同一控制周期的目标角、反馈角、舵机CMD和下位机时间
 inline constexpr uint8_t PACKET_TYPE_SERVO_REBASE_ZERO_RESULT = 0x19; ///< 硬件ABS设零事务的最终token、成功失败位图；尾108字节保留区固定为0
 inline constexpr uint8_t PACKET_TYPE_DIRECT_TARGET_RESULT = 0x1A; ///< 通用直控目标完成总线同步写后的事务结果，与机械到位独立
@@ -70,7 +69,6 @@ inline constexpr uint8_t CMD_RESET = 0xCE; ///< 清除允许恢复的系统故�
 inline constexpr uint8_t CMD_MOTOR_POS_ABS = 0xD3; ///< 通用logical ABS直控：token、实际电机位图、27路int32 counts、速度和加速度；token=0不跟踪，位图=0用当前scope
 inline constexpr uint8_t CMD_ACTIVE_SCOPE = 0xD7; ///< 同步 active joint/motor mask 与 control enable
 inline constexpr uint8_t CMD_RUN_FEEDBACK = 0xD8; ///< 申请状态机进入负反馈运行
-inline constexpr uint8_t CMD_RESTORE_MULTITURN = 0xDA; ///< 按位图提交27路原生ABS恢复锚点；P4统一计算最近圈并执行
 inline constexpr uint8_t CMD_HOST_HEARTBEAT = 0xDC; ///< 刷新上位机在线计时器，不携带业务数据
 inline constexpr uint8_t CMD_CALIB_LOAD_JOINT = 0xDF; ///< 恢复单关节唯一 Auto/LUT v4 标定快照
 inline constexpr uint8_t CMD_CALIB_LOAD_LIMITS = 0xE0; ///< 批量恢复 27 路 ABS 标定范围与有效位图
@@ -88,6 +86,7 @@ inline constexpr uint8_t CMD_CONTROL_RELEASE = 0xF6; ///< 释放普通控制权�
 inline constexpr uint8_t CMD_CONTROL_PARAMETERS_SET = 0xF8; ///< 原子设置61个控制与输入滤波参数，版本7、修订、浮点数组、CRC32
 inline constexpr uint8_t CMD_PARAMETERS_QUERY = 0xF9; ///< 按 block 读回参数修订/CRC（0=主参数，1=ramp）
 inline constexpr uint8_t CMD_CONTROL_RAMP_PARAMETERS_SET = 0xFB; ///< 原子设置16个渐进快速换向参数（B0/vB/负载阈值/超时），版本1、修订、浮点数组、CRC32
+inline constexpr uint8_t CMD_TRUST_MULTITURN = 0xE1; ///< 按电机位图把当前原生ABS认作标定坐标系（不写电机）；上位机对账平移标定后使用，P4清除对应多圈未知位
 inline constexpr uint8_t PROTO_ACK_STATUS_OK = 0; ///< 命令已同步执行成功
 inline constexpr uint8_t PROTO_ACK_STATUS_UNSUPPORTED_MODE = 1; ///< 当前状态或 owner 不允许该命令
 inline constexpr uint8_t PROTO_ACK_STATUS_QUEUED = 2; ///< 异步请求已入队，最终结果看状态包
@@ -113,7 +112,7 @@ inline constexpr uint8_t STATE_SYNC_SERVO_ONLINE_STATUS = 128; ///< 同步电机
 inline constexpr size_t kFloatPayloadBytes = 88;
 inline constexpr size_t kMotorPosAbsPayloadBytes = 119;
 inline constexpr size_t kActiveScopePayloadBytes = 9;
-inline constexpr size_t kRestoreMultiTurnPayloadBytes = 112;
+inline constexpr size_t kTrustMultiTurnPayloadBytes = 4;
 inline constexpr size_t kCalibLoadJointPayloadBytes = 188;
 inline constexpr size_t kCalibLoadLimitsPayloadBytes = 224;
 inline constexpr size_t kManualEncoderReferencePayloadBytes = 85;
@@ -139,7 +138,6 @@ inline constexpr size_t generatedCommandPayloadLength(uint8_t command)
         case CMD_MOTOR_POS_ABS: return kMotorPosAbsPayloadBytes;
         case CMD_ACTIVE_SCOPE: return kActiveScopePayloadBytes;
         case CMD_RUN_FEEDBACK: return 0;
-        case CMD_RESTORE_MULTITURN: return kRestoreMultiTurnPayloadBytes;
         case CMD_HOST_HEARTBEAT: return 0;
         case CMD_CALIB_LOAD_JOINT: return kCalibLoadJointPayloadBytes;
         case CMD_CALIB_LOAD_LIMITS: return kCalibLoadLimitsPayloadBytes;
@@ -157,6 +155,7 @@ inline constexpr size_t generatedCommandPayloadLength(uint8_t command)
         case CMD_CONTROL_PARAMETERS_SET: return 253;
         case CMD_PARAMETERS_QUERY: return 1;
         case CMD_CONTROL_RAMP_PARAMETERS_SET: return 73;
+        case CMD_TRUST_MULTITURN: return kTrustMultiTurnPayloadBytes;
         default: return SIZE_MAX;
     }
 }
@@ -170,7 +169,6 @@ inline constexpr bool generatedCommandRequiresHandshake(uint8_t command)
         case CMD_START: return true;
         case CMD_MOTOR_POS_ABS: return true;
         case CMD_RUN_FEEDBACK: return true;
-        case CMD_RESTORE_MULTITURN: return true;
         case CMD_CALIB_LOAD_JOINT: return true;
         case CMD_CALIB_LOAD_LIMITS: return true;
         case CMD_MANUAL_ENCODER_REFERENCE: return true;
@@ -181,6 +179,7 @@ inline constexpr bool generatedCommandRequiresHandshake(uint8_t command)
         case CMD_CONTROL_PARAMETERS_SET: return true;
         case CMD_PARAMETERS_QUERY: return true;
         case CMD_CONTROL_RAMP_PARAMETERS_SET: return true;
+        case CMD_TRUST_MULTITURN: return true;
         default: return false;
     }
 }

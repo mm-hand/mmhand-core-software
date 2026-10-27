@@ -57,7 +57,6 @@ from .protocol import (
     PACKET_TYPE_JOINT_CALIB_SNAPSHOT,
     PACKET_TYPE_MANUAL_ENCODER_REFERENCE,
     PACKET_TYPE_MOTOR_ABS_LIMIT,
-    PACKET_TYPE_MULTITURN_RESTORE_RESULT,
     PACKET_TYPE_SERVO_REBASE_ZERO_RESULT,
     PACKET_TYPE_DIRECT_TARGET_RESULT,
     PACKET_TYPE_PRODUCT_FINGERPRINT,
@@ -99,7 +98,7 @@ from .protocol import (
     build_diagnostics_subscribe_cmd,
     build_rope_init_cmd,
 
-    build_restore_multiturn_cmd,
+    build_trust_multiturn_cmd,
     build_run_feedback_cmd,
     build_reset_cmd,
     build_start_cmd,
@@ -194,7 +193,6 @@ P4_PACKET_KINDS = {
     PACKET_TYPE_PRODUCT_FINGERPRINT: "product_fingerprint",
     PACKET_TYPE_SERVO_ROUTE_STATUS: "servo_route_status",
     PACKET_TYPE_SAFETY_EVENT: "safety_event",
-    PACKET_TYPE_MULTITURN_RESTORE_RESULT: "multiturn_restore_result",
     PACKET_TYPE_SERVO_REBASE_ZERO_RESULT: "servo_rebase_zero_result",
     PACKET_TYPE_DIRECT_TARGET_RESULT: "direct_target_result",
     PACKET_TYPE_MOTOR_ABS_LIMIT: "motor_abs_limit",
@@ -1859,8 +1857,8 @@ class LowerComputerComm:
             return protocol_codec.build_protocol_hello_cmd()
         if isinstance(cmd, tuple) and len(cmd) == 4 and cmd[0] == "active_scope":
             return build_active_scope_cmd(cmd[1], cmd[2], bool(cmd[3]))
-        if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "restore_multiturn":
-            return build_restore_multiturn_cmd(cmd[1], cmd[2])
+        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "trust_multiturn":
+            return build_trust_multiturn_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 5 and cmd[0] == "calib_load_limits":
             return build_calib_load_limits_cmd(
                 cmd[1], cmd[2], cmd[3], cmd[4]

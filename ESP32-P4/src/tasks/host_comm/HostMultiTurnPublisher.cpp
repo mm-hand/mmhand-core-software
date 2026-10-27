@@ -13,7 +13,6 @@
 namespace p4::host {
 namespace {
 
-uint32_t s_lastRestoreResultTokenSent = 0;
 uint32_t s_lastRebaseZeroResultTokenSent = 0;
 uint32_t s_lastDirectResultGenerationSent = 0;
 
@@ -21,7 +20,6 @@ uint32_t s_lastDirectResultGenerationSent = 0;
 
 void initHostMultiTurnPublisher()
 {
-    s_lastRestoreResultTokenSent = 0;
     s_lastRebaseZeroResultTokenSent = 0;
     s_lastDirectResultGenerationSent = 0;
 }
@@ -33,12 +31,6 @@ bool stepHostMultiTurnPublisher(SystemRuntimeContext* sharedData,
         return false;
     }
 
-    const uint32_t restoreTokenHint = sharedAtomicLoad(
-        &sharedData->restore_multi_turn_result_token);
-    const bool needRestore =
-        (restoreTokenHint != 0 &&
-         restoreTokenHint != s_lastRestoreResultTokenSent) ||
-        syncRequested;
     const uint32_t rebaseTokenHint = sharedAtomicLoad(
         &sharedData->servo_rebase_zero_result_token);
     const bool needRebase =
@@ -50,13 +42,10 @@ bool stepHostMultiTurnPublisher(SystemRuntimeContext* sharedData,
     const bool needDirectResult = syncRequested ||
         (directGenerationHint != 0 &&
          directGenerationHint != s_lastDirectResultGenerationSent);
-    if (!needRestore && !needRebase && !needDirectResult) {
+    if (!needRebase && !needDirectResult) {
         return true;
     }
 
-    uint32_t restoreToken = restoreTokenHint;
-    uint32_t restoredMask = 0;
-    uint32_t rejectedMask = 0;
     uint32_t rebaseToken = rebaseTokenHint;
     uint32_t rebaseSuccessMask = 0;
     uint32_t rebaseFailedMask = 0;
@@ -68,14 +57,6 @@ bool stepHostMultiTurnPublisher(SystemRuntimeContext* sharedData,
     uint8_t directApplyStatus = 0;
     {
         SharedSafetyGuard guard;
-        if (needRestore) {
-            restoreToken = sharedAtomicLoad(
-                &sharedData->restore_multi_turn_result_token);
-            restoredMask = sharedAtomicLoad(
-                &sharedData->restore_multi_turn_restored_mask);
-            rejectedMask = sharedAtomicLoad(
-                &sharedData->restore_multi_turn_rejected_mask);
-        }
         if (needRebase) {
             rebaseToken = sharedAtomicLoad(
                 &sharedData->servo_rebase_zero_result_token);
@@ -91,15 +72,6 @@ bool stepHostMultiTurnPublisher(SystemRuntimeContext* sharedData,
             directAppliedMask = sharedData->direct_target_applied_mask;
             directRejectedMask = sharedData->direct_target_rejected_mask;
             directApplyStatus = sharedData->direct_target_status;
-        }
-    }
-
-    bool restoreSent = true;
-    if (needRestore) {
-        restoreSent = sendMultiTurnRestoreResultPacket(
-            restoreToken, restoredMask, rejectedMask);
-        if (restoreSent) {
-            s_lastRestoreResultTokenSent = restoreToken;
         }
     }
 
@@ -127,7 +99,7 @@ bool stepHostMultiTurnPublisher(SystemRuntimeContext* sharedData,
             s_lastDirectResultGenerationSent = directGeneration;
         }
     }
-    return !syncRequested || (restoreSent && rebaseSent && directResultSent);
+    return !syncRequested || (rebaseSent && directResultSent);
 }
 
 } // namespace p4::host

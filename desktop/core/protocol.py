@@ -741,17 +741,6 @@ def parse_servo_position_packet(payload: bytes) -> Optional[List[int]]:
     return list(struct.unpack(f">{MOTOR_COUNT}i", payload))
 
 
-def parse_multiturn_restore_result_packet(payload: bytes) -> Optional[Tuple[int, int, int]]:
-    """解析多圈恢复的异步最终 token、成功位图和拒绝位图。"""
-    if len(payload) != 12:
-        return None
-    token, restored_mask, rejected_mask = struct.unpack(">III", payload)
-    valid_mask = (1 << MOTOR_COUNT) - 1
-    if (restored_mask | rejected_mask) & ~valid_mask or restored_mask & rejected_mask:
-        return None
-    return token, restored_mask, rejected_mask
-
-
 def parse_servo_rebase_zero_result_packet(
     payload: bytes,
 ) -> Optional[Tuple[int, int, int]]:
@@ -945,14 +934,10 @@ def build_run_feedback_cmd() -> bytes:
 
 
 
-def build_restore_multiturn_cmd(active_motor_mask: int, motor_abs: List[int]) -> bytes:
-    if len(motor_abs) != MOTOR_COUNT:
-        raise ValueError(f"need exactly {MOTOR_COUNT} motor absolute values")
-    payload = bytearray()
-    payload.extend(struct.pack(">I", int(active_motor_mask) & 0xFFFFFFFF))
-    for value in motor_abs:
-        payload.extend(struct.pack(">i", int(value)))
-    return _build_command_frame(CMD_RESTORE_MULTITURN, bytes(payload))
+def build_trust_multiturn_cmd(active_motor_mask: int) -> bytes:
+    """让 P4 把当前原生 ABS 认作标定坐标系；不写电机。"""
+    payload = struct.pack(">I", int(active_motor_mask) & 0xFFFFFFFF)
+    return _build_command_frame(CMD_TRUST_MULTITURN, payload)
 
 
 def _pack_float_be(value: float) -> bytes:

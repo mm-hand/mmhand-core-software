@@ -382,13 +382,6 @@ class HandModel:
     system_fault_bitmap: int = 0
     state_transition_count: int = 0
     multi_turn_unknown_bitmap: int = 0
-    # CMD_RESTORE_MULTITURN 的异步最终结果，不与“已入队”协议 ACK 混淆。
-    multiturn_restore_result_token: int = 0
-    multiturn_restore_restored_mask: int = 0
-    multiturn_restore_rejected_mask: int = 0
-    multiturn_restore_result_last_rx_ts: float = 0.0
-    multiturn_restore_result_p4_time_ms: int = 0
-    has_multiturn_restore_result: bool = False
     # 当前位置 ABS 设零的独立最终结果，QUEUED ACK 不代表硬件执行成功。
     servo_rebase_zero_result_token: int = 0
     servo_rebase_zero_success_mask: int = 0

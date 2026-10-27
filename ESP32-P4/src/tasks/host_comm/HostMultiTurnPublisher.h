@@ -1,6 +1,6 @@
 /**
  * @file HostMultiTurnPublisher.h
- * @brief 声明桌面 JSON 多圈恢复与 logical ABS 设零结果的变化触发上报器。
+ * @brief 声明 logical ABS 设零与直控目标结果的可靠事件上报器。
  */
 #ifndef P4_MODULES_COMMUNICATION_UPPER_COMM_MULTI_TURN_PUBLISHER_H
 #define P4_MODULES_COMMUNICATION_UPPER_COMM_MULTI_TURN_PUBLISHER_H

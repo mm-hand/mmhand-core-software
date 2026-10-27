@@ -6,8 +6,8 @@
 #include "HostProtocolCodec.h"
 #include "HostCommandDispatcher.h"
 #include "HostTelemetryPublisher.h"
-#include "HostAckPublisher.h"
 #include "HostMultiTurnPublisher.h"
+#include "HostAckPublisher.h"
 #include "HostCalibrationCommandHandler.h"
 #include "../../data/SafetyTypes.h"
 #include "../../system/SystemRuntimeContext.h"
@@ -412,10 +412,10 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
 
         const bool multiTurnSyncRequested =
             (pendingStateSyncMask & STATE_SYNC_MULTITURN_STATE) != 0;
-        if (stepHostMultiTurnPublisher(
-                sharedData, multiTurnSyncRequested)) {
+        if (stepHostMultiTurnPublisher(sharedData, multiTurnSyncRequested)) {
             pendingStateSyncMask &= ~((uint32_t)STATE_SYNC_MULTITURN_STATE);
         }
+
 
         // 每周期最多发送四条新事件，既不丢失规则证据，也不让突发诊断占满串口。
         SafetyEventRecord safetyEvents[4] = {};

@@ -28,12 +28,14 @@ from .calibration_snapshot import (
     invalidate_calibration_snapshot_scope,
     joint_mask_for_motor_mask,
     motor_mask_for_joint_mask,
+    atomic_write_snapshot,
     read_snapshot,
     update_manual_snapshot,
     validate_snapshot,
     validate_snapshot_for_load,
 )
 from .comm_layer import LowerComputerComm
+from .multiturn_frame import shift_snapshot, turn_offsets
 from .data_models import HandModel
 from .device_state_store import (
     DeviceStateStoreError,
@@ -56,7 +58,6 @@ from .protocol import (
     CMD_STATE_SYNC_REQUEST,
     CMD_ROPE_INIT,
     CMD_RESET,
-    CMD_RESTORE_MULTITURN,
     CMD_MOTOR_ABS_ZERO,
     ENCODER_COUNT,
     MOTOR_COUNT,
@@ -83,22 +84,12 @@ from .protocol import (
 )
 from .session_log import log_session
 
-@dataclass
-class _RestoreRequest:
-    token: int
-    sent_at: float
-    p4_time_ms: int
-    ack_sequence: int
-    queried: bool = False
-
-
 LOWER_SYNC_TIMEOUT_S = 2.5
 STATE_SYNC_RETRY_PERIOD_S = 1.0
 LOWER_STATUS_STALE_AFTER_S = 1.0
 ACTIVE_SCOPE_ACK_TIMEOUT_S = 1.0
 CALIBRATE_ACK_TIMEOUT_S = 1.0
 # P4 每个完整反馈轮次只归零并恢复一台舵机；27路最坏重试需要更长结果窗口。
-MULTITURN_RESTORE_RESULT_TIMEOUT_S = 8.0
 CLEAR_CALIBRATION_ACK_TIMEOUT_S = 1.0
 CALIB_LOAD_ACK_TIMEOUT_S = 1.0
 MANUAL_REFERENCE_ACK_TIMEOUT_S = 2.0
@@ -108,7 +99,6 @@ SERVO_COORDINATE_RESULT_SYNC_ATTEMPTS = 1
 SERVO_COORDINATE_RESULT_SYNC_WAIT_S = 1.0
 HOST_MULTITURN_MOVING_SAVE_PERIOD_S = 0.05
 HOST_MULTITURN_IDLE_SAVE_PERIOD_S = 0.50
-HOST_MULTITURN_RESTORE_RETRY_S = 1.0
 STARTUP_MULTITURN_RECOVERY_TIMEOUT_S = 20.0
 MANUAL_PREPARE_RELEASE_COUNTS = 1500
 MANUAL_PREPARE_FEEDBACK_TIMEOUT_S = 2.0
@@ -230,13 +220,6 @@ class HandController:
         self._multiturn_store_identity = None
         self._multiturn_store_checked_at = 0.0
         self._multiturn_last_save_at = 0.0
-        self._multiturn_pending_restore_mask = 0
-        self._multiturn_restore_context = None
-        self._multiturn_attempted_mask = 0
-        self._multiturn_failed_mask = 0
-        self._multiturn_restore_cancelled = False
-        self._multiturn_request = None
-        self._multiturn_last_restore_attempt_at = 0.0
         # Reset Zero 后 P4 会短暂把 logical ABS 标成可用，但在新的 Auto/LUT
         # 结果落盘前，该坐标不能成为下一次重启的恢复锚点。
         self._multiturn_anchor_capture_pending_mask = 0
@@ -503,13 +486,6 @@ class HandController:
         self._multiturn_store_payload = None
         self._multiturn_store_identity = None
         self._multiturn_last_save_at = 0.0
-        self._multiturn_pending_restore_mask = 0
-        self._multiturn_restore_context = None
-        self._multiturn_attempted_mask = 0
-        self._multiturn_failed_mask = 0
-        self._multiturn_restore_cancelled = False
-        self._multiturn_request = None
-        self._multiturn_last_restore_attempt_at = 0.0
         with self._multiturn_io_lock:
             self._servo_abs_zero_connection_generation += 1
             # 重新连接不能把已发出但未确认/未落盘的归零当成未执行，
@@ -970,116 +946,63 @@ class HandController:
             f"calibrated anchor saved runtime+snapshot mask=0x{confirmed_mask:08X}",
         )
 
-    def _service_multiturn_restore(self, state: HandModel, ack_events=()) -> None:
-        with self._multiturn_io_lock:
-            self._service_multiturn_restore_locked(state, ack_events)
+    def reconcile_multiturn_frame(self, motor_mask: int) -> Tuple[bool, str]:
+        """把标定包平移到电机当前坐标系，再让 P4 认账；不写电机。
 
-    def _service_multiturn_restore_locked(self, state: HandModel, ack_events=()) -> None:
-        """提交保存的原生ABS一次；坐标计算、执行和重试只属于P4。"""
-        if not self.comm:
-            return
-        device = self.servo_abs_zero_device_id(state)
-        if not device:
-            return
-        context = (device, self._servo_abs_zero_connection_generation, id(self.comm))
-        if self._multiturn_restore_context != context:
-            self._multiturn_restore_context = context
-            self._multiturn_attempted_mask = self._multiturn_failed_mask = 0
-            self._multiturn_pending_restore_mask = 0
-            self._multiturn_request = None
-        now = time.monotonic()
-        online = int(state.servo_online_bitmap)
-        self._multiturn_attempted_mask &= online
-        self._multiturn_failed_mask &= online & int(state.multi_turn_unknown_bitmap)
-        request = self._multiturn_request
-        if request is not None:
-            mask = self._multiturn_pending_restore_mask
-            restored = int(state.multiturn_restore_restored_mask)
-            rejected = int(state.multiturn_restore_rejected_mask)
-            final = (state.has_multiturn_restore_result
-                and state.multiturn_restore_result_token == request.token
-                and state.received_at('multiturn_restore_result_last_rx_ts') > request.sent_at
-                and (restored | rejected) == mask and not restored & rejected
-                and ((state.multiturn_restore_result_p4_time_ms - request.p4_time_ms) & 0xffffffff) < 0x80000000)
-            nack = any(int(event.get('command', -1)) == CMD_RESTORE_MULTITURN
-                and int(event.get('sequence', 0)) > request.ack_sequence
-                and float(event.get('received_monotonic', 0)) >= request.sent_at
-                and ((int(event.get('p4_time_ms', 0)) - request.p4_time_ms) & 0xffffffff) < 0x80000000
-                and int(event.get('status', -1)) not in (-1, PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED)
-                for event in (*state.proto_ack_history, *ack_events))
-            if final or nack:
-                self._multiturn_failed_mask |= rejected if final else mask
-                self._multiturn_pending_restore_mask = 0
-                self._multiturn_request = None
-                state.host_multiturn_status = ("P4 restore failed: " + self._format_motor_mask(self._multiturn_failed_mask)
-                    if self._multiturn_failed_mask else "P4 native ABS restore confirmed")
-            elif now - request.sent_at >= MULTITURN_RESTORE_RESULT_TIMEOUT_S:
-                # One result query, never another hardware write. Late final results remain valid.
-                if not request.queried and not self._multiturn_restore_cancelled:
-                    with self._coordinate_command_lock:
-                        if self.comm.is_connected() and self.comm.send_command(("state_sync", STATE_SYNC_MULTITURN_STATE)):
-                            request.queried = True
-                state.host_multiturn_status = "P4 restore result pending: " + self._format_motor_mask(mask)
-            return
-        io = getattr(self, '_host_calibration_io', None)
-        if (self._multiturn_restore_cancelled
-                or (io is not None and not io._session_finished and not io.is_cancelled()
-                    and not getattr(io, '_helper_restore_mask', 0))
-                or self._servo_rebase_zero_unresolved_mask or self._servo_rebase_zero_capture_mask):
-            return
-        if (not state.has_system_status_data
-                or not 0 <= now - state.received_at('system_status_last_rx_ts') <= LOWER_STATUS_STALE_AFTER_S
-                or state.system_state not in (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE, SYSTEM_STATE_READY, SYSTEM_STATE_RECOVERY_REQUIRED)
-                or state.control_enabled or state.servo_target_owner or not state.has_p4_time
-                or not state.has_servo_route_status or state.servo_route_scan_state == 1
-                or not self._restore_feedback_ready(state)):
-            return
-        if not state.has_multiturn_restore_result:
-            if now - self._multiturn_last_restore_attempt_at >= HOST_MULTITURN_RESTORE_RETRY_S:
-                self._multiturn_last_restore_attempt_at = now
-                with self._coordinate_command_lock:
-                    if not self._multiturn_restore_cancelled and self.comm.is_connected():
-                        self.comm.send_command(("state_sync", STATE_SYNC_MULTITURN_STATE))
-            return
-        saved_mask, saved_abs, _raw, ready = self._multiturn_recovery_anchors(state)
-        with self._multiturn_anchor_capture_lock:
-            blocked = self._multiturn_anchor_capture_blocked_mask
-        mask = (int(state.multi_turn_unknown_bitmap) & online & saved_mask
-                & state.servo_route_controllable_bitmap & ~state.servo_route_conflict_bitmap
-                & ~blocked & ~self._multiturn_attempted_mask & ((1 << MOTOR_COUNT) - 1))
-        if io is not None and not io._session_finished and not io.is_cancelled():
-            mask &= getattr(io, '_helper_restore_mask', 0)
-        if state.has_servo_online_status:
-            mask &= sum(1 << m for m, status in enumerate(state.servo_online_check) if status == ServoOnlineCheck.READY)
-        else:
-            return
-        if not ready or not mask:
-            return
-        with self._coordinate_command_lock:
-            if self._multiturn_restore_cancelled or not self.comm.is_connected():
-                return
-            sent_at = time.monotonic()
-            if not self.comm.send_command(("restore_multiturn", mask, saved_abs)):
-                return
-            self._multiturn_attempted_mask |= mask
-            self._multiturn_pending_restore_mask = mask
-            self._multiturn_request = _RestoreRequest(
-                (state.multiturn_restore_result_token + 1) & 0xffffffff,
-                sent_at, int(state.p4_time_ms), int(state.proto_ack_sequence))
-        log_session("MULTITURN", f"P4 native ABS restore submitted mask=0x{mask:08X}")
+        电机掉电会丢掉原生 ABS 的整圈部分，而 0x0B 的偏移窗口只有 ±4095，
+        写不回去。这里改为平移标定包的绝对数字，再让 P4 把当前反馈认作坐标。
+        """
+        with self._multiturn_io_lock:
+            if not self.comm:
+                return False, 'serial not connected'
+            with self.state_lock:
+                state = HandModel()
+                state.copy_state_from(self.current_state)
+            anchors_mask, anchors, _raw, ready = self._multiturn_recovery_anchors(state)
+            if not ready:
+                return False, 'no multi-turn anchors to reconcile'
+            with self._multiturn_anchor_capture_lock:
+                blocked_mask = int(self._multiturn_anchor_capture_blocked_mask)
+            usable = (int(motor_mask) & anchors_mask & ~blocked_mask
+                      & int(state.servo_online_bitmap)
+                      & int(state.servo_route_controllable_bitmap)
+                      & ~int(state.servo_route_conflict_bitmap)
+                      & ((1 << MOTOR_COUNT) - 1))
+            if usable == 0:
+                return True, 'no motor requires multi-turn reconciliation'
+            currents = [int(value) for value in state.servo_angles]
+            offsets = {}
+            for motor in range(MOTOR_COUNT):
+                if usable & (1 << motor):
+                    turns = turn_offsets([anchors[motor]], [currents[motor]])[0]
+                    if turns:
+                        offsets[motor] = turns
+            if offsets:
+                try:
+                    shifted = shift_snapshot(read_snapshot(self._multiturn_store.path), offsets)
+                except (OSError, ValueError) as exc:
+                    return False, f'multi-turn frame shift refused: {exc}'
+                atomic_write_snapshot(self._multiturn_store.path, shifted)
+                self._multiturn_store_payload = None
+                self._multiturn_store_identity = None
+                log_session('MULTITURN', 'reconcile frame ' + ', '.join(
+                    f'M{motor:02d} k={turns:+d}' for motor, turns in sorted(offsets.items())))
+                ok, message = self.load_calibration_snapshot(shifted)
+                if not ok:
+                    return False, f'multi-turn reconciliation reload failed: {message}'
+            if not self.comm.send_command(('trust_multiturn', usable)):
+                return False, 'P4 did not accept the multi-turn trust request'
+            if offsets:
+                return True, 'multi-turn frame reconciled for ' + self._format_motor_mask(usable)
+            return True, 'multi-turn frames already match'
 
     def activate_calibration_snapshot(self, snapshot: dict, store) -> None:
-        """安装快照，并为文件范围重新开放一次P4恢复请求；保留未决事务。"""
-        motor_mask = int(str(snapshot.get("active_motor_mask", 0)), 0) & ((1 << MOTOR_COUNT) - 1)
+        """安装快照并丢掉缓存；下一次对账重新读取新的绝对坐标。"""
         with self._multiturn_io_lock:
             store.activate(snapshot)
             # 导入可能与原文件摘要相同，也可能发生在 mtime 检查间隔内。
-            # 不能继续使用导入前缓存的空锚点或已耗尽的启动恢复预算。
             self._multiturn_store_payload = None
             self._multiturn_store_identity = None
-            retry_mask = motor_mask & ~self._multiturn_pending_restore_mask
-            self._multiturn_attempted_mask &= ~retry_mask
-            self._multiturn_failed_mask &= ~retry_mask
 
 
     def wait_for_multiturn_recovery(
@@ -1089,13 +1012,14 @@ class HandController:
         *,
         cancelled=None,
     ) -> Tuple[bool, str]:
-        """等待已在线标定电机完成路由就绪和多圈恢复，供启动 worker 使用。"""
+        """等待路由就绪，把标定平移到电机当前坐标系，再等 P4 认账。"""
         requested_mask = int(motor_mask) & ((1 << MOTOR_COUNT) - 1)
         if requested_mask == 0:
             return True, "no calibrated motors require multi-turn recovery"
         deadline = time.monotonic() + max(0.0, float(timeout_s))
         last_message = "waiting for P4 servo feedback"
         repair_requested_mask = 0
+        reconciled = False
         while time.monotonic() < deadline:
             if cancelled is not None and cancelled():
                 return False, "multi-turn recovery cancelled"
@@ -1133,16 +1057,6 @@ class HandController:
             unknown_mask = int(
                 getattr(state, "multi_turn_unknown_bitmap", 0) or 0
             ) & target_mask
-            with self._multiturn_io_lock:
-                context = (self.servo_abs_zero_device_id(state),
-                           self._servo_abs_zero_connection_generation, id(self.comm))
-                same_context = self._multiturn_restore_context == context
-                failed_mask = self._multiturn_failed_mask & unknown_mask if same_context else 0
-                restore_cancelled = self._multiturn_restore_cancelled
-            if failed_mask:
-                return False, "P4 restore failed: " + self._format_motor_mask(failed_mask)
-            if restore_cancelled and unknown_mask:
-                return False, "multi-turn restore cancelled by STOP: " + self._format_motor_mask(unknown_mask)
             saved_mask, _saved_abs, _saved_raw, identity_ready = (
                 self._multiturn_recovery_anchors(state)
             )
@@ -1182,15 +1096,21 @@ class HandController:
                     "no persistent multi-turn anchor: "
                     f"{self._format_motor_mask(missing_anchor)}",
                 )
+            if not reconciled:
+                ok, message = self.reconcile_multiturn_frame(target_mask)
+                reconciled = True
+                if not ok:
+                    return False, message
+                last_message = message
+                continue
             last_message = (
-                "waiting for multi-turn restore: "
+                "waiting for P4 multi-turn trust: "
                 f"{self._format_motor_mask(unknown_mask)}"
             )
             time.sleep(0.05)
         return False, last_message
 
     def _update_loop(self):
-        restore_ack_events=[]
         while self.running:
             try:
                 if not self.comm:
@@ -1198,7 +1118,6 @@ class HandController:
                 new_model = self.comm.rx_queue.get(timeout=0.1)
                 # 状态使用 latest-value 邮箱；ACK/安全规则走独立事件通道，逐条合并。
                 ack_events = self.comm.drain_ack_events()
-                restore_ack_events.extend(event for event in ack_events if event.get('command')==CMD_RESTORE_MULTITURN)
                 safety_events = self.comm.drain_safety_events()
                 self._service_startup_state_sync(new_model)
                 # Optional coordinate bookkeeping must not wait for periodic
@@ -1208,8 +1127,6 @@ class HandController:
                     try:
                         self._service_servo_rebase_zero_capture(new_model)
                         self._service_multiturn_anchor_capture(new_model)
-                        self._service_multiturn_restore(new_model, ack_events=restore_ack_events)
-                        restore_ack_events.clear()
                     except Exception as exc:
                         # 坐标簿记失败不得跳过状态发布；异常留待下个模型重试，
                         # 否则持续异常会把 current_state 永久冻结成旧快照。
@@ -2070,8 +1987,6 @@ class HandController:
                 if blocked:
                     self.request_state_sync(STATE_SYNC_MULTITURN_STATE)
                     return rejected(f"previous servo coordinate transaction is awaiting its result/new feedback (0x{blocked:08X})")
-                if self._multiturn_pending_restore_mask:
-                    return rejected("a desktop multi-turn restore transaction is pending")
                 with self._multiturn_anchor_capture_lock:
                     previous_blocked = self._multiturn_anchor_capture_blocked_mask
                     previous_capture = self._multiturn_anchor_capture_pending_mask
@@ -2668,7 +2583,6 @@ class HandController:
         """撤销待发目标和标定事务，向P4发送STOP。"""
         with self._coordinate_command_lock:
             self._coordinate_cancel_generation += 1
-            self._multiturn_restore_cancelled = True
             self._cancel_host_calibration()
             self._host_calibration_overlay = {}
             if self.comm:
@@ -2686,8 +2600,7 @@ class HandController:
         with self._coordinate_command_lock:
             sent = bool(self.comm and self.comm.send_command("reset"))
             if sent:
-                self._multiturn_restore_cancelled = False
-        self._started = False
+                self._started = False
         return sent
 
 

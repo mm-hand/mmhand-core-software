@@ -378,7 +378,7 @@ S3维护等待者→独立USB发送      S3 RX→触觉解析/维护token匹配
 | 0xD3 | CMD_MOTOR_POS_ABS | 119 | 通用logical ABS直控：token、实际电机位图、27路int32 counts、速度和加速度；token=0不跟踪，位图=0用当前scope |
 | 0xD7 | CMD_ACTIVE_SCOPE | 9 | 同步 active joint/motor mask 与 control enable |
 | 0xD8 | CMD_RUN_FEEDBACK | 0 | 申请状态机进入负反馈运行 |
-| 0xDA | CMD_RESTORE_MULTITURN | 112 | 提交27路已保存原生ABS；P4选择恢复目标并确认完整值 |
+| 0xE1 | CMD_TRUST_MULTITURN | 4 | 按电机位图把当前原生ABS认作标定坐标系（不写电机），P4清除对应多圈未知位 |
 | 0xDC | CMD_HOST_HEARTBEAT | 0 | 刷新上位机在线计时器，不携带业务数据 |
 | 0xDE | CMD_MOTOR_POS_ABS_ONE | 5 | 单台 Mxx logical ABS 直控，Mxx 加 int32 counts |
 | 0xDF | CMD_CALIB_LOAD_JOINT | 189 | 恢复单关节唯一 Auto/LUT v4 标定快照 |
@@ -426,7 +426,6 @@ S3维护等待者→独立USB发送      S3 RX→触觉解析/维护token匹配
 | 0x14 | PACKET_TYPE_PRODUCT_FINGERPRINT | 产品配置指纹 |
 | 0x15 | PACKET_TYPE_SERVO_ROUTE_STATUS | 动态舵机 BUS 路由、冲突、容量和扫描状态 |
 | 0x16 | PACKET_TYPE_SAFETY_EVENT | 去重后的结构化安全规则事件 |
-| 0x17 | PACKET_TYPE_MULTITURN_RESTORE_RESULT | 桌面 JSON 多圈恢复异步最终结果 |
 | 0x18 | PACKET_TYPE_CONTROL_TRACE | 同一控制周期的目标角、反馈角、舵机CMD和下位机时间 |
 | 0x19 | PACKET_TYPE_SERVO_REBASE_ZERO_RESULT | 硬件ABS设零事务的最终token、成功失败位图；尾108字节保留区固定为0 |
 | 0x1A | PACKET_TYPE_DIRECT_TARGET_RESULT | 通用直控目标完成总线同步写后的事务结果，与机械到位独立 |

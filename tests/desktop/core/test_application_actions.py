@@ -33,7 +33,7 @@ def test_received_feedback_is_published_before_periodic_disk_save(monkeypatch):
     q.put(sample)
     c.comm=Mock(rx_queue=q,drain_ack_events=lambda:[],drain_safety_events=lambda:[])
     for name in ('_service_startup_state_sync',
-                 '_service_servo_rebase_zero_capture','_service_multiturn_anchor_capture','_service_multiturn_restore'):
+                 '_service_servo_rebase_zero_capture','_service_multiturn_anchor_capture'):
         monkeypatch.setattr(c,name,Mock())
     observed=[]
     def save(_state):

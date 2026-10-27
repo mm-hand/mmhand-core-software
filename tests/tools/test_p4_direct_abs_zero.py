@@ -54,7 +54,6 @@ struct SystemRuntimeContext {
     uint32_t servo_rebase_zero_request_mask = 0;
     uint32_t servo_rebase_zero_request_token = 9, servo_rebase_zero_result_token = 9;
     uint32_t servo_rebase_zero_success_mask = 0, servo_rebase_zero_failed_mask = 0;
-    uint32_t restore_multi_turn_request_token = 0, restore_multi_turn_result_token = 0;
     uint32_t direct_target_request_generation = 0, direct_target_result_generation = 0;
     uint32_t multi_turn_unknown_bitmap = 0, servo_turn_overflow_bitmap = 0;
     uint8_t pending_direct_valid = 1, pending_direct_source = MOTOR_DIRECT_SOURCE_ABSOLUTE;
@@ -202,7 +201,6 @@ static void run(const std::string& name) {
         else if (reason == "motion_state") f.runtime.system_state = SYSTEM_STATE_RUN_DIRECT;
         else if (reason == "retired_state") f.runtime.system_state = 7;
         else if (reason == "zero_pending") ++f.runtime.servo_rebase_zero_request_token;
-        else if (reason == "restore_pending") ++f.runtime.restore_multi_turn_request_token;
         else if (reason == "recovery_busy") f.runtime.servo_recovery_pending_bitmap = mask;
         else if (reason == "mutex") mutexAllowed = false;
         else {
@@ -373,7 +371,7 @@ def direct_zero_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path,
 
 SCENARIOS = (
     "reject_handshake", "reject_direct_pending", "reject_motion_enabled", "reject_owner",
-    "reject_motion_state", "reject_retired_state", "reject_zero_pending", "reject_restore_pending",
+    "reject_motion_state", "reject_retired_state", "reject_zero_pending",
     "reject_recovery_busy", "reject_mutex", "reject_empty",
     "reject_mask_range", "reject_offline", "reject_route", "reject_short", "reject_long",
     "pending_blocks_motion", "selected_motor", "f0_compatible", "partial_failure", "route_lost",

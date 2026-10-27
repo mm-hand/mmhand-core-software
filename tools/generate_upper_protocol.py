@@ -139,7 +139,7 @@ def _render_cpp(schema: dict) -> str:
         "kFloatPayloadBytes": "CMD_ANGLE_CTRL",
         "kMotorPosAbsPayloadBytes": "CMD_MOTOR_POS_ABS",
         "kActiveScopePayloadBytes": "CMD_ACTIVE_SCOPE",
-        "kRestoreMultiTurnPayloadBytes": "CMD_RESTORE_MULTITURN",
+        "kTrustMultiTurnPayloadBytes": "CMD_TRUST_MULTITURN",
         "kCalibLoadJointPayloadBytes": "CMD_CALIB_LOAD_JOINT",
         "kCalibLoadLimitsPayloadBytes": "CMD_CALIB_LOAD_LIMITS",
         "kManualEncoderReferencePayloadBytes": "CMD_MANUAL_ENCODER_REFERENCE",

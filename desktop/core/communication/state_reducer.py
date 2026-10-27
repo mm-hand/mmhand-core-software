@@ -31,7 +31,7 @@ from ..protocol import (
     CMD_MANUAL_ENCODER_SINGLE,
 
     CMD_RESET,
-    CMD_RESTORE_MULTITURN,
+    CMD_TRUST_MULTITURN,
     CMD_RUN_FEEDBACK,
     CMD_START,
     CMD_STOP,
@@ -61,7 +61,6 @@ from ..protocol import (
     parse_joint_calib_snapshot_packet,
     parse_manual_encoder_reference_packet,
     parse_motor_abs_limit_packet,
-    parse_multiturn_restore_result_packet,
     parse_product_fingerprint_packet,
     parse_proto_ack,
     parse_safety_event_packet,
@@ -100,7 +99,6 @@ STATE_SNAPSHOT_CRITICAL_PACKET_KINDS = frozenset({
     "joint_calibration_snapshot",   # 关节标定快照
     "manual_reference",         # Manual 参考表回读
     "servo_rebase_zero_result",     # 当前位置设零最终结果
-    "multiturn_restore_result",     # 多圈恢复最终结果
     "safety_event",             # 安全规则事件
     "fault_status",             # 过载故障位图
     "servo_online_status",
@@ -119,7 +117,6 @@ class StateReducer:
         "sensor": lambda self, owner, model, payload, time_ms, rx_at: self._apply_sensor(owner, model, payload, time_ms, rx_at),
         "encoder_raw": lambda self, owner, model, payload, time_ms, rx_at: self._apply_encoder_raw(owner, model, payload, time_ms, rx_at),
         "servo_position": lambda self, owner, model, payload, time_ms, rx_at: self._apply_servo_position(owner, model, payload, time_ms, rx_at),
-        "multiturn_restore_result": lambda self, owner, model, payload, time_ms, rx_at: self._apply_multiturn_restore_result(owner, model, payload, time_ms, rx_at),
         "servo_rebase_zero_result": lambda self, owner, model, payload, time_ms, rx_at: self._apply_servo_rebase_zero_result(owner, model, payload, time_ms, rx_at),
         "direct_target_result": lambda self, owner, model, payload, time_ms, rx_at: self._apply_direct_target_result(owner, model, payload, time_ms, rx_at),
         "servo_online_status": lambda self, owner, model, payload, time_ms, rx_at: self._apply_servo_online_status(model, payload),
@@ -376,22 +373,6 @@ class StateReducer:
                 valid_mask, model.servo_abs_last_rx_ts,
             )
         return True
-
-    def _apply_multiturn_restore_result(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
-        """Apply one multiturn_restore_result packet within the RX batch boundary."""
-        emitted = False
-        parsed = parse_multiturn_restore_result_packet(payload)
-        if parsed is not None and packet_p4_time_ms is not None:
-            token, restored_mask, rejected_mask = parsed
-            model.multiturn_restore_result_token = int(token)
-            model.multiturn_restore_restored_mask = int(restored_mask)
-            model.multiturn_restore_rejected_mask = int(rejected_mask)
-            model.multiturn_restore_result_last_rx_ts = time.time()
-            model.monotonic_received['multiturn_restore_result_last_rx_ts'] = time.monotonic()
-            model.multiturn_restore_result_p4_time_ms = int(packet_p4_time_ms or 0)
-            model.has_multiturn_restore_result = True
-            emitted = True
-        return emitted
 
     def _apply_servo_rebase_zero_result(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one servo_rebase_zero_result packet within the RX batch boundary."""
@@ -1051,7 +1032,7 @@ class StateReducer:
                 CMD_RESET,
                 CMD_ACTIVE_SCOPE,
                 CMD_RUN_FEEDBACK,
-                            CMD_RESTORE_MULTITURN,
+                CMD_TRUST_MULTITURN,
                 CMD_MANUAL_ENCODER_REFERENCE,
                 CMD_MANUAL_ENCODER_SINGLE,
                 CMD_CLEAR_CALIBRATION,
@@ -1074,7 +1055,7 @@ class StateReducer:
                     pass
                 elif ack_cmd == CMD_RUN_FEEDBACK:
                     model.control_enabled = int(applied_mode) == SYSTEM_STATE_RUN_FEEDBACK
-                elif ack_cmd == CMD_RESTORE_MULTITURN:
+                elif ack_cmd == CMD_TRUST_MULTITURN:
                     pass
                 elif ack_cmd in (
                     CMD_MANUAL_ENCODER_REFERENCE,

@@ -11,9 +11,7 @@ from desktop.core.protocol import (
     ENCODER_COUNT,
     MOTOR_COUNT,
     PACKET_TYPE_JOINT_CALIB_SNAPSHOT,
-    PACKET_TYPE_MULTITURN_RESTORE_RESULT,
     PACKET_TYPE_SENSOR,
-    parse_multiturn_restore_result_packet,
     parse_servo_position_packet,
     parse_servo_telem_packet,
 )
@@ -57,30 +55,6 @@ def test_servo_position_packet_contains_only_native_abs() -> None:
     payload = b"".join(struct.pack(">i", value) for value in angles)
     assert parse_servo_position_packet(payload) == angles
     assert parse_servo_position_packet(payload[:-1]) is None
-
-
-def test_multiturn_restore_result_packet() -> None:
-    assert parse_multiturn_restore_result_packet(
-        struct.pack(">III", 7, 0x15, 0x20)
-    ) == (7, 0x15, 0x20)
-
-
-def test_multiturn_restore_result_updates_hand_model_end_to_end() -> None:
-    comm = LowerComputerComm("")
-    comm._state_reducer.last_model = HandModel()
-    packets = [
-        (
-            PACKET_TYPE_MULTITURN_RESTORE_RESULT,
-            struct.pack(">IIII", 11, 0x03, 0x04, 1200),
-        ),
-    ]
-
-    updated = comm._process_packets(packets)
-
-    assert updated is not None
-    assert updated.multiturn_restore_result_token == 11
-    assert updated.multiturn_restore_restored_mask == 0x03
-    assert updated.multiturn_restore_rejected_mask == 0x04
 
 
 def test_valid_angle_outside_workspace_updates_instead_of_freezing():

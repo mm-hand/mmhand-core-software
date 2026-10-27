@@ -67,7 +67,6 @@ bool stepServoMaintenance(SystemRuntimeContext* context, uint32_t nowMs) {
         sharedAtomicLoad(&context->system_state) != SYSTEM_STATE_RUN_FEEDBACK &&
         sharedAtomicLoad(&context->pending_direct_valid) == 0 &&
         sharedAtomicLoad(&context->direct_target_request_generation) == sharedAtomicLoad(&context->direct_target_result_generation) &&
-        sharedAtomicLoad(&context->restore_multi_turn_request_token) == sharedAtomicLoad(&context->restore_multi_turn_result_token) &&
         sharedAtomicLoad(&context->servo_rebase_zero_request_token) == sharedAtomicLoad(&context->servo_rebase_zero_result_token);
     bool duplicate=false;
     for(uint16_t i=0;i<cachedCount;++i) if(readMaintenanceU32(cachedRequests[i])==readMaintenanceU32(local) &&

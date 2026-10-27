@@ -507,6 +507,19 @@ public:
         return true;
     }
 
+    /** 上位机已把标定平移到电机当前坐标系；这里只认账，不写电机。 */
+    bool trustCurrentAbsolute(uint8_t id)
+    {
+        if (id > MAX_SERVO_ID || !_feedback[id].online ||
+            !_multiTurnConfigured[id]) return false;
+        ServoFeedbackInternal& fb = _feedback[id];
+        fb.restorePending = false;
+        fb.offlineTrustedSnapshotPending = false;
+        fb.absoluteReliable = true;
+        fb.offlineLastTrustedAbs = fb.absolutePosition;
+        return true;
+    }
+
     /** 显式归零会建立新基准，必须先撤销旧未决恢复。 */
     void discardAbsoluteRestore(uint8_t id)
     {

@@ -95,7 +95,6 @@ def test_result_routes_timestamp_and_preserves_independent_result_snapshot():
     assert updated.servo_rebase_zero_failed_mask == 0
     assert updated.servo_rebase_zero_result_p4_time_ms == 1000
     assert updated.has_servo_rebase_zero_result
-    assert updated.multiturn_restore_result_token == 0
     snapshot = HandModel()
     snapshot.copy_state_from(updated)
     updated.servo_rebase_zero_success_mask = 1
@@ -460,7 +459,7 @@ def test_blocked_rebase_scope_cannot_restore_old_json_anchor(monkeypatch):
     state = controller.current_state
     state.multi_turn_unknown_bitmap = 3
     controller._block_multiturn_anchor_capture(3)
-    controller._service_multiturn_restore(state)
+    controller.reconcile_multiturn_frame(3)
     controller.comm.send_command.assert_not_called()
 
 
@@ -522,7 +521,7 @@ def test_reconnect_preserves_pending_rebase_and_blocks_old_anchor_restore(
     )
     state = controller.current_state
     state.servo_online_bitmap = state.multi_turn_unknown_bitmap = 3
-    controller._service_multiturn_restore(state)
+    controller.reconcile_multiturn_frame(3)
     controller.comm.send_command.assert_not_called()
 
 

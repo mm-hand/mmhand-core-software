@@ -37,10 +37,6 @@ bool sendServoTelemetryPacket(const ServoTelemetryData_t& telemetry);
 bool sendAdaptiveKpPacket(SystemRuntimeContext* sharedData);
 bool sendTactileSummaryPacket(const RemoteTactileData_t& tactile);
 bool sendTactileFullPackets(const RemoteTactileData_t& tactile);
-/** 上报异步多圈恢复最终结果；仅在结果 token 变化或同步请求时发送。 */
-bool sendMultiTurnRestoreResultPacket(uint32_t resultToken,
-                                      uint32_t restoredMask,
-                                      uint32_t rejectedMask);
 /** 实际 ABS 设零的最终结果；原帧长度保留。 */
 bool sendServoRebaseZeroResultPacket(uint32_t resultToken,
                                      uint32_t successMask,
