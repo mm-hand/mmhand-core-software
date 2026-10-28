@@ -63,9 +63,9 @@ def shift_snapshot(snapshot: dict, offsets: dict[int, int]) -> dict:
         if not isinstance(result, dict):
             continue
         motors = result.get("tendonLutMotor") or []
-        for motor in motors:
-            if not isinstance(motor, int) or motor >= 27:
-                continue
+        # 标量端点属于主电机，双电机LUT的两列分别平移。
+        motor = motors[0] if motors else None
+        if isinstance(motor, int) and 0 <= motor < 27:
             for field in _SERVO_ABS_FIELDS:
                 if isinstance(result.get(field), int):
                     result[field] = shifted(motor, result[field])

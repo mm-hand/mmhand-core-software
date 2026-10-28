@@ -50,3 +50,14 @@ def test_shift_refuses_values_outside_the_servo_command_range():
     snapshot['multiturn_anchor_logical_abs'][0] = -30000
     with pytest.raises(ValueError, match='M00'):
         shift_snapshot(snapshot, {0: 1})
+
+
+def test_dual_motor_columns_shift_independently_and_scalar_only_once():
+    snapshot = _snapshot()
+    snapshot['joint_calib_results'][0] = {
+        'tendonLutMotor': [0, 1], 'startServoAbs': 8192,
+        'tendonLutMotorAbs': [[8192, 8292], [-4096, -3996]],
+    }
+    result = shift_snapshot(snapshot, {0: 2, 1: -1})['joint_calib_results'][0]
+    assert result['startServoAbs'] == 0
+    assert result['tendonLutMotorAbs'] == [[0, 100], [0, 100]]

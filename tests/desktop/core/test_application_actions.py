@@ -832,3 +832,25 @@ def test_synchronous_rejection_retains_evidence_without_changing_motion_ownershi
     assert item['scope'] == 'M02'
     assert hand._application_busy == 'existing-action'
     assert hand.get_state_snapshot().servo_target_owner == before.servo_target_owner
+
+
+@pytest.mark.parametrize('unknown,recovery_ok', [(True, True), (True, False), (False, True)])
+def test_enable_recovers_unknown_coordinates_before_setting_scope(hand, monkeypatch, unknown, recovery_ok):
+    state = hand._controller.current_state
+    state.multi_turn_unknown_bitmap = 3 if unknown else 0
+    monkeypatch.setattr(hand, '_prepare_control_switch', lambda _epoch: (True, ''))
+    calls = []
+    def recover(mask, **kwargs):
+        calls.append(('recover', mask))
+        return recovery_ok, 'test recovery'
+    def scope(*args):
+        calls.append(('scope', args[0]))
+        return False  # Stop here: this test must not start motion.
+    monkeypatch.setattr(hand._controller, 'wait_for_multiturn_recovery', recover)
+    monkeypatch.setattr(hand, 'set_active_scope', scope)
+    ok, message = hand._enable_selected_joints([0], hand._application_epoch)
+    assert not ok
+    assert calls == ([('recover', 3)] if unknown and not recovery_ok else
+                     [('recover', 3), ('scope', 3)] if unknown else [('scope', 3)])
+    if unknown and not recovery_ok:
+        assert 'coordinate recovery failed' in message

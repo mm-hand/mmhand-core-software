@@ -682,6 +682,14 @@ class ApplicationActions(IdResetActions):
             return False, message
         mask = sum(1 << j for j in joints)
         motors = sum(1 << m for j in joints for m in joint_motors(j))
+        state = self.get_state_snapshot()
+        if state.multi_turn_unknown_bitmap & motors:
+            log_session('MULTITURN', f'Enable coordinate recovery mask=0x{motors:08X}')
+            recovered, message = self._controller.wait_for_multiturn_recovery(
+                motors, cancelled=lambda: epoch != self._application_epoch,
+            )
+            if not recovered:
+                return False, f'Enable coordinate recovery failed: {message}'
         if not mask or not self.set_active_scope(motors, mask, True):
             return False, 'Scope setup failed. Check online devices, feedback and calibration.'
         recovered, recovery_message = self._recover_enable_workspace(joints, mask, epoch)

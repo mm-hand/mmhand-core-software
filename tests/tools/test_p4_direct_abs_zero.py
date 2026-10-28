@@ -98,9 +98,9 @@ namespace p4::servo {
 enum class RestoreResult { Pending, Success, Failed };
 class AbsoluteRestore {
 public:
-    RestoreResult step(FeetechServoDriver* driver, uint8_t id, int32_t target, uint32_t) {
+    RestoreResult step(FeetechServoDriver* driver, uint8_t id, uint32_t) {
         if (!driver) return RestoreResult::Failed;
-        require(target == 0, "zero changed its target");
+        const int target = 0;
         ++driver->calibrationCalls; driver->calibratedId = id; driver->actualAbs = target;
         return driver->succeeds ? RestoreResult::Success : RestoreResult::Failed;
     }
@@ -145,7 +145,6 @@ static void clearPending(SystemRuntimeContext*) { ++clearedQueues; }
 struct Fixture {
     SystemRuntimeContext runtime;
     FeetechServoDriver drivers[SERVO_TOTAL_NUM];
-    ServoHotplugRecoveryAnchors anchors{};
     ServoOnlineRecoveryContext recovery{};
     ServoRebaseZeroContext zero{};
     uint32_t lastToken = 9;
@@ -156,7 +155,6 @@ struct Fixture {
         mutexTakes = mutexGives = 0;
         invalidatedJoints = readyEvents = clearedQueues = 0;
         recovery.activeChannel = 0xFF;
-        anchors.validMask = validMotorChannelMask();
         for (unsigned m = 0; m != SERVO_TOTAL_NUM; ++m) {
             routes[m] = &drivers[m];
 
@@ -169,7 +167,7 @@ struct Fixture {
     }
     void capture() { captureServoRebaseZero(&runtime, &lastToken, &zero); }
     bool step() {
-        return stepServoRebaseZero(&runtime, &zero, &anchors, &writer);
+        return stepServoRebaseZero(&runtime, &zero, &writer);
     }
     void verifyAck(uint8_t cmd, uint8_t status) const {
         require(acks.size() == 1 && acks[0].command == cmd && acks[0].status == status,
@@ -288,8 +286,6 @@ static void run(const std::string& name) {
             "final zero result misreported selected motor success/failure");
     require((f.runtime.multi_turn_unknown_bitmap & mask) == (mask & ~success),
             "failed correction trusted uncertain hardware ABS");
-    require((f.anchors.validMask & mask) == 0 && (f.anchors.validMask & (1UL << 8)),
-            "zero changed an unselected recovery anchor");
     for (unsigned m = 0; m != SERVO_TOTAL_NUM; ++m) {
         const bool expected = (mask & (1UL << m)) && routes[m];
         require(f.drivers[m].calibrationCalls == unsigned(expected),
@@ -339,8 +335,7 @@ def direct_zero_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path,
     pending_start = dispatcher.index("    if (servoRebaseZeroPending(sharedData)", handshake_end)
     pending_end = dispatcher.index("    if (cmd == CMD_HOST_HEARTBEAT)", pending_start)
     contexts = "\n".join(_braced(service, "struct " + name + " {") + ";"
-                         for name in ("ServoHotplugRecoveryAnchors",
-                                      "ServoOnlineRecoveryContext"))
+                         for name in ("ServoOnlineRecoveryContext",))
     source = directory / "direct_zero_test.cpp"
     source.write_text(
         NATIVE_SOURCE

@@ -400,30 +400,13 @@ static void captureTrustMultiTurn(SystemRuntimeContext* sharedData,
         (unsigned long)sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap));
 }
 
-/** P4会话内最后可信原生ABS；没有独立raw或圈数。 */
-struct ServoHotplugRecoveryAnchors {
-    uint32_t validMask;
-    int32_t logicalAbs[SERVO_TOTAL_NUM];
-};
-
 struct ServoOnlineRecoveryContext {
     uint8_t activeChannel;
     uint8_t nextChannel;
 };
 
-/** 仅在恢复开始时选择最近圈；正常运行从不展开单圈反馈。 */
-static int32_t restoreTargetFromAnchor(int32_t anchor, int32_t current)
-{
-    if (anchor < kServoHardwareCommandMin || anchor > kServoHardwareCommandMax) return anchor;
-    int32_t delta = normalizeServoRawSingleTurn(current) - normalizeServoRawSingleTurn(anchor);
-    if (delta > 2047) delta -= 4096;
-    if (delta < -2048) delta += 4096;
-    return anchor + delta;
-}
-
 static void processServoOnlineTransitions(
-    SystemRuntimeContext* sharedData, ServoHotplugRecoveryAnchors* anchors,
-    ServoOnlineRecoveryContext* recovery, p4::servo::AbsoluteRestore* writer)
+    SystemRuntimeContext* sharedData, ServoOnlineRecoveryContext* recovery)
 {
     if (!servoCoordinateMaintenanceSafe(sharedData)) return;
     const uint32_t nowMs = p4::platform::time::monotonicMillis();
@@ -441,11 +424,9 @@ static void processServoOnlineTransitions(
     }
     const uint8_t channel = recovery->activeChannel;
     if (channel >= SERVO_TOTAL_NUM) return;
-    const uint32_t bit = 1UL << channel;
     ServoRoute route;
     FeetechServoDriver* driver = resolveMotorDriver(channel, &route, true);
     if (!driver || !driver->isOnline(route.servoId)) {
-        writer->cancel();
         recovery->activeChannel = 0xFF;
         return;
     }
@@ -454,42 +435,9 @@ static void processServoOnlineTransitions(
         recovery->activeChannel = 0xFF;
         return;
     }
-    if (!(anchors->validMask & bit)) {
-        driver->finishRecoveryAttempt(route.servoId, true, nowMs);
-        recovery->activeChannel = 0xFF;
-        return;
-    }
-    const int32_t target = restoreTargetFromAnchor(anchors->logicalAbs[channel],
-                                                  driver->getAbsolutePosition(route.servoId));
-    const auto result = writer->step(driver, route.servoId, target, nowMs);
-    if (result == p4::servo::RestoreResult::Pending) return;
-    const bool success = result == p4::servo::RestoreResult::Success;
-    driver->finishRecoveryAttempt(route.servoId, success, nowMs);
-    if (success) {
-        sharedAtomicFetchAnd(&sharedData->multi_turn_unknown_bitmap, ~bit);
-        anchors->validMask &= ~bit;
-    }
-    FW_LOG_INFO_PRINTF("[SERVO RESTORE] M%02u source=RAM success=%u abs=%ld\r\n",
-        (unsigned)channel, success ? 1U : 0U, (long)driver->getAbsolutePosition(route.servoId));
+    // 配置完成仍保持Unknown；标定由上位机平移、加载并显式认账。
+    driver->finishRecoveryAttempt(route.servoId, true, nowMs);
     recovery->activeChannel = 0xFF;
-}
-
-static uint32_t cacheServoPowerLossSnapshots(SystemRuntimeContext*,
-                                             ServoHotplugRecoveryAnchors* anchors)
-{
-    uint32_t captured = 0;
-    for (uint8_t channel = 0; channel < SERVO_TOTAL_NUM; ++channel) {
-        ServoRoute route;
-        FeetechServoDriver* driver = resolveMotorDriver(channel, &route, false);
-        int32_t absolute = 0;
-        if (driver && driver->consumeOfflineTrustedSnapshot(route.servoId,
-                &absolute)) {
-            anchors->logicalAbs[channel] = absolute;
-            anchors->validMask |= 1UL << channel;
-            captured |= 1UL << channel;
-        }
-    }
-    return captured;
 }
 
 /** 标定失效已经完成后，才允许 Host 发布本次最终结果。 */
@@ -536,7 +484,7 @@ static void captureServoRebaseZero(SystemRuntimeContext* sharedData,
 }
 
 static bool stepServoRebaseZero(SystemRuntimeContext* sharedData,
-    ServoRebaseZeroContext* rebase, ServoHotplugRecoveryAnchors* anchors,
+    ServoRebaseZeroContext* rebase,
     p4::servo::AbsoluteRestore* writer)
 {
     if (!rebase->active) return false;
@@ -553,12 +501,11 @@ static bool stepServoRebaseZero(SystemRuntimeContext* sharedData,
         FeetechServoDriver* driver = resolveMotorDriver(channel, &route, true);
         if (!(rebase->preparedMask & bit)) {
             invalidateAutomaticCalibration(sharedData, jointMaskForMotorMask(bit));
-            anchors->validMask &= ~bit;
             sharedAtomicFetchOr(&sharedData->multi_turn_unknown_bitmap, bit);
             if (driver) driver->discardAbsoluteRestore(route.servoId);
             rebase->preparedMask |= bit;
         }
-        const auto result = writer->step(driver, route.servoId, 0,
+        const auto result = writer->step(driver, route.servoId,
                                          p4::platform::time::monotonicMillis());
         if (result == p4::servo::RestoreResult::Pending) return true;
         if (result == p4::servo::RestoreResult::Success) {
@@ -566,6 +513,9 @@ static bool stepServoRebaseZero(SystemRuntimeContext* sharedData,
             sharedAtomicFetchAnd(&sharedData->multi_turn_unknown_bitmap, ~bit);
             sharedAtomicFetchAnd(&sharedData->servo_turn_overflow_bitmap, ~bit);
         } else rebase->failedMask |= bit;
+        FW_LOG_INFO_PRINTF("[SERVO ZERO] M%02u success=%u phase=%s abs=%ld\r\n",
+            (unsigned)channel, result == p4::servo::RestoreResult::Success ? 1U : 0U,
+            writer->phase(), driver ? (long)driver->getAbsolutePosition(route.servoId) : 0L);
         rebase->pendingMask &= ~bit;
     }
     if (!rebase->pendingMask) finishServoRebaseZero(sharedData, rebase);
@@ -585,7 +535,6 @@ struct ServoRuntimeContext {
     uint32_t queueDropTotal;
     uint32_t lastQueueDropLogMs;
     // 上线恢复不是持久化功能；核验多圈模式后才能让上位机 JSON 提交 logical ABS。
-    ServoHotplugRecoveryAnchors hotplugRecoveryAnchors;
     ServoOnlineRecoveryContext onlineRecovery;
     ServoRebaseZeroContext rebaseZero; ///< 当前上位机 logical ABS 归零事务。
     p4::servo::AbsoluteRestore coordinateWriter; ///< 唯一0x0B执行器。
@@ -634,7 +583,6 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
     const bool maintenanceHeld=stepServoMaintenance(sharedData, nowMs);
     const uint32_t changedIds=takeServoMaintenanceChangedMask();
     if(changedIds) {
-        g_servoRuntime.hotplugRecoveryAnchors.validMask &= ~changedIds;
         g_servoRuntime.coordinateWriter.cancel();
         g_servoRuntime.onlineRecovery.activeChannel = 0xFF;
     }
@@ -647,7 +595,6 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
     auto& lastLoopStartMs = runtime.lastLoopStartMs;
     auto& queueDropTotal = runtime.queueDropTotal;
     auto& lastQueueDropLogMs = runtime.lastQueueDropLogMs;
-    auto& hotplugRecoveryAnchors = runtime.hotplugRecoveryAnchors;
     auto& onlineRecovery = runtime.onlineRecovery;
     auto& rebaseZero = runtime.rebaseZero;
     auto& coordinateWriter = runtime.coordinateWriter;
@@ -813,14 +760,6 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
                     (unsigned long)mmhand::config::servo::kFeedbackStaleTimeoutMs);
             }
         }
-        // 必须在撤销动态路由之前消费驱动冻结的最后可信反馈；否则路由失效后
-        // 无法再定位原 BUS。这里只保留本次 P4 会话的 RAM 锚点。
-        const uint32_t newlyOfflineMask =
-            cacheServoPowerLossSnapshots(sharedData,
-                                         &hotplugRecoveryAnchors);
-        // 消费掉线前冻结的原生ABS，供统一恢复执行器使用。
-        (void)newlyOfflineMask;
-        // 掉线只清除该 Mxx 的运行时路由；定向重扫将在退出运动状态后逐 BUS 执行。
         const ServoRouteSnapshot routeSnapshot = servoRouteTable().snapshot();
         for (uint8_t motor = 0; motor < SERVO_TOTAL_NUM; ++motor) {
             const ServoRoute& route = routeSnapshot.routes[motor];
@@ -841,14 +780,12 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
         // 同一执行器串行处理归零、主机恢复和热插拔；不允许互相抢占。
         bool rebaseZeroStepped = false;
         if (onlineRecovery.activeChannel < SERVO_TOTAL_NUM) {
-            processServoOnlineTransitions(sharedData, &hotplugRecoveryAnchors,
-                                           &onlineRecovery, &coordinateWriter);
+            processServoOnlineTransitions(sharedData, &onlineRecovery);
         } else if (rebaseZero.active) {
             rebaseZeroStepped = stepServoRebaseZero(sharedData, &rebaseZero,
-                &hotplugRecoveryAnchors, &coordinateWriter);
+                &coordinateWriter);
         } else {
-            processServoOnlineTransitions(sharedData, &hotplugRecoveryAnchors,
-                                           &onlineRecovery, &coordinateWriter);
+            processServoOnlineTransitions(sharedData, &onlineRecovery);
         }
         if (coordinateWriter.active()) {
             runtime.feedbackFreshnessGraceUntilMs = p4::platform::time::monotonicMillis() +

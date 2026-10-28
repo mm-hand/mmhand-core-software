@@ -59,8 +59,6 @@ struct ServoFeedbackInternal {
     uint32_t nextRecoveryAttemptMs; ///< 下一次允许重试的绝对毫秒时间。
     // 舵机离线前最后一次可信的逻辑多圈位置。掉线时先冻结到这里，
     // 供本次 P4 会话内的热插拔恢复使用；跨重启恢复由桌面端 JSON 负责。
-    int32_t offlineLastTrustedAbs; ///< 离线前最后可信 logical ABS。
-    bool offlineTrustedSnapshotPending; ///< ServoBus 尚未消费的本次会话冻结快照。
     uint32_t feedbackSequence; ///< 每份真实反馈递增，恢复只接受写入后的新样本。
     bool restorePending; ///< 已发送过0x0B，结果尚未由原生反馈确认。
     int32_t restoreTarget; ///< 未决写入冻结首次目标，禁止按改变后的相位重算。
@@ -485,22 +483,20 @@ public:
     }
 
     /** 只发送一次位置校正；结果由下一轮正常原生反馈验收。 */
-    bool beginAbsoluteRestore(uint8_t id, int32_t position)
+    bool beginAbsoluteRestore(uint8_t id)
     {
         if (!_serial || id > MAX_SERVO_ID || !_feedback[id].online ||
-            !_multiTurnConfigured[id] || position < kServoHardwareCommandMin ||
-            position > kServoHardwareCommandMax) return false;
+            !_multiTurnConfigured[id]) return false;
         ServoFeedbackInternal& fb = _feedback[id];
         if (fb.restorePending) return true; // 保留第一次写入，绝不重算或重发。
         abortSyncRead(false);
         clearQueuedTargets();
         if (!setTorqueEnabled(id, false)) return false;
         fb.absoluteReliable = false;
-        fb.offlineTrustedSnapshotPending = false;
-        fb.restoreTarget = position;
+        fb.restoreTarget = 0;
         fb.restorePending = true;
         // 丢ACK可能发生在写入之后；后续同样等待新的原生反馈，不重复置数。
-        const bool acknowledged = _sms.CalibratePosition(id, (int16_t)position) > 0;
+        const bool acknowledged = _sms.CalibratePosition(id, 0) > 0;
         if (!acknowledged && _sms.getLastError() == 0) {
             // 电机明确返回错误，与应答丢失不同。
             fb.restorePending = false;
@@ -524,7 +520,6 @@ public:
             restoreError > kRestoreToleranceCounts) return false;
         fb.restorePending = false;
         fb.absoluteReliable = true;
-        fb.offlineLastTrustedAbs = fb.absolutePosition;
 
         finishRecoveryAttempt(id, true, millis());
         return true;
@@ -537,9 +532,7 @@ public:
             !_multiTurnConfigured[id]) return false;
         ServoFeedbackInternal& fb = _feedback[id];
         fb.restorePending = false;
-        fb.offlineTrustedSnapshotPending = false;
         fb.absoluteReliable = true;
-        fb.offlineLastTrustedAbs = fb.absolutePosition;
         return true;
     }
 
@@ -548,23 +541,15 @@ public:
     {
         if (id <= MAX_SERVO_ID) {
             _feedback[id].restorePending = false;
-            _feedback[id].offlineTrustedSnapshotPending = false;
             _feedback[id].absoluteReliable = false;
         }
     }
 
-    // ServoBus 消费一次掉线冻结快照。读取后清 pending，确保同一次掉电
-    // 仅建立一份会话内热插拔恢复锚点。
-    bool consumeOfflineTrustedSnapshot(uint8_t id,
-                                       int32_t* logicalAbs)
-    {
-        if (id > MAX_SERVO_ID || !logicalAbs || !_feedback[id].offlineTrustedSnapshotPending) {
-            return false;
-        }
-        ServoFeedbackInternal& fb = _feedback[id];
-        *logicalAbs = fb.offlineLastTrustedAbs;
-        fb.offlineTrustedSnapshotPending = false;
-        return true;
+    bool clearAbsoluteTurns(uint8_t id) {
+        if (id > MAX_SERVO_ID || !_feedback[id].online || !_torqueDisabled[id]) return false;
+        abortSyncRead(false);
+        const bool acknowledged = _sms.Reset(id) > 0;
+        return acknowledged || _sms.getLastError() != 0;
     }
 
 private:
@@ -615,17 +600,10 @@ private:
             fb.recoveryFailed = false;
             fb.nextRecoveryAttemptMs = 0;
         }
-        // 只有已经建立过可信多圈基准的反馈，才能作为掉电恢复锚点。
-        // 初次发现的新舵机仍保持 Turn Unknown，不能把未知圈数写入 Flash。
-        if (fb.absoluteReliable) {
-            const int32_t logicalAbs = fb.absolutePosition;
-            fb.offlineLastTrustedAbs = logicalAbs;
-
-        }
         fb.lastUpdate = millis();
     }
 
-    /** 累计读失败；达到阈值时冻结最后可信位置并撤销多圈可信状态。 */
+    /** 累计读失败；达到阈值时撤销多圈可信状态。 */
     void markReadFailure(uint8_t id)
     {
         if (id > MAX_SERVO_ID) {
@@ -641,21 +619,13 @@ private:
         }
     }
 
-    /** 冻结最后可信位置，并统一撤销在线、多圈配置及逻辑 ABS 信任。 */
+    /** 统一撤销在线、多圈配置及ABS信任。 */
     void invalidateFeedbackSession(uint8_t id)
     {
         if (id > MAX_SERVO_ID) {
             return;
         }
         ServoFeedbackInternal& fb = _feedback[id];
-        // 在清除多圈信任之前冻结最后可信反馈。这里只写
-        // RAM，不在舵机总线任务里直接写 Flash。
-        if (fb.absoluteReliable) {
-            const int32_t logicalAbs = fb.absolutePosition;
-            fb.offlineLastTrustedAbs = logicalAbs;
-
-            fb.offlineTrustedSnapshotPending = true;
-        }
         fb.online = false;
         fb.successfulReadCount = 0;
         fb.missedReadCount = kOfflineInvalidateMisses;
@@ -669,7 +639,7 @@ private:
         invalidateMultiTurnTrust(id);
     }
 
-    /** 清除本次上电会话的软件多圈锚点，但保留最后掉线快照。 */
+    /** 撤销坐标信任，等待上位机平移标定后恢复。 */
     void invalidateMultiTurnTrust(uint8_t id)
     {
         if (id > MAX_SERVO_ID) {

@@ -145,34 +145,13 @@ static void safetyScenario(const std::string& name) {
 static void recoveryScenario(const std::string& name) {
     SystemRuntimeContext runtime;
     FeetechServoDriver driver; routeDriver=&driver;
-    ServoHotplugRecoveryAnchors anchors{}; anchors.validMask=1; anchors.logicalAbs[0]=8392;
     ServoOnlineRecoveryContext online{0xFF,0};
-    p4::servo::AbsoluteRestore writer;
-    if (name == "nearest") {
-        require(restoreTargetFromAnchor(8190, 5)==8197, "positive wrap lost a turn");
-        require(restoreTargetFromAnchor(8197,4090)==8186, "reverse wrap lost a turn");
-        require(restoreTargetFromAnchor(-73,4023)==-73, "negative anchor lost its sign");
-        return;
-    }
-    if (name == "freeze") {
-        driver.snapshot=true;
-        require(cacheServoPowerLossSnapshots(&runtime,&anchors)==1 && anchors.logicalAbs[0]==8392,
-                "native checkpoint not frozen");
-        require(cacheServoPowerLossSnapshots(&runtime,&anchors)==0, "checkpoint consumed twice"); return;
-    }
-    if (name == "no_anchor") anchors.validMask=0;
-    if (name == "unsafe") safe=false;
-    if (name == "failure") driver.fail=true;
-    if (name == "pending") writer.defer=true;
-    processServoOnlineTransitions(&runtime,&anchors,&online,&writer);
-    if (name=="no_anchor" || name=="unsafe") require(driver.writes==0 && runtime.multi_turn_unknown_bitmap==3,
-        "missing basis or unsafe state changed hardware");
-    else if (name=="failure") require(driver.writes==1 && anchors.validMask==1 && runtime.multi_turn_unknown_bitmap==3,
-        "failed hotplug discarded basis or granted trust");
-    else if (name=="pending") require(driver.writes==0 && online.activeChannel==0 && runtime.multi_turn_unknown_bitmap==3,
-        "pending hotplug prematurely finished");
-    else require(driver.writes==1 && driver.native==8392 && anchors.validMask==0 && runtime.multi_turn_unknown_bitmap==2,
-        "hotplug did not use the shared native restore");
+    if(name=="unsafe")safe=false;
+    if(name=="failure")driver.configured=false;
+    processServoOnlineTransitions(&runtime,&online);
+    require(driver.writes==0 && driver.native==200 && runtime.multi_turn_unknown_bitmap==3,
+            "hotplug wrote motor coordinates or trusted without host reconciliation");
+
 }
 int main(int argc,char** argv) {
     try { const std::string name(argv[1]);
@@ -203,10 +182,7 @@ def hotplug_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dic
     assert compiler is not None, "A native C++ compiler is required; this test may not skip"
     directory = tmp_path_factory.mktemp("servo-hotplug-native")
     service = (P4_SRC / "tasks/servo_bus/ServoBusService.cpp").read_text(encoding="utf-8")
-    names = ("struct ServoHotplugRecoveryAnchors {",
-             "struct ServoOnlineRecoveryContext {",
-             "static int32_t restoreTargetFromAnchor(", "static void processServoOnlineTransitions(",
-             "static uint32_t cacheServoPowerLossSnapshots(")
+    names = ("struct ServoOnlineRecoveryContext {", "static void processServoOnlineTransitions(")
     code = "\n".join(_production_function(service, name) + (";" if name.startswith("struct") else "") for name in names)
     mapping = _production_function((P4_SRC / "safety/SafetyRuleRegistry.cpp").read_text(), "SafetyRuleId ruleForServoRejectReason(")
     source = directory / "servo_hotplug_test.cpp"
@@ -226,8 +202,7 @@ def hotplug_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dic
 
 
 SCENARIOS = ("safety_checked_conversion", "safety_identity", "safety_hard_boundary",
-    "safety_unknown_before_range", "safety_overflow", "nearest", "freeze", "success",
-    "no_anchor", "unsafe", "failure", "pending")
+    "safety_unknown_before_range", "safety_overflow", "success", "unsafe", "failure")
 
 @pytest.mark.parametrize("scenario", SCENARIOS)
 def test_abs_safety_and_hotplug_recovery(

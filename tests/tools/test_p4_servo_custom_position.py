@@ -414,55 +414,37 @@ static void halScenario(const std::string& name) {
     }
     p4::servo::AbsoluteRestore writer;
     using Result = p4::servo::RestoreResult;
-    const int target = name == "negative" ? -8392 : name == "zero" ? 0 : 8292;
-    if (name == "ack_missing") device.fault = Fault::AckMissing;
-    if (name == "ack_status") device.fault = Fault::AckStatus;
-    if (name == "read_missing") device.fault = Fault::ReadMissing;
-    if (name == "read_status") device.fault = Fault::ReadStatus;
-    if (name == "read_mismatch") device.fault = Fault::ReadMismatch;
-    if (name == "single_turn_rejected") device.fault = Fault::ReadModulo;
-    if (name == "torque_missing") device.fault = Fault::TorqueMissing;
-    const auto first = writer.step(&driver, 1, target, 1000);
-    if (name == "ack_status" || name == "torque_missing") {
-        require(first == Result::Failed && !driver.isAbsoluteReliable(1), "rejected command became trusted");
-        return;
+    const int target=0;
+    if(name=="ack_missing")device.fault=Fault::AckMissing;
+    if(name=="ack_status")device.fault=Fault::AckStatus;
+    if(name=="torque_missing")device.fault=Fault::TorqueMissing;
+    auto first=writer.step(&driver,1,1000);
+    if(name=="ack_status" || name=="torque_missing") {
+        require(first==Result::Failed,"rejected write accepted");return;
     }
-    require(first == Result::Pending && !driver.isAbsoluteReliable(1), "write trusted a cached sample");
-    require(device.corrections == 1, "one request did not issue exactly one correction");
-    require(writer.step(&driver, 1, target, 1001) == Result::Pending, "old feedback accepted");
-    if (name == "cancel") {
-        writer.cancel();
-        require(!writer.active() && !driver.isAbsoluteReliable(1), "cancel restored motion authority");
-        return;
+    require(first==Result::Pending && !driver.isAbsoluteReliable(1),"cached sample trusted");
+    require(device.corrections==1 && device.resets==0,"wrong command order");
+    if(name=="cancel") {writer.cancel(); require(!writer.active(),"cancel failed");return;}
+    if(name=="stale") {
+        require(writer.step(&driver,1,1750)==Result::Failed,"missing new feedback did not time out");return;
     }
-    if (name == "stale") {
-        require(writer.step(&driver, 1, target, 1500) == Result::Failed, "stale sample accepted");
-        return;
+    require(driver.probeFeedback(1),"post-calibration feedback missing");
+    require(writer.step(&driver,1,1249)==Result::Pending && device.resets==0,"reset sent before settle");
+    require(writer.step(&driver,1,1250)==Result::Pending && device.resets==1,"turn reset missing");
+    require(writer.step(&driver,1,1251)==Result::Pending,"pre-reset sample accepted");
+    if(name=="read_missing")device.fault=Fault::ReadMissing;
+    if(name=="read_mismatch")device.fault=Fault::ReadMismatch;
+    if(name=="read_status")device.fault=Fault::ReadStatus;
+    driver.probeFeedback(1);
+    const bool bad=name=="read_missing" || name=="read_mismatch" || name=="read_status";
+    require(writer.step(&driver,1,1750)==(bad?Result::Failed:Result::Success),"full-coordinate verification incorrect");
+    require(driver.isAbsoluteReliable(1)==!bad,"incorrect coordinate trust");
+    require(device.corrections==1 && device.resets==1,"commands repeated");
+    if(name=="disconnect") {
+        driver.invalidateIfFeedbackStale(1,driver.getFeedback(1).lastUpdate+100,80);
+        require(!driver.isAbsoluteReliable(1),"offline retained trust");
     }
-    const bool read = driver.probeFeedback(1);
-    if (name == "read_missing") require(!read, "missing read was accepted");
-    if (name == "read_missing" || name == "read_mismatch" || name == "single_turn_rejected" || name == "read_status") {
-        require(writer.step(&driver, 1, target, 1500) == Result::Failed, "invalid full ABS accepted");
-        require(!driver.isAbsoluteReliable(1), "failed restore became trusted");
-        // A later request must retain the first uncertain target and never rewrite from shifted raw.
-        require(writer.step(&driver, 1, -200, 1600) == Result::Pending, "pending restore not retained");
-        require(device.corrections == 1, "uncertain write was repeated");
-        device.fault = Fault::None;
-        require(driver.probeFeedback(1), "late native feedback missing");
-        require(writer.step(&driver, 1, -200, 1601) == Result::Success, "late exact result not recovered");
-        require(driver.getAbsolutePosition(1) == target, "late request changed first target");
-        return;
-    }
-    require(read && writer.step(&driver, 1, target, 1002) == Result::Success, "exact native ABS not confirmed");
-    require(driver.getAbsolutePosition(1) == target && driver.isAbsoluteReliable(1), "native ABS differs from target");
-    require(device.corrections == 1 && device.resets == 0, "restore rewrote coordinates or reset turns");
-    if (name == "disconnect") {
-        require(driver.invalidateIfFeedbackStale(1, driver.getFeedback(1).lastUpdate+100, 80), "offline not detected");
-        int32_t saved = 0;
-        require(driver.consumeOfflineTrustedSnapshot(1, &saved) && saved == target,
-                "offline lost native checkpoint");
-        require(!driver.isAbsoluteReliable(1), "offline retained coordinate authority");
-    }
+
 }
 
 static void diagnosticScenario(const std::string& name) {
@@ -621,8 +603,8 @@ SCENARIOS = (
     "sdk_level_zero_missing", "sdk_short_tx", "sdk_legacy_recal", "sdk_ack_missing",
     "sdk_ack_wrong_id", "sdk_ack_wrong_length", "sdk_ack_checksum", "sdk_ack_status", "sdk_ack_truncated",
     "firmware_old", "firmware_new", "firmware_minor", "session_recheck", "torque_enable_missing", "version_missing", "profile", "profile_ignored", "config_ack_missing", "lock_failure",
-    "configuration", "native", "positive", "negative", "zero", "ack_missing", "ack_status",
-    "torque_missing", "read_missing", "read_mismatch", "read_status", "single_turn_rejected", "stale", "cancel", "disconnect",
+    "configuration", "native", "zero", "ack_missing", "ack_status",
+    "torque_missing", "read_missing", "read_mismatch", "read_status", "stale", "cancel", "disconnect",
 )
 
 @pytest.mark.parametrize("scenario", SCENARIOS)

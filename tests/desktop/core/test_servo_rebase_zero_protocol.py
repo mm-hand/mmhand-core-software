@@ -10,7 +10,9 @@ import pytest
 import desktop.core.core_logic as core_logic
 from desktop.core.comm_layer import LowerComputerComm
 from desktop.core.core_logic import HandController
-from desktop.core.calibration_snapshot import atomic_write_snapshot, read_snapshot
+from desktop.core.calibration_snapshot import (
+    _empty_v7_snapshot, atomic_write_snapshot, read_snapshot, validate_snapshot,
+)
 from desktop.core.data_models import HandModel
 from _bundle_helpers import SeededBundleStore
 from desktop.core.protocol import (
@@ -463,6 +465,28 @@ def test_blocked_rebase_scope_cannot_restore_old_json_anchor(monkeypatch):
     controller.comm.send_command.assert_not_called()
 
 
+def test_reconcile_loads_resealed_shifted_snapshot(tmp_path, monkeypatch):
+    controller = _controller(monkeypatch)
+    path = tmp_path / 'snapshot.json'
+    snapshot = _empty_v7_snapshot()
+    snapshot['multiturn_anchor_valid_bitmap'] = '0x1'
+    snapshot['multiturn_anchor_logical_abs'][0] = 4096
+    atomic_write_snapshot(path, snapshot)
+    controller._multiturn_store = MagicMock(path=path)
+    controller._multiturn_recovery_anchors = lambda _state: (
+        1, [4096] + [0] * (MOTOR_COUNT - 1), [0] * MOTOR_COUNT, True,
+    )
+    def load(payload):
+        validate_snapshot(payload)
+        assert payload == read_snapshot(path)
+        return True, 'loaded'
+    controller.load_calibration_snapshot = load
+
+    ok, _ = controller.reconcile_multiturn_frame(1)
+    assert ok
+    controller.comm.send_command.assert_called_once_with(('trust_multiturn', 1))
+
+
 def test_new_anchor_save_failure_keeps_scope_blocked_and_retries(monkeypatch):
     controller = _controller(monkeypatch)
     controller._persist_multiturn_state = (
@@ -607,3 +631,22 @@ def test_rebase_invalidates_only_old_scope_and_captures_runtime_before_new_auto(
     runtime = controller._multiturn_store.load(identity=identity)
     assert runtime["logical_abs"][:2] == [0, 0]
     assert runtime["raw"][:2] == [0, 0]
+
+
+def test_reconcile_retries_load_without_shifting_twice(tmp_path, monkeypatch):
+    controller = _controller(monkeypatch)
+    path = tmp_path / 'snapshot.json'
+    snapshot = _empty_v7_snapshot()
+    snapshot['multiturn_anchor_valid_bitmap'] = '0x1'
+    snapshot['multiturn_anchor_logical_abs'][0] = 4096
+    atomic_write_snapshot(path, snapshot)
+    controller._multiturn_store = MagicMock(path=path)
+    controller._multiturn_recovery_anchors = lambda _state: (
+        1, read_snapshot(path)['multiturn_anchor_logical_abs'], [0] * MOTOR_COUNT, True,
+    )
+    controller.load_calibration_snapshot = MagicMock(side_effect=[(False, 'timeout'), (True, 'loaded')])
+    assert not controller.reconcile_multiturn_frame(1)[0]
+    controller.comm.send_command.assert_not_called()
+    assert controller.reconcile_multiturn_frame(1)[0]
+    assert read_snapshot(path)['multiturn_anchor_logical_abs'][0] == 0
+    assert controller.load_calibration_snapshot.call_count == 2

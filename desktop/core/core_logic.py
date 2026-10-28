@@ -30,6 +30,7 @@ from .calibration_snapshot import (
     motor_mask_for_joint_mask,
     atomic_write_snapshot,
     read_snapshot,
+    snapshot_write_transaction,
     update_manual_snapshot,
     validate_snapshot,
     validate_snapshot_for_load,
@@ -96,7 +97,7 @@ CLEAR_CALIBRATION_ACK_TIMEOUT_S = 1.0
 CALIB_LOAD_ACK_TIMEOUT_S = 1.0
 MANUAL_REFERENCE_ACK_TIMEOUT_S = 2.0
 SERVO_REBASE_ZERO_ACK_TIMEOUT_S = 1.5
-SERVO_REBASE_ZERO_RESULT_TIMEOUT_S = 8.0
+SERVO_REBASE_ZERO_RESULT_TIMEOUT_S = 3.0
 SERVO_COORDINATE_RESULT_SYNC_ATTEMPTS = 1
 SERVO_COORDINATE_RESULT_SYNC_WAIT_S = 1.0
 HOST_MULTITURN_MOVING_SAVE_PERIOD_S = 0.05
@@ -980,10 +981,9 @@ class HandController:
     def reconcile_multiturn_frame(self, motor_mask: int) -> Tuple[bool, str]:
         """把标定包平移到电机当前坐标系，再让 P4 认账；不写电机。
 
-        电机掉电会丢掉原生 ABS 的整圈部分，而 0x0B 的偏移窗口只有 ±4095，
-        写不回去。这里改为平移标定包的绝对数字，再让 P4 把当前反馈认作坐标。
+        电机重新上线后不写回历史圈数；平移标定包并重新核验后认账。
         """
-        with self._multiturn_io_lock:
+        with self._multiturn_io_lock, snapshot_write_transaction():
             if not self.comm:
                 return False, 'serial not connected'
             with self.state_lock:
@@ -1001,6 +1001,8 @@ class HandController:
                       & ((1 << MOTOR_COUNT) - 1))
             if usable == 0:
                 return True, 'no motor requires multi-turn reconciliation'
+            connection = self._servo_abs_zero_connection_generation
+            device_id = self.servo_abs_zero_device_id(state)
             currents = [int(value) for value in state.servo_angles]
             offsets = {}
             for motor in range(MOTOR_COUNT):
@@ -1013,14 +1015,21 @@ class HandController:
                     shifted = shift_snapshot(read_snapshot(self._multiturn_store.path), offsets)
                 except (OSError, ValueError) as exc:
                     return False, f'multi-turn frame shift refused: {exc}'
-                atomic_write_snapshot(self._multiturn_store.path, shifted)
+                shifted = atomic_write_snapshot(self._multiturn_store.path, shifted)
                 self._multiturn_store_payload = None
                 self._multiturn_store_identity = None
                 log_session('MULTITURN', 'reconcile frame ' + ', '.join(
                     f'M{motor:02d} k={turns:+d}' for motor, turns in sorted(offsets.items())))
-                ok, message = self.load_calibration_snapshot(shifted)
-                if not ok:
-                    return False, f'multi-turn reconciliation reload failed: {message}'
+
+            snapshot = read_snapshot(self._multiturn_store.path)
+            ok, message = self.load_calibration_snapshot(snapshot)
+            if not ok:
+                return False, f'multi-turn reconciliation reload failed: {message}'
+            latest = self._coordinate_state()
+            if (connection != self._servo_abs_zero_connection_generation
+                    or device_id != self.servo_abs_zero_device_id(latest)
+                    or usable & ~latest.servo_online_bitmap):
+                return False, 'device connection changed during coordinate reconciliation'
             if not self.comm.send_command(('trust_multiturn', usable)):
                 return False, 'P4 did not accept the multi-turn trust request'
             if offsets:
@@ -1958,7 +1967,7 @@ class HandController:
             raise ValueError("servo ABS rebase requires a non-zero valid motor mask")
         ok, message, success, failed, token = self._coordinate_transaction(
             mask, _ABS_ZERO_PLAN, command_name, cancelled, send_gate, SERVO_REBASE_ZERO_ACK_TIMEOUT_S,
-            SERVO_REBASE_ZERO_RESULT_TIMEOUT_S,
+            SERVO_REBASE_ZERO_RESULT_TIMEOUT_S + mask.bit_count(),
         )
         return ServoRebaseZeroResult(ok, message, token, success, failed)
 
