@@ -58,11 +58,14 @@ def test_calibration_alert_opens_once_on_origin_page(page, warning):
     assert dialog._props['persistent']
     if warning:
         assert title.text == 'Selected-joint Calibration completed with warnings'
-        assert 'J03: excessive tendon friction' in message.text
+        assert 'assembly warning' in message.text
+        assert 'Open Motor Calibration' in message.text
     else:
         assert title.text == 'Selected-joint Calibration failed'
-        assert 'J03: actual servo feedback was lost' in message.text
-        assert 'Failed joints: J03' in message.text
+        assert 'Check Details' in message.text or 'Details' in message.text
+        issue = hand._application_operations[-1]['user_issue']
+        assert issue['scope'] == 'J03'
+        assert issue['details']['original_message'] == 'J03: actual servo feedback was lost'
     click(close)
     assert not dialog.value
     for _ in range(3):
@@ -94,7 +97,7 @@ def test_warning_without_summary_still_opens_popup(page):
     completed_calibration(hand, 'calibration-warn', warning=True, include_summary=False)
     refresh()
     assert dialog.value
-    assert 'Calibration ended with warnings' in message.text
+    assert 'assembly warning' in message.text
 
 
 def test_completed_alerts_are_queued_and_each_operation_opens_once(page):

@@ -63,7 +63,34 @@ class CalibrationSnapshotStore:
 
     def activate(self, payload: dict) -> dict:
         with snapshot_write_transaction():
-            return atomic_write_snapshot(self.path, payload)
+            return atomic_write_snapshot(self.path, self._keep_runtime_anchors(payload))
+
+    def _keep_runtime_anchors(self, payload: dict) -> dict:
+        """保留本机已有运行锚点：多圈坐标是主机状态，不属于导入文件。
+
+        从旧导出文件整份导入时，文件里可能根本没有 multiturn_anchor_* 字段
+        （或只有部分电机），直接写盘会把本机全部锚点清零，随后
+        wait_for_multiturn_recovery 找不到锚点、27 路全判 UNKNOWN。
+        """
+        if not self.path.exists():
+            return payload
+        try:
+            current = read_snapshot(self.path)
+        except (CalibrationSnapshotError, OSError):
+            return payload
+        kept_mask, kept_abs, _kept_raw = multiturn_anchor_fields(current)
+        have_mask, have_abs, _have_raw = multiturn_anchor_fields(payload)
+        missing = kept_mask & ~have_mask
+        if not missing:
+            return payload
+        merged = dict(payload)
+        logical_abs = list(have_abs)
+        for motor in range(MOTOR_COUNT):
+            if missing & (1 << motor):
+                logical_abs[motor] = kept_abs[motor]
+        merged["multiturn_anchor_valid_bitmap"] = format_mask(have_mask | missing)
+        merged["multiturn_anchor_logical_abs"] = logical_abs
+        return merged
 
     def merge_calibration(self, payload: dict, joint_mask: int) -> dict:
         with snapshot_write_transaction():

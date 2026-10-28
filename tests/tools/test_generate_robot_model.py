@@ -124,3 +124,23 @@ def test_firmware_only_rejects_redirecting_p4_output_into_desktop(tmp_path: Path
     args.p4_fingerprint_output = generate_robot_model.DEFAULT_FINGERPRINT
     with pytest.raises(generate_robot_model.ModelGenerationError, match="cannot be inside desktop"):
         generate_robot_model.build_outputs(args)
+
+
+def test_safety_catalog_changes_update_firmware_fingerprint(tmp_path, monkeypatch):
+    # The .def contract is compiled through generated headers, which are excluded
+    # from the source hash. Its source must still be included in the fingerprint.
+    manifest = generate_robot_model.load_manifest(generate_robot_model.DEFAULT_MANIFEST)
+    p4 = tmp_path / 'ESP32-P4'
+    catalog = p4 / 'src/config/safety/SafetyRuleCatalog.def'
+    catalog.parent.mkdir(parents=True)
+    (p4 / 'ESP32-P4.ino').write_text('// fixture')
+    config = tmp_path / 'desktop/resources/config'
+    config.mkdir(parents=True)
+    (config / 'upper_protocol_schema.json').write_text('{}')
+    catalog.write_text('// one safety contract')
+    monkeypatch.setattr(generate_robot_model, 'ROOT', tmp_path)
+    first = generate_robot_model.build_fingerprint(manifest, [], generate_robot_model.DEFAULT_URDF, 'fixture')
+    catalog.write_text('// changed safety contract')
+    second = generate_robot_model.build_fingerprint(manifest, [], generate_robot_model.DEFAULT_URDF, 'fixture')
+    assert first['firmware_source_crc'] != second['firmware_source_crc']
+    assert first['control_model_crc'] == second['control_model_crc']

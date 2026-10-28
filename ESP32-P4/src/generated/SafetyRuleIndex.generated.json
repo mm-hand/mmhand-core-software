@@ -273,14 +273,6 @@
       "registry_function": "ruleForServoRejectReason"
     },
     {
-      "name": "ActuatorLogicalRange",
-      "rule_id": 1011,
-      "code": "ACT-1011",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
       "name": "ActuatorHardwareRange",
       "rule_id": 1012,
       "code": "ACT-1012",
@@ -593,62 +585,6 @@
       "registry_function": ""
     },
     {
-      "name": "SystemDirectStateRejected",
-      "rule_id": 3003,
-      "code": "SYS-3003",
-      "active": true,
-      "retired": false,
-      "policy": {
-        "file": "safety/policies/StateAdmissionPolicy.cpp",
-        "symbol": "canAcceptStart"
-      },
-      "caller": {
-        "file": "tasks/system_state/SystemEventDispatcher.cpp",
-        "symbol": "canAcceptStart"
-      },
-      "event": {
-        "file": "tasks/system_state/SystemEventDispatcher.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/system_state/SystemEventDispatcher.cpp",
-        "symbol": "SYSTEM_EVENT_RESET"
-      },
-      "registry_function": ""
-    },
-    {
-      "name": "SystemFeedbackStateRejected",
-      "rule_id": 3004,
-      "code": "SYS-3004",
-      "active": true,
-      "retired": false,
-      "policy": {
-        "file": "safety/policies/StateAdmissionPolicy.cpp",
-        "symbol": "canAcceptStart"
-      },
-      "caller": {
-        "file": "tasks/system_state/SystemEventDispatcher.cpp",
-        "symbol": "canAcceptStart"
-      },
-      "event": {
-        "file": "tasks/system_state/SystemEventDispatcher.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/system_state/SystemEventDispatcher.cpp",
-        "symbol": "SYSTEM_EVENT_RESET"
-      },
-      "registry_function": ""
-    },
-    {
-      "name": "SystemCalibrationStateRejected",
-      "rule_id": 3005,
-      "code": "SYS-3005",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
       "name": "DirectStateRejected",
       "rule_id": 3101,
       "code": "DIR-3101",
@@ -887,14 +823,6 @@
         "symbol": "FEEDBACK_REJECT_NONE"
       },
       "registry_function": "ruleForFeedbackRejectReason"
-    },
-    {
-      "name": "FeedbackAbsLimitRejected",
-      "rule_id": 3205,
-      "code": "FBK-3205",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "FeedbackModeSwitchRejected",
@@ -1497,14 +1425,6 @@
       "registry_function": "ruleForSystemFaultBit"
     },
     {
-      "name": "FaultCalibration",
-      "rule_id": 3504,
-      "code": "FLT-3504",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
       "name": "FaultMultiTurnUnknown",
       "rule_id": 3505,
       "code": "FLT-3505",
@@ -1527,198 +1447,6 @@
         "symbol": "SYSTEM_EVENT_RESET"
       },
       "registry_function": "ruleForSystemFaultBit"
-    },
-    {
-      "name": "CalibrationActiveScopeEmpty",
-      "rule_id": 4001,
-      "code": "CAL-4001",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
-      "name": "CalibrationEncoderError",
-      "rule_id": 4005,
-      "code": "CAL-4005",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
-      "name": "CalibrationServoOffline",
-      "rule_id": 4006,
-      "code": "CAL-4006",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
-      "name": "CalibrationOverload",
-      "rule_id": 4008,
-      "code": "CAL-4008",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
-      "name": "CalibrationZeroCrossInvalid",
-      "rule_id": 4013,
-      "code": "CAL-4013",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
-      "name": "CalibrationWrapTooLarge",
-      "rule_id": 4014,
-      "code": "CAL-4014",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
-      "name": "CalibrationAbsLimitInvalid",
-      "rule_id": 4015,
-      "code": "CAL-4015",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
-      "name": "CalibrationTargetPublishFailed",
-      "rule_id": 4016,
-      "code": "CAL-4016",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
-      "name": "CalibrationFeedbackLost",
-      "rule_id": 4017,
-      "code": "CAL-4017",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
-      "name": "CalibrationTaskStartFailed",
-      "rule_id": 4018,
-      "code": "CAL-4018",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
-      "name": "CalibrationControlLost",
-      "rule_id": 4020,
-      "code": "CAL-4020",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
-      "name": "CalibrationHoldTargetFailed",
-      "rule_id": 4021,
-      "code": "CAL-4021",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
-      "name": "CalibrationJointListInvalid",
-      "rule_id": 4022,
-      "code": "CAL-4022",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
-      "name": "CalibrationDuplicateJoint",
-      "rule_id": 4023,
-      "code": "CAL-4023",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
-      "name": "CalibrationWorkspacePrepFailed",
-      "rule_id": 4024,
-      "code": "CAL-4024",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
-      "name": "CalibrationJointStepFailed",
-      "rule_id": 4025,
-      "code": "CAL-4025",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
-      "name": "CalibrationServoRecoveryTimeout",
-      "rule_id": 4026,
-      "code": "CAL-4026",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
-      "name": "CalibrationReleaseOverTwoTurns",
-      "rule_id": 4027,
-      "code": "CAL-4027",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
-      "name": "CalibrationMotorMappingInvalid",
-      "rule_id": 4028,
-      "code": "CAL-4028",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
-      "name": "CalibrationResultSpanInvalid",
-      "rule_id": 4029,
-      "code": "CAL-4029",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
-      "name": "CalibrationResultBuildFailed",
-      "rule_id": 4030,
-      "code": "CAL-4030",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
-      "name": "CalibrationResultCommitFailed",
-      "rule_id": 4031,
-      "code": "CAL-4031",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
-      "name": "CalibrationMultiTurnTrustFailed",
-      "rule_id": 4032,
-      "code": "CAL-4032",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
-    },
-    {
-      "name": "CalibrationDualExchangeStalled",
-      "rule_id": 4034,
-      "code": "CAL-4034",
-      "active": false,
-      "retired": true,
-      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationWarnAutoMinOffset",

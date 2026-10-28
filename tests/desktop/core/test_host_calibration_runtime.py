@@ -30,6 +30,8 @@ def diag_reason(io):
 def io(monkeypatch):
     controller = HandController()
     controller.comm = MagicMock()
+    from desktop.core.generated_control_parameters import DEFAULT_OUTPUT_MARGINS
+    controller._applied_output_margins = DEFAULT_OUTPUT_MARGINS
     state = controller.current_state
     state.has_system_status_data = state.has_p4_time = True
     state.system_state = SYSTEM_STATE_IDLE
@@ -1007,3 +1009,24 @@ def test_prepare_finger_aa_clears_active_calibration_motors(io):
     io.set_active_calibration_motors(1 << 2)
     assert io.prepare_finger_aa(20) == (True, '')
     assert io._active_calib_motor_mask == 0
+
+
+def test_unapplied_margins_block_calibration_before_any_device_command(io):
+    io._output_margins = None
+    assert not io._prepare_device()
+    assert 'parameters are not applied' in io.feedback_recovery_error
+    io.controller.comm.send_command.assert_not_called()
+
+
+def test_calibration_freezes_the_applied_margins_for_the_whole_session(io):
+    io.controller._applied_output_margins = (350, 750)
+    other = runtime.HostCalibrationIO(io.controller, lambda: False, 2, 4)
+    assert other.lut_margins() == (350, 750)
+    io.controller._applied_output_margins = (200, 300)
+    assert other.lut_margins() == (350, 750)
+
+
+def test_reconnect_invalidates_previously_applied_margins(io):
+    io.controller._applied_output_margins = (350, 750)
+    io.controller._reset_local_runtime_state()
+    assert io.controller._applied_output_margins is None

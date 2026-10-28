@@ -17,7 +17,9 @@ from ..motor_mapping import (
 )
 from ..protocol import ENCODER_COUNT, MOTOR_COUNT, TENDON_LUT_MAX_SAMPLES
 
-# 保留固件名字，便于与 src/config/CalibrationConfig.h 逐项核对。
+from ..generated_control_parameters import DEFAULT_OUTPUT_MARGINS
+
+# 保留标定算法参数名；输出余量由共享控制参数生成。
 kFeedbackReadyServoTimeoutMs = 500
 kEncoderTrustedSampleMaxAgeMs = 300
 kInitialFeedbackWaitMs = 1200
@@ -47,9 +49,14 @@ kLutStartDeg = -5.0
 kLutZeroDeg = 0.0
 kServoZeroPullCounts = 500
 kDualInitialSlackCounts = 3200
-kMotorAbsWindowCounts = 4096 * 5
-kMotorAbsReleaseMarginCounts = 500
-kMotorAbsTightMarginCounts = 900
+
+
+def calibration_margins(io):
+    """Production IO freezes applied parameters; pure algorithm fixtures use generated defaults."""
+    getter = getattr(io, 'lut_margins', None)
+    return getter() if callable(getter) else DEFAULT_OUTPUT_MARGINS
+
+
 kOverloadLoadThreshold = 800
 kDualPrimaryTightLoadThreshold = 190
 kDualSecondaryPreloadLoadThreshold = 190

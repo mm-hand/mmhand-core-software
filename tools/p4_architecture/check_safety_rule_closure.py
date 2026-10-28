@@ -19,7 +19,6 @@ from generate_p4_safety_catalog import (  # noqa: E402
     FIRMWARE_INDEX_JSON,
     Probe,
     load_rule_definitions,
-    is_retired_rule,
     resolve_rule_binding,
 )
 
@@ -103,42 +102,6 @@ def audit(repo_root: Path) -> dict[str, object]:
     for rule in load_rule_definitions():
         contract = resolve_rule_binding(rule)
         code = str(rule["code"])
-        if is_retired_rule(rule):
-            entry = generated_by_name.get(str(rule["name"]), {})
-            runtime_pattern = re.compile(
-                rf"\bSafetyRuleId\s*::\s*{re.escape(str(rule['name']))}\b"
-            )
-            runtime_references = [
-                path for path, text in runtime_sources.items()
-                if runtime_pattern.search(text)
-            ]
-            has_no_binding = contract is None and not any(
-                name in entry for name in
-                ("policy", "caller", "event", "recovery", "registry_function")
-            )
-            inactive = has_no_binding and not runtime_references
-            results.append({
-                "name": rule["name"],
-                "code": code,
-                "retired": True,
-                "registration": (
-                    str(rule["name"]) in catalog_header
-                    and int(rule["rule_id"]) in desktop_by_id
-                    and desktop_by_id[int(rule["rule_id"])]["code"] == code
-                    and entry.get("name") == rule["name"]
-                    and entry.get("rule_id") == rule["rule_id"]
-                    and entry.get("code") == code
-                    and entry.get("active") is False
-                    and entry.get("retired") is True
-                ),
-                "policy": has_no_binding,
-                "caller": inactive,
-                "mapping": inactive,
-                "event": inactive,
-                "recovery": inactive,
-                "runtime_references": runtime_references,
-            })
-            continue
         if contract is None:
             results.append({
                 "name": rule["name"],

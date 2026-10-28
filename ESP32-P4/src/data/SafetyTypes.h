@@ -21,15 +21,15 @@ enum class ServoRejectReason : uint8_t {
     InvalidCommand, ///< 批次数量或 Mxx 映射非法。
     RouteUnknown,   ///< Mxx 尚未在四条 BUS 中获得唯一运行时路由。
     RouteConflict,  ///< 同一个舵机 ID 在多条 BUS 上同时响应。
-    BusOverCapacity, ///< 所在 BUS 检出超过 10 台舵机，整 BUS 禁止运动。
+    BusOverCapacity, ///< 所在 BUS 检出超过配置容量的舵机，整 BUS 禁止运动。
     EmergencyStop,  ///< E-STOP 已锁存。
     InvalidOwner,   ///< 生产者不持有当前输出权。
     InvalidState,   ///< 顶层状态不允许运动。
     Offline,        ///< 目标舵机没有可靠反馈。
     MultiTurnUnknown, ///< logical ABS 不可信。
     StaleTarget,    ///< 命令时间戳超过新鲜度窗口。
-    LogicalRange,   ///< 已退役：唯一边界收敛为 LUT±扩放量；编号保留解释历史日志。
-    HardwareRange,  ///< 超出 ST3215 hardware ABS 硬边界。
+    // 值 11 永久保留；旧 LogicalRange 判据已退役，后续值不得前移。
+    HardwareRange = 12,  ///< 超出 ST3215 hardware ABS 硬边界。
     TurnOverflow,   ///< 舵机已越过 Reset Zero 阈值，必须先重置圈数。
 };
 

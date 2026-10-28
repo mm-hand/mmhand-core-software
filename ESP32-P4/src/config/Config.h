@@ -7,7 +7,6 @@
 #define MMHAND_CONFIG_H
 
 #include "BoardConfig.h"
-#include "CalibrationConfig.h"
 #include "ControlConfig.h"
 #include "DiagnosticsConfig.h"
 #include "DimensionsConfig.h"

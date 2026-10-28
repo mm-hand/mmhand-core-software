@@ -23,7 +23,6 @@
 #include "../../generated/ProductFingerprint.generated.h"
 #include "../../hal/serial/HostSerialPort.h"
 #include "../../config/topology/HardwareMap.h"
-#include "../../config/CalibrationConfig.h"
 #include "../../config/ServoConfig.h"
 #include "../../config/SafetyConfig.h"
 #include "../../system/rtos/AtomicValue.h"
@@ -92,52 +91,57 @@ bool commandConflictsWithServoRebaseZero(uint8_t command)
 /**
  * Calib Load 的 ABS Limit 包可能来自较早的控制策略。加载完整结果后，
  * 以本次 LUT 拟合直线两端 + 可配置外延重建工作区；不再使用实测紧端，
- * 因为它只在标定姿态成立。双腱范围仍沿用快照中的两电机结果。
+ * 因为它只在标定姿态成立。单腱与双腱均使用已应用的运行参数。
  */
-bool refreshLoadedSingleTendonAbsLimit(SystemRuntimeContext* sharedData,
-                                       uint8_t jointIndex,
-                                       const JointCalibrationResult& result)
+bool refreshLoadedJointAbsLimits(SystemRuntimeContext* sharedData,
+                                 uint8_t jointIndex,
+                                 const JointCalibrationResult& result)
 {
-    JointActuatorGroup group = {};
-    if (getJointActuatorGroup(jointIndex, &group) && group.count > 1) {
-        return true;
+    if (!sharedData) return false;
+    const auto parameters = mmhand::control::readParameters();
+    if (!parameters.configured) return false;
+    const uint8_t count = getJointActuatorCount(jointIndex);
+    if (count == 0 || count > TENDON_LUT_ACTUATOR_COUNT) return false;
+    int32_t mins[TENDON_LUT_ACTUATOR_COUNT] = {}, maxs[TENDON_LUT_ACTUATOR_COUNT] = {};
+    uint8_t motors[TENDON_LUT_ACTUATOR_COUNT] = {};
+    for (uint8_t i = 0; i < count; ++i) {
+        JointActuatorItem actuator{};
+        if (!getJointActuator(jointIndex, i, &actuator) ||
+            result.tendonLutMotor[i] != actuator.motorChannel ||
+            !tendonCalibrationMotorAbsRangeWithMargins(result, i, actuator.motorChannel,
+                parameters[mmhand::control::OutputLutReleaseMarginCounts],
+                parameters[mmhand::control::OutputLutTightMarginCounts], &mins[i], &maxs[i])) return false;
+        motors[i] = actuator.motorChannel;
     }
-
-    const int primaryMotor = findPrimaryMotorChannelForJoint(jointIndex);
-    if (!sharedData || primaryMotor < 0 || primaryMotor >= SERVO_TOTAL_NUM) {
-        return false;
+    SharedSafetyGuard guard;
+    for (uint8_t i = 0; i < count; ++i) {
+        sharedData->motor_abs_limit_min[motors[i]] = mins[i];
+        sharedData->motor_abs_limit_max[motors[i]] = maxs[i];
+        sharedAtomicFetchOr(&sharedData->motor_abs_limit_valid_bitmap, 1UL << motors[i]);
     }
-
-    int32_t limitMin = 0;
-    int32_t limitMax = 0;
-    if (!tendonCalibrationMotorAbsRangeWithMargins(
-            result,
-            0,
-            (uint8_t)primaryMotor,
-            mmhand::config::calibration::kMotorAbsReleaseMarginCounts,
-            mmhand::config::calibration::kMotorAbsTightMarginCounts,
-            &limitMin,
-            &limitMax)) {
-        return false;
-    }
-
-    const uint32_t motorBit = 1UL << (uint8_t)primaryMotor;
-    {
-        SharedSafetyGuard guard;
-        sharedData->motor_abs_limit_min[primaryMotor] = limitMin;
-        sharedData->motor_abs_limit_max[primaryMotor] = limitMax;
-        sharedAtomicFetchOr(&sharedData->motor_abs_limit_valid_bitmap, motorBit);
-    }
-    FW_LOG_INFO_PRINTF(
-        "[UPPER] CALIB_LOAD_SINGLE_LIMIT J%02u M%02d limit=[%ld,%ld] "
-        "margins=[%ld,%ld]\r\n",
-        (unsigned)jointIndex,
-        primaryMotor,
-        (long)limitMin,
-        (long)limitMax,
-        (long)mmhand::config::calibration::kMotorAbsReleaseMarginCounts,
-        (long)mmhand::config::calibration::kMotorAbsTightMarginCounts);
     return true;
+}
+
+void refreshLoadedLutLimits(SystemRuntimeContext* sharedData, uint32_t motorMask)
+{
+    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; ++joint) {
+        JointCalibrationRuntimeSnapshot snapshot{};
+        if (!readJointCalibrationRuntimeSnapshot(joint, &snapshot) || !snapshot.result.success) continue;
+        const uint8_t count = getJointActuatorCount(joint);
+        bool selected = false;
+        for (uint8_t i = 0; i < count; ++i) {
+            JointActuatorItem actuator{};
+            if (getJointActuator(joint, i, &actuator) && (motorMask & (1UL << actuator.motorChannel))) selected = true;
+        }
+        if (selected && !refreshLoadedJointAbsLimits(sharedData, joint, snapshot.result)) {
+            // No stale 900-count boundary is allowed after a failed rebuild.
+            for (uint8_t i = 0; i < count; ++i) {
+                JointActuatorItem actuator{};
+                if (getJointActuator(joint, i, &actuator))
+                    sharedAtomicFetchAnd(&sharedData->motor_abs_limit_valid_bitmap, ~(1UL << actuator.motorChannel));
+            }
+        }
+    }
 }
 
 } // namespace
@@ -202,6 +206,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
              sharedData->system_state == SYSTEM_STATE_RECOVERY_REQUIRED);
         const uint8_t result = !idle || servoMaintenanceBlocksCommands() ? 2 :
             mmhand::control::applyParameterPayload(frame + 1, frameLen - 1) ? 0 : 1;
+        if (result == 0) refreshLoadedLutLimits(sharedData, validMotorChannelMask());
         sendControlParameterResult(0, result);
         sendProtoAckPacket(cmd, sharedData->system_state, result == 0 ?
             PROTO_ACK_STATUS_OK : result == 2 ? PROTO_ACK_STATUS_UNSUPPORTED_MODE : PROTO_ACK_STATUS_INVALID_DATA);
@@ -578,6 +583,8 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                     (unsigned long)appliedValidMask);
             }
         }
+        if (status == PROTO_ACK_STATUS_OK) refreshLoadedLutLimits(sharedData,
+            sharedAtomicLoad(&sharedData->motor_abs_limit_valid_bitmap));
         sendProtoAckPacket(CMD_CALIB_LOAD_LIMITS, sharedData->system_state, status);
         return;
     }
@@ -691,11 +698,11 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                                                              result))) {
                     status = PROTO_ACK_STATUS_INVALID_DATA;
                 } else if (result.success &&
-                           !refreshLoadedSingleTendonAbsLimit(
+                           !refreshLoadedJointAbsLimits(
                                sharedData, jointIndex, result)) {
                     status = PROTO_ACK_STATUS_INVALID_DATA;
                     FW_LOG_WARN_PRINTF(
-                        "[UPPER] CALIB_LOAD reject J%02u: single tendon "
+                        "[UPPER] CALIB_LOAD reject J%02u: joint "
                         "LUT envelope is invalid\r\n",
                         (unsigned)jointIndex);
                 } else {
@@ -956,6 +963,8 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                 (requestedMask & ~onlineMask) != 0 ||
                 (requestedMask & ~controllableMask) != 0) {
                 status = PROTO_ACK_STATUS_INVALID_DATA;
+            } else if (sharedAtomicLoad(&sharedData->emergency_stop_latched) != 0) {
+                status = PROTO_ACK_STATUS_EMERGENCY_STOP_LATCHED;
             } else if (!safeState || sharedData->control_enabled != 0 ||
                        sharedData->servo_target_owner != SERVO_TARGET_OWNER_NONE ||
                        servoRebaseZeroPending(sharedData) ||

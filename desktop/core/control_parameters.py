@@ -19,42 +19,16 @@ import struct
 import zlib
 from pathlib import Path
 
+from .generated_control_parameters import BOUNDS, RAMP_BOUNDS
+
 
 CONFIG_DIR = Path(__file__).resolve().parents[1] / 'resources' / 'config'
 DEFAULT_PATH = CONFIG_DIR / 'control_parameters.default.json'
 CURRENT_PATH = CONFIG_DIR / 'control_parameters.json'
 
 TYPES = ('aa', 'mcp', 'pip', 'dip', 'cmc')
-BOUNDS = {
-    'joint_kp': {name: (0.0, 2.0) for name in TYPES},
-    'joint_ki': {
-        **{name: (0.0, 1.0) for name in TYPES},
-        **{f'integral_limit_counts_{name}': (0, 500) for name in TYPES},
-        'integral_noise_deg': (0.0, 2.0),
-        'integral_confirm_ms': (0, 1000),
-    },
-    'joint_kd': {name: (0.0, 0.5) for name in TYPES},
-    'dual_tendon': {'pair_recovery_gain': (0.0, 0.5)},
-    'feedback': {'fast_window_ms': (10, 100), 'slow_window_ms': (100, 1000)},
-    'reversal': {
-        **{f'confirm_deg_{name}': (0.1, 10.0) for name in TYPES},
-        'confirm_ms': (0, 500),
-        **{f'takeup_max_{name}': (0, 2000) for name in TYPES},
-        **{f'exit_travel_deg_{name}': (0.05, 5.0) for name in TYPES},
-    },
-    'collision': {'arm_velocity_flex_deg_s': (0.1, 100.0), 'arm_velocity_extend_deg_s': (0.1, 100.0), 'stall_velocity_flex_deg_s': (0, 20.0), 'stall_velocity_extend_deg_s': (0, 20.0), 'min_error_deg': (0.5, 30.0), 'target_reset_deg': (0.1, 10.0), 'retreat_deg': (0.1, 10.0)},
-    'output': {'lut_release_margin_counts': (0, 500), 'lut_tight_margin_counts': (0, 1000)},
-    'ros2_input': {'min_cutoff_hz': (0.01, 10.0), 'beta': (0, 1.0), 'derivative_cutoff_hz': (0.01, 10.0), 'enter_deg': (0.01, 1.0), 'enter_dwell_ms': (0, 1000), 'exit_deg': (0.02, 2.0), 'exit_confirm_ms': (0, 500), 'max_gap_ms': (100, 5000)},
-    'adaptive_kp': {'enabled': (0, 1), 'lag_limit_s': (0.02, 1.0), 'overshoot_deg': (0.5, 10.0)},
-}
 
 RAMP_TYPES = TYPES
-RAMP_BOUNDS = {
-    **{f'b0_{name}': (0, 500) for name in RAMP_TYPES},
-    **{f'vb_{name}': (0, 5000) for name in RAMP_TYPES},
-    **{f'load_limit_{name}': (100, 1023) for name in RAMP_TYPES},
-    'takeup_timeout_ms': (0, 2000),
-}
 RAMP_VERSION = 1
 
 

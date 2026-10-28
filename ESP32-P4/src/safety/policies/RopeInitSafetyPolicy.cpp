@@ -6,13 +6,14 @@
 
 #include "../../generated/UrdfJointLimits.generated.h"
 #include "../../system/calibration/CalibrationMath.h"
+#include "../../system/calibration/CalibrationValidity.h"
 #include "../../system/calibration/CalibrationRuntimeStore.h"
 #include "../../system/calibration/ManualEncoderReferenceStore.h"
 #include "../../system/rtos/SharedSafetyState.h"
 
 namespace p4::safety {
 namespace {
-constexpr uint32_t kRopeInitTimeoutMs = 8000;
+constexpr uint32_t kRopeInitTimeoutMs = 20000;
 constexpr uint32_t kRopeInitFeedbackMaxAgeMs = 500;
 } // namespace
 
@@ -23,13 +24,7 @@ bool ropeInitCalibrationMatchesManual(uint8_t jointIndex)
     if (!readJointCalibrationRuntimeSnapshot(jointIndex, &snapshot)) {
         return false;
     }
-    const JointCalibrationResult& result = snapshot.result;
-    const uint32_t manualCrc = manualEncoderReferenceEntryCrc(
-        jointIndex, snapshot.manual);
-    return result.success &&
-           result.mappingVersion == kManualScaledUrdfFeedbackMappingVersion &&
-           result.urdfConfigCrc == kManualScaledUrdfConfigCrc &&
-           result.manualReferenceCrc == manualCrc;
+    return calibrationMatchesManual(jointIndex, snapshot);
 }
 
 uint8_t evaluateRopeInitActiveScope(SystemRuntimeContext* runtime)

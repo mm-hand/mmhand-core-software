@@ -19,13 +19,13 @@ using p4::platform::time::monotonicMillis;
 namespace p4 {
 namespace safety {
 
-uint32_t collectSystemFaults(SystemRuntimeContext* sharedData)
+SystemHealthSnapshot readSystemHealth(SystemRuntimeContext* sharedData, uint32_t nowMs)
 {
+    SystemHealthSnapshot health{};
     if (!sharedData) {
-        return 0;
+        return health;
     }
 
-    const uint32_t nowMs = monotonicMillis();
     uint32_t faults = 0;
     const uint32_t activeJointMask =
         sharedAtomicLoad(&sharedData->active_joint_mask) &
@@ -42,16 +42,15 @@ uint32_t collectSystemFaults(SystemRuntimeContext* sharedData)
         p4::state::requiresCan(sharedData) ||
         sharedAtomicLoad(&sharedData->system_state) ==
             SYSTEM_STATE_ROPE_INIT_RUNNING;
-    if (motionRequiresCan &&
-        (!sharedData->canRxQueue.peek(&sensorData) ||
-         !sensorData.isValid ||
-         (uint32_t)(nowMs - sensorData.timestamp) >
-             kStateCanOfflineTimeoutMs ||
-         canLinkOnline == 0 ||
-         (activeJointMask & ~encoderOnlineMask) != 0 ||
-         (activeJointMask & encoderFaultMask) != 0)) {
-        faults |= SYSTEM_FAULT_CAN_OFFLINE;
-    }
+    health.activeJointMask = activeJointMask;
+    health.encoderOnlineMask = encoderOnlineMask;
+    health.encoderFaultMask = encoderFaultMask;
+    health.canOnline = canLinkOnline;
+    health.sensorFresh = sharedData->canRxQueue.peek(&sensorData) && sensorData.isValid &&
+        (uint32_t)(nowMs - sensorData.timestamp) <= kStateCanOfflineTimeoutMs;
+    if (motionRequiresCan && (!health.sensorFresh || canLinkOnline == 0 ||
+        (activeJointMask & ~encoderOnlineMask) != 0 ||
+        (activeJointMask & encoderFaultMask) != 0)) faults |= SYSTEM_FAULT_CAN_OFFLINE;
 
     ServoAngleData_t servoSnapshot;
     const bool servoFresh =
@@ -69,8 +68,13 @@ uint32_t collectSystemFaults(SystemRuntimeContext* sharedData)
          p4::state::requiredMotorMask(sharedData)) != 0) {
         faults |= SYSTEM_FAULT_MULTITURN_UNKNOWN;
     }
-    return faults |
-           sharedAtomicLoad(&sharedData->system_fault_latched_bitmap);
+    health.faults = faults | sharedAtomicLoad(&sharedData->system_fault_latched_bitmap);
+    return health;
+}
+
+uint32_t collectSystemFaults(SystemRuntimeContext* sharedData)
+{
+    return readSystemHealth(sharedData, monotonicMillis()).faults;
 }
 
 uint32_t blockingFaultsForState(SystemRuntimeContext*,

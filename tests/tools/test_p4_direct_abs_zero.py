@@ -195,6 +195,9 @@ static void run(const std::string& name) {
         if (reason == "handshake") {
             f.runtime.host_protocol_compatible = 0;
             status = PROTO_ACK_STATUS_CONTRACT_MISMATCH;
+        } else if (reason == "stop_latched") {
+            f.runtime.emergency_stop_latched = 1;
+            status = PROTO_ACK_STATUS_EMERGENCY_STOP_LATCHED;
         } else if (reason == "direct_pending") f.runtime.direct_target_request_generation = 1;
         else if (reason == "motion_enabled") f.runtime.control_enabled = 1;
         else if (reason == "owner") f.runtime.servo_target_owner = SERVO_TARGET_OWNER_CONTROL;
@@ -370,7 +373,7 @@ def direct_zero_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path,
 
 
 SCENARIOS = (
-    "reject_handshake", "reject_direct_pending", "reject_motion_enabled", "reject_owner",
+    "reject_stop_latched", "reject_handshake", "reject_direct_pending", "reject_motion_enabled", "reject_owner",
     "reject_motion_state", "reject_retired_state", "reject_zero_pending",
     "reject_recovery_busy", "reject_mutex", "reject_empty",
     "reject_mask_range", "reject_offline", "reject_route", "reject_short", "reject_long",

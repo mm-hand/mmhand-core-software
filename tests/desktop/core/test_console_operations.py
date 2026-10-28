@@ -606,3 +606,54 @@ def test_motor_workflow_failure_overrides_cached_success(hand):
     hand._application_busy = 'run'
     hand._application_calibration_event(CalibrationWorkflowEvent(1, 'phase_complete', False, 'readback failed', joint_mask=1))
     assert hand.application_snapshot()['joints'][0]['motor_quality'] == ['FAILED']
+
+
+@pytest.mark.parametrize('p4_state,expected', [
+    (0, 'Stopped'), (1, 'Idle'), (5, 'Ready'), (8, 'Rope Init'), (9, 'Recovery')])
+def test_system_label_reports_each_p4_state_instead_of_disabled(hand, monkeypatch, p4_state, expected):
+    """四个不同 P4 状态过去全显示成 'Disabled'，让急停锁死看起来像待机。"""
+    state = hand._controller.current_state
+    comm = LowerComputerComm('')
+    comm._protocol_compatible = True
+    monkeypatch.setattr(comm, 'is_connected', lambda: True)
+    monkeypatch.setattr(hand._controller, 'comm', comm)
+    hand._estop_requested_at = 0.0
+    state.has_system_status_data = True
+    state.system_fault_bitmap = 0
+    state.control_enabled = 0
+    state.servo_target_owner = 0
+    state.system_state = p4_state
+    state.system_status_last_rx_ts = time.time()
+    stamp(state, 'system_status_last_rx_ts')
+    assert hand.application_snapshot()['device'] == expected
+
+
+def test_clear_faults_applicable_only_when_there_is_something_to_clear(hand, monkeypatch):
+    state = hand._controller.current_state
+    comm = LowerComputerComm('')
+    comm._protocol_compatible = True
+    monkeypatch.setattr(comm, 'is_connected', lambda: True)
+    monkeypatch.setattr(hand._controller, 'comm', comm)
+    state.has_system_status_data = True
+    state.control_enabled = 0
+    state.servo_target_owner = 0
+    state.system_status_last_rx_ts = time.time()
+    stamp(state, 'system_status_last_rx_ts')
+
+    hand._estop_requested_at = 0.0
+    state.system_fault_bitmap = 0
+    state.system_state = SYSTEM_STATE_READY
+    snapshot = hand.application_snapshot()
+    assert snapshot['p4_state_code'] == SYSTEM_STATE_READY
+    assert snapshot['clear_faults_applicable'] is False
+
+    state.system_state = 0  # Stopped：必须显式 RESET 才能离开
+    assert hand.application_snapshot()['clear_faults_applicable'] is True
+
+    state.system_state = SYSTEM_STATE_READY
+    state.system_fault_bitmap = 0x10
+    assert hand.application_snapshot()['clear_faults_applicable'] is True
+
+    state.system_fault_bitmap = 0
+    hand._estop_requested_at = time.time()
+    assert hand.application_snapshot()['clear_faults_applicable'] is True

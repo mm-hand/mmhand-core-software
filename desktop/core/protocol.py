@@ -180,8 +180,6 @@ DIRECT_SERVO_ACC = 100
 
 
 
-CALIB_LOAD_THRESHOLD = 0.3
-ERROR_VAL_FLAG = 0xFFFF
 
 # Serial settings
 # P4 运行期 USB-UART 波特率；必须与固件 BoardConfig.h 保持一致。

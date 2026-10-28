@@ -35,6 +35,8 @@ static_assert(MAX_SERVOS_PER_BUS * (15U + 6U) <= 256U,
 
 inline constexpr uint32_t kMultiTurnConfigDelayMs = 5; ///< EEPROM 写入和 Reset 后等待时间。
 inline constexpr uint8_t kOfflineInvalidateMisses = 3; ///< 连续读失败达到此值才判离线。
+/** 同一 BUS/ID 的反馈失败文本最多每5秒一条，避免离线重扫刷屏。 */
+inline constexpr uint32_t kFeedbackFailureLogIntervalMs = 5000;
 /**
  * 即使扫描或恢复流程没有累计同步读失败，反馈超过该时间未刷新也必须判离线。
  * 正常情况下四条 BUS 都在每个10 ms轮次更新；80 ms覆盖八个反馈周期，既允许

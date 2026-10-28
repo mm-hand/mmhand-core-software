@@ -23,8 +23,8 @@ from .config import (
     kPreReleaseSyncTargetToleranceCounts, kPreReleaseSyncSettleDeltaCounts,
     kPreReleaseSyncStableSamples, kTendonFitSampleStepDeg,
     kLutStartDeg, kLutZeroDeg, kServoZeroPullCounts,
-    kRejectNearFullWrapSpanCounts, kMotorAbsReleaseMarginCounts,
-    kMotorAbsTightMarginCounts,
+    kRejectNearFullWrapSpanCounts,
+    calibration_margins,
 )
 from .math import (
     TendonRawFitBuffer, encoder_count_to_deg, wrap_encoder_delta,
@@ -169,13 +169,13 @@ def _inside_limit(ctx, io, targets, phase, text):
     return False
 
 
-def _single_lut_limit(result, motor):
+def _single_lut_limit(result, motor, io):
     # Workspace comes from the fitted LUT line plus the configurable extension.
     # A measured "tight" position is deliberately not used: tube bending changes
     # the tendon path, so that measurement is only valid at the calibration pose.
     return tendon_motor_abs_limits(
         result, 0, motor,
-        kMotorAbsReleaseMarginCounts, kMotorAbsTightMarginCounts,
+        *calibration_margins(io),
     )
 
 
@@ -249,7 +249,7 @@ def _finish_release(ctx, io, params, targets, current_raw, encoder, actual,
     # 固件的 commitCalibrationResult / commitJointServoMultiTurnTrust 由总流程
     # 原协议写回完成；此处只保留机械结果，F0 已在搜索前重建多圈可信。
     ctx.result, ctx.target_abs = result, actual
-    limit = _single_lut_limit(result, ctx.motor)
+    limit = _single_lut_limit(result, ctx.motor, io)
     if limit is not None:
         ctx.limits[ctx.motor] = limit
         io.set_limit(ctx.motor, *limit)

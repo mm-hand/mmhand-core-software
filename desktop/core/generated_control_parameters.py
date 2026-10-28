@@ -1,0 +1,12 @@
+"""Generated control parameter contract.
+
+职责：提供两端共用的参数边界与标定余量默认值。
+线程：只读常量。
+输入：参数 schema 和默认配置。
+输出：Python 参数校验表。
+状态所有权：生成器独占维护。
+禁止依赖：不得导入 UI 或设备。
+"""
+BOUNDS = {'joint_kp': {'aa': (0.0, 2.0), 'mcp': (0.0, 2.0), 'pip': (0.0, 2.0), 'dip': (0.0, 2.0), 'cmc': (0.0, 2.0)}, 'joint_ki': {'aa': (0.0, 1.0), 'mcp': (0.0, 1.0), 'pip': (0.0, 1.0), 'dip': (0.0, 1.0), 'cmc': (0.0, 1.0), 'integral_limit_counts_aa': (0, 500), 'integral_limit_counts_mcp': (0, 500), 'integral_limit_counts_pip': (0, 500), 'integral_limit_counts_dip': (0, 500), 'integral_limit_counts_cmc': (0, 500), 'integral_noise_deg': (0.0, 2.0), 'integral_confirm_ms': (0, 1000)}, 'joint_kd': {'aa': (0.0, 0.5), 'mcp': (0.0, 0.5), 'pip': (0.0, 0.5), 'dip': (0.0, 0.5), 'cmc': (0.0, 0.5)}, 'dual_tendon': {'pair_recovery_gain': (0.0, 0.5)}, 'feedback': {'fast_window_ms': (10, 100), 'slow_window_ms': (100, 1000)}, 'reversal': {'confirm_deg_aa': (0.1, 10.0), 'confirm_deg_mcp': (0.1, 10.0), 'confirm_deg_pip': (0.1, 10.0), 'confirm_deg_dip': (0.1, 10.0), 'confirm_deg_cmc': (0.1, 10.0), 'confirm_ms': (0, 500), 'takeup_max_aa': (0, 2000), 'takeup_max_mcp': (0, 2000), 'takeup_max_pip': (0, 2000), 'takeup_max_dip': (0, 2000), 'takeup_max_cmc': (0, 2000), 'exit_travel_deg_aa': (0.05, 5.0), 'exit_travel_deg_mcp': (0.05, 5.0), 'exit_travel_deg_pip': (0.05, 5.0), 'exit_travel_deg_dip': (0.05, 5.0), 'exit_travel_deg_cmc': (0.05, 5.0)}, 'collision': {'arm_velocity_flex_deg_s': (0.1, 100.0), 'arm_velocity_extend_deg_s': (0.1, 100.0), 'stall_velocity_flex_deg_s': (0, 20.0), 'stall_velocity_extend_deg_s': (0, 20.0), 'min_error_deg': (0.5, 30.0), 'target_reset_deg': (0.1, 10.0), 'retreat_deg': (0.1, 10.0)}, 'output': {'lut_release_margin_counts': (0, 500), 'lut_tight_margin_counts': (0, 1000)}, 'ros2_input': {'min_cutoff_hz': (0.01, 10.0), 'beta': (0, 1.0), 'derivative_cutoff_hz': (0.01, 10.0), 'enter_deg': (0.01, 1.0), 'enter_dwell_ms': (0, 1000), 'exit_deg': (0.02, 2.0), 'exit_confirm_ms': (0, 500), 'max_gap_ms': (100, 5000)}, 'adaptive_kp': {'enabled': (0, 1), 'lag_limit_s': (0.02, 1.0), 'overshoot_deg': (0.5, 10.0)}}
+RAMP_BOUNDS = {'b0_aa': (0, 500), 'b0_mcp': (0, 500), 'b0_pip': (0, 500), 'b0_dip': (0, 500), 'b0_cmc': (0, 500), 'vb_aa': (0, 5000), 'vb_mcp': (0, 5000), 'vb_pip': (0, 5000), 'vb_dip': (0, 5000), 'vb_cmc': (0, 5000), 'load_limit_aa': (100, 1000), 'load_limit_mcp': (100, 1000), 'load_limit_pip': (100, 1000), 'load_limit_dip': (100, 1000), 'load_limit_cmc': (100, 1000), 'takeup_timeout_ms': (0, 2000)}
+DEFAULT_OUTPUT_MARGINS = (500, 1000)

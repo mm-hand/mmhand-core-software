@@ -171,6 +171,8 @@ int SCS::writeWord(u8 ID, u8 MemAddr, u16 wDat)
 //舵机ID，MemAddr内存表地址，返回数据nData，数据长度nLen
 int SCS::Read(u8 ID, u8 MemAddr, u8 *nData, u8 nLen)
 {
+	readDiagnostics = {};
+	u8Status = 0;
 	rFlushSCS();
 	writeBuf(ID, MemAddr, &nLen, 1, INST_READ);
 	wFlushSCS();
@@ -185,6 +187,8 @@ int SCS::Read(u8 ID, u8 MemAddr, u8 *nData, u8 nLen)
 		u8Error = ERR_NO_REPLY;
 		return 0;
 	}
+	readDiagnostics.replyLength = bBuf[1];
+	u8Status = bBuf[2];
 	if(bBuf[0]!=ID && ID!=0xfe){
 		u8Error = ERR_SLAVE_ID;
 		return 0;
@@ -194,6 +198,7 @@ int SCS::Read(u8 ID, u8 MemAddr, u8 *nData, u8 nLen)
 		return 0;
 	}
 	int Size = readSCS(nData, nLen);
+	readDiagnostics.payloadBytes = Size;
 	if(Size!=nLen){
 		u8Error = ERR_NO_REPLY;
 		return 0;
@@ -213,6 +218,7 @@ int SCS::Read(u8 ID, u8 MemAddr, u8 *nData, u8 nLen)
 		return 0;
 	}
 	u8Status = bBuf[2];
+	readDiagnostics.statusValid = true;
 	return Size;
 }
 
@@ -401,38 +407,43 @@ void SCS::syncReadEnd()
 
 int SCS::syncReadPacketRx(u8 ID, u8 *nDat)
 {
-	u16 syncReadRxBuffIndex = 0;
 	syncReadRxPacket = nDat;
 	syncReadRxPacketIndex = 0;
-	u8Error = 0;
-	while((syncReadRxBuffIndex+6+syncReadRxPacketLen)<=syncReadRxBuffLen){
-		u8 bBuf[] = {0, 0, 0};
-		u8 calSum = 0;
-		while(syncReadRxBuffIndex<syncReadRxBuffLen){
-			bBuf[0] = bBuf[1];
-			bBuf[1] = bBuf[2];
-			bBuf[2] = syncReadRxBuff[syncReadRxBuffIndex++];
-			if(bBuf[0]==0xff && bBuf[1]==0xff && bBuf[2]!=0xff){
-				break;
-			}
-		}
-		if(bBuf[2]!=ID){
+	readDiagnostics = {};
+	u8Status = 0;
+	u8Error = ERR_NO_REPLY;
+	for(u16 offset = 0; offset + 3U <= syncReadRxBuffLen; ++offset){
+		if(syncReadRxBuff[offset] != 0xff || syncReadRxBuff[offset + 1] != 0xff ||
+		   syncReadRxBuff[offset + 2] != ID){
 			continue;
 		}
-		if(syncReadRxBuff[syncReadRxBuffIndex++]!=(syncReadRxPacketLen+2)){
+		// A matching header may be the last, incomplete reply in this batch.
+		if(offset + 5U > syncReadRxBuffLen) return 0;
+		readDiagnostics.replyLength = syncReadRxBuff[offset + 3];
+		if(readDiagnostics.replyLength != syncReadRxPacketLen + 2){
+			u8Error = ERR_BUFF_LEN;
 			continue;
 		}
-		u8Status = syncReadRxBuff[syncReadRxBuffIndex++];
-		calSum = ID + (syncReadRxPacketLen+2) + u8Status;
-		for(u8 i=0; i<syncReadRxPacketLen; i++){
-			syncReadRxPacket[i] = syncReadRxBuff[syncReadRxBuffIndex++];
+		u8Status = syncReadRxBuff[offset + 4];
+		const u16 available = syncReadRxBuffLen - offset - 5U;
+		readDiagnostics.payloadBytes = available < syncReadRxPacketLen
+			? available : syncReadRxPacketLen;
+		if(available < (u16)syncReadRxPacketLen + 1U){
+			u8Error = ERR_NO_REPLY;
+			return 0;
+		}
+		u8 calSum = ID + readDiagnostics.replyLength + u8Status;
+		for(u8 i = 0; i < syncReadRxPacketLen; ++i){
+			syncReadRxPacket[i] = syncReadRxBuff[offset + 5U + i];
 			calSum += syncReadRxPacket[i];
 		}
 		calSum = ~calSum;
-		if(calSum!=syncReadRxBuff[syncReadRxBuffIndex++]){
+		if(calSum != syncReadRxBuff[offset + 5U + syncReadRxPacketLen]){
 			u8Error = ERR_CRC_CMP;
 			return 0;
 		}
+		u8Error = 0;
+		readDiagnostics.statusValid = true;
 		return syncReadRxPacketLen;
 	}
 	return 0;

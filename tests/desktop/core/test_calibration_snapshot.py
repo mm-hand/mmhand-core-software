@@ -439,3 +439,25 @@ def test_old_two_point_lut_still_validates():
     )
     assert joint_calib_result_has_valid_tendon_lut(result, 1)
     assert joint_calib_result_tendon_lut_abs_ranges(result, 1) == [(2, 4000, 9000)]
+
+
+def test_activating_an_anchorless_import_keeps_this_machine_anchors(tmp_path):
+    """旧导出文件整份导入时，本机多圈锚点不能被清零。"""
+    from desktop.core.calibration_snapshot import CalibrationSnapshotStore
+    from desktop.core.protocol import MOTOR_COUNT
+
+    path = tmp_path / "calibration_bundle.mmcal.json"
+    store = CalibrationSnapshotStore(path)
+    store.activate(_empty_v7_snapshot())
+    current = read_snapshot(path)
+    current["multiturn_anchor_valid_bitmap"] = format_mask((1 << MOTOR_COUNT) - 1)
+    current["multiturn_anchor_logical_abs"] = [1000 + motor for motor in range(MOTOR_COUNT)]
+    atomic_write_snapshot(path, current, backup=False)
+
+    legacy = {key: value for key, value in read_snapshot(path).items()
+              if "multiturn_anchor" not in key}
+    store.activate(legacy)
+
+    mask, absolute, _raw = multiturn_anchor_fields(read_snapshot(path))
+    assert mask == (1 << MOTOR_COUNT) - 1
+    assert absolute[:3] == [1000, 1001, 1002]

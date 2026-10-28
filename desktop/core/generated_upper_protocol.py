@@ -88,6 +88,7 @@ PROTO_ACK_STATUS_INVALID_DATA = 4  # 字段、长度、索引或数值范围非�
 PROTO_ACK_STATUS_MANUAL_CRC_MISMATCH = 6  # Auto 快照绑定的 Manual CRC 不一致
 PROTO_ACK_STATUS_CONTRACT_MISMATCH = 8  # 协议版本或运动模型契约未匹配
 PROTO_ACK_STATUS_CALIBRATION_REQUIRED = 7  # 缺少目标关节有效 Auto/LUT
+PROTO_ACK_STATUS_EMERGENCY_STOP_LATCHED = 9  # 急停仍锁存，需先显式清除故障；请求未执行
 
 MANUAL_SAVE_STATUS_NONE = 0  # 本次上电尚未收到桌面端 Manual 数据
 MANUAL_SAVE_STATUS_OK = 1  # 最近一次 Manual 已提交到 P4 RAM 并完成校验

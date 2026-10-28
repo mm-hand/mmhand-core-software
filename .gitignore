@@ -54,3 +54,5 @@ desktop/resources/config/backups/
 
 # Arduino build directory used on Linux (.build/p4)
 .build/
+# arduino-cli 默认产物目录；本项目统一用 .build/p4，别把编译垃圾提交进来
+ESP32-P4/build/

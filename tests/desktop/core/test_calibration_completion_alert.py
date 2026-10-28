@@ -46,7 +46,8 @@ def test_incomplete_selected_joints_are_not_reported_as_failed(hand):
     message = item['calibration_alert']['message']
     assert 'calibration interrupted' in message
     assert 'Failed joints' not in message
-    assert 'Please try again.' in message
+    assert 'Please try again.' not in message
+    assert item['user_issue']['details']['original_message'] == 'calibration interrupted'
 
 
 def test_failure_includes_record_joint_and_retains_successful_joint_warning(hand):
@@ -142,3 +143,11 @@ def test_alert_snapshot_cannot_mutate_stored_completion(hand):
     completion(hand, terminal_status='WARN')
     hand.application_snapshot()['operations'][-1]['calibration_alert']['message'] = 'UI draft'
     assert item['calibration_alert']['message'] != 'UI draft'
+
+
+def test_cancelled_calibration_does_not_present_an_earlier_diagnostic_as_the_cancel_cause(hand):
+    item = begin_operation(hand)
+    completion(hand, ok=False, terminal_status='CANCELLED', message='calibration cancelled',
+               cancelled=True, diagnostic_reason=8)
+    assert item['user_issue']['code'] == 'HOST_CANCELLED'
+    assert item['user_issue']['details']['diagnostic_reason'] == 8

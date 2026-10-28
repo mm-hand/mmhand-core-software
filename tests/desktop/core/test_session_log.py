@@ -51,3 +51,44 @@ def test_close_before_start_does_not_disable_later_logging(tmp_path):
     log.add('APP', 'after close-before-start')
     log.close_and_save()
     assert 'after close-before-start' in Path(path).read_text(encoding='utf-8')
+
+
+def test_calibration_commands_ack_and_firmware_share_one_session_log(tmp_path, monkeypatch):
+    import struct
+
+    from desktop.core import comm_layer
+    from desktop.core.communication import state_reducer
+    from desktop.core.protocol import CMD_CLEAR_CALIBRATION, PACKET_TYPE_PROTO_ACK
+
+    log = SessionLog()
+    path = Path(log.start(str(tmp_path)))
+    monkeypatch.setattr(comm_layer, 'log_session', log.add)
+    monkeypatch.setattr(state_reducer, 'log_session', log.add)
+    comm = comm_layer.LowerComputerComm('')
+    comm.port = 'COM_TEST'
+    comm._protocol_compatible = True
+    monkeypatch.setattr(comm, 'is_connected', lambda: True)
+    assert comm.send_command('clear_calibration')
+    assert comm.send_command(('active_scope', 0x3E0, 0xF0, False))
+
+    lines = ('[AUTO CALIB] progress=20', '[BOOT CALIB] restored',
+             '[CALIB_TX_APPLY] accepted',
+             '[SERVO READ FAIL] bus=2 id=5 reason=checksum status_valid=0')
+    ack_payload = bytes((CMD_CLEAR_CALIBRATION, 0, 0)) + struct.pack('>I', 123)
+    frame = bytes((0xFE, len(ack_payload) + 2, PACKET_TYPE_PROTO_ACK)) + ack_payload + b'\xff'
+    stream = ('\n'.join(lines) + '\n').encode('ascii') + frame
+    # Exercise mixed text/binary decoding with arbitrary serial chunk boundaries.
+    for offset in range(0, len(stream), 7):
+        comm._process_packets(comm._frame_decoder.feed(stream[offset:offset + 7]))
+
+    # Read before closing: each record must already have been flushed to disk.
+    text = path.read_text(encoding='utf-8')
+    for line in lines:
+        assert text.count('[FW] ' + line) == 1
+    assert '[CALIB_TX] port=COM_TEST command=clear_calibration' in text
+    assert "[CALIB_TX] port=COM_TEST command=('active_scope', 992, 240, False)" in text
+    assert text.count(f'[PROTO] ACK cmd=0x{CMD_CLEAR_CALIBRATION:02X}') == 1
+    assert comm._state_reducer.last_model.proto_ack_cmd == CMD_CLEAR_CALIBRATION
+    log.close_and_save()
+    assert list(tmp_path.rglob('*.log')) == [path]
+    assert not (tmp_path / 'auto_calib').exists()

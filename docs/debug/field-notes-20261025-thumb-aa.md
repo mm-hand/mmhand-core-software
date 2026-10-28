@@ -34,8 +34,9 @@
 - `logs/recordings_20261025_153859_216036/08_原始接收帧.csv`
   （16:03:43 raw J16=5206；15:58:31 整组舵机 offline/unknown；16:03:36 restore；
   16:06/16:07 0xEC turn-zero）
-- `logs/auto_calib/auto_calib_20261025_153857__dev_ttyACM0.log`
-  （16:06:39 / 16:07:26 `[ACK] cmd=0xEC`）
+- 当时的校准专用日志记录了 16:06:39 / 16:07:26 的 `[ACK] cmd=0xEC`。
+  该历史独立日志现已移除；新记录统一写入会话日志的 `[PROTO]`，
+  参见 [舵机反馈诊断与日志位置](servo-feedback-diagnostics.md)。
 
 ## 掉电/恢复
 

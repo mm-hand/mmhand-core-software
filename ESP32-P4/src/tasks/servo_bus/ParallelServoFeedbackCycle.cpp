@@ -10,6 +10,7 @@
 #include "../../config/ServoConfig.h"
 #include "../../hal/servo/ServoBusRegistry.h"
 #include "../../system/TaskRuntimeMetrics.h"
+#include "ServoReadDiagnostics.h"
 
 bool ParallelServoFeedbackCycle::begin(
     const uint8_t ids[NUM_BUSES][MAX_SERVOS_PER_BUS],
@@ -92,6 +93,19 @@ bool ParallelServoFeedbackCycle::collect(
     if ((terminalBusMask_ & requestedBusMask_) != requestedBusMask_) {
         nextCollectUs_ = deadlineUs_;
         return false;
+    }
+
+    // UART collection on every BUS has finished before formatting any text.
+    for (uint8_t bus = 0; bus < NUM_BUSES; ++bus) {
+        if ((timeoutBusMask_ & (1U << bus)) == 0) continue;
+        const FeetechServoDriver* driver = servoBusRegistry().driver(bus);
+        if (!driver) continue;
+        for (uint8_t id = 0; id <= MAX_SERVO_ID; ++id) {
+            const ServoReadDiagnostic& diagnostic = driver->getReadDiagnostic(id);
+            if (diagnostic.sync && diagnostic.sequence == sequence_) {
+                logServoReadFailure(driver, bus, id);
+            }
+        }
     }
 
     completedMeta->sequence = sequence_;

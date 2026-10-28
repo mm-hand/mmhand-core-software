@@ -63,6 +63,7 @@ from .protocol import (
     MOTOR_COUNT,
     PROTO_ACK_STATUS_OK,
     PROTO_ACK_STATUS_QUEUED,
+    PROTO_ACK_STATUS_EMERGENCY_STOP_LATCHED,
     ControlMode,
     MOTOR_ABS_CMD_MAX,
     MOTOR_ABS_CMD_MIN,
@@ -83,6 +84,7 @@ from .protocol import (
     manual_encoder_reference_entry_crc,
 )
 from .session_log import log_session
+from .user_issues import IssueMessage
 
 LOWER_SYNC_TIMEOUT_S = 2.5
 STATE_SYNC_RETRY_PERIOD_S = 1.0
@@ -148,7 +150,9 @@ _ABS_ZERO_PLAN = _CoordinatePlan(
     invalidate_on_timeout=lambda self, pending, plan, state: self._invalidate_servo_rebase_zero_anchors(pending),
     success_message="servo ABS rebased; new feedback anchor capture pending",
     timeout_message="servo ABS rebase result timed out or cancelled; original transaction remains unresolved",
-    rejected_message=lambda status: f"servo ABS rebase rejected (status={status}); hardware write not accepted",
+    rejected_message=lambda status: (
+        IssueMessage("Cannot reset motor positions while Stop is active. Check the hand, click Clear Faults, then retry the original action.", "ACT-1005")
+        if status == PROTO_ACK_STATUS_EMERGENCY_STOP_LATCHED else f"servo ABS rebase rejected (status={status}); hardware write not accepted"),
     unsafe_state_message="servo ABS zero requires fresh stopped status and online, unambiguous selected motors",
     requires_sync=True,
     precheck=None,
@@ -195,6 +199,7 @@ class HandController:
     """
 
     def __init__(self):
+        self._applied_output_margins = None
         self.comm: Optional[LowerComputerComm] = None
         self.current_state = HandModel()
         self.state_lock = threading.Lock()
@@ -219,6 +224,7 @@ class HandController:
         self._multiturn_store_payload: Optional[dict] = None
         self._multiturn_store_identity = None
         self._multiturn_store_checked_at = 0.0
+        self._multiturn_store_last_error: Optional[str] = None
         self._multiturn_last_save_at = 0.0
         # Reset Zero 后 P4 会短暂把 logical ABS 标成可用，但在新的 Auto/LUT
         # 结果落盘前，该坐标不能成为下一次重启的恢复锚点。
@@ -482,9 +488,11 @@ class HandController:
         self._host_calibration_overlay = {}
         with self.state_lock:
             self.current_state = HandModel()
+            self._applied_output_margins = None
             self.current_state.calib_status = str(calib_status)
         self._multiturn_store_payload = None
         self._multiturn_store_identity = None
+        self._multiturn_store_last_error = None
         self._multiturn_last_save_at = 0.0
         with self._multiturn_io_lock:
             self._servo_abs_zero_connection_generation += 1
@@ -646,6 +654,7 @@ class HandController:
         now = time.monotonic()
         if (self._multiturn_store_identity is not None
                 and self._multiturn_store_identity[0] == identity
+                and self._multiturn_store_payload is not None
                 and now - self._multiturn_store_checked_at < 1.0):
             return self._multiturn_store_payload
         self._multiturn_store_checked_at = now
@@ -653,13 +662,19 @@ class HandController:
             version = (identity, self._multiturn_store.path.stat().st_mtime_ns)
         except OSError:
             version = (identity, None)
-        if self._multiturn_store_identity != version:
+        # 读取失败（payload=None）绝不缓存成"这台机器没有锚点"，下次调用立刻重读。
+        if (self._multiturn_store_identity != version
+                or self._multiturn_store_payload is None):
             self._multiturn_store_identity = version
             try:
                 self._multiturn_store_payload = self._multiturn_store.load(identity=identity)
+                self._multiturn_store_last_error = None
             except (OSError, DeviceStateStoreError, CalibrationSnapshotError) as exc:
                 self._multiturn_store_payload = None
-                log_session("MULTITURN", f"host anchor unavailable: {exc}")
+                # 同一条错误只记一次，避免 20 Hz 重试刷屏。
+                if str(exc) != self._multiturn_store_last_error:
+                    self._multiturn_store_last_error = str(exc)
+                    log_session("MULTITURN", f"host anchor unavailable: {exc}")
         return self._multiturn_store_payload
 
     @staticmethod
@@ -675,6 +690,22 @@ class HandController:
         payload = self._load_multiturn_store(identity) if identity else None
         values = list(payload["logical_abs"]) if payload else [0] * MOTOR_COUNT
         mask = int(str(payload["valid_motor_mask"]), 0) if payload else 0
+        # ponytail: 临时诊断，"恢复时锚点为空"定位完即删。
+        if not payload or mask == 0:
+            try:
+                path = self.calibration_snapshot_path
+                raw = read_snapshot(path)
+                disk_mask = int(str(raw.get('multiturn_anchor_valid_bitmap', '0')), 0)
+                mtime = path.stat().st_mtime
+            except Exception as exc:
+                disk_mask, mtime = f'read failed: {exc}', None
+            log_session(
+                "MULTITURN",
+                f"anchor read identity={'yes' if identity else 'no'} "
+                f"payload={'yes' if payload else 'no'} mask=0x{mask:08X} "
+                f"disk_mask=0x{disk_mask:08X} mtime={mtime} "
+                f"path={self.calibration_snapshot_path}",
+            )
         return mask, values, [value % 4096 for value in values], identity is not None
 
     def _start_persistence_worker(self):

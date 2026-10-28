@@ -42,12 +42,24 @@ def render_ramp():
                   '渐进快速换向参数的枚举顺序及硬校验边界。')
 
 
+def render_desktop():
+    schema = json.loads((ROOT / 'desktop/resources/config/control_parameters.schema.json').read_text(encoding='utf-8'))
+    defaults = json.loads((ROOT / 'desktop/resources/config/control_parameters.default.json').read_text(encoding='utf-8'))
+    bounds = {}
+    for field in schema['payloads']['main']['fields']:
+        bounds.setdefault(field['group'], {})[field['name']] = (field['minimum'], field['maximum'])
+    ramp = {field['name']: (field['minimum'], field['maximum']) for field in schema['payloads']['ramp']['fields']}
+    return ('"""Generated control parameter contract.\n\n职责：提供两端共用的参数边界与标定余量默认值。\n线程：只读常量。\n输入：参数 schema 和默认配置。\n输出：Python 参数校验表。\n状态所有权：生成器独占维护。\n禁止依赖：不得导入 UI 或设备。\n"""\n'
+            + f'BOUNDS = {bounds!r}\nRAMP_BOUNDS = {ramp!r}\nDEFAULT_OUTPUT_MARGINS = {(int(defaults["output"]["lut_release_margin_counts"]), int(defaults["output"]["lut_tight_margin_counts"]))!r}\n')
+
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--check', action='store_true')
     args = parser.parse_args()
     outputs = {
+        ROOT / 'desktop/core/generated_control_parameters.py': render_desktop(),
         ROOT / 'ESP32-P4/src/generated/ControlParameters.generated.h': render_main(),
         ROOT / 'ESP32-P4/src/generated/RampParameters.generated.h': render_ramp(),
     }

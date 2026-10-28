@@ -22,7 +22,6 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - depends on local environment
     serial = None
 
-from .auto_calib_logger import AutoCalibLogger
 from . import protocol as protocol_codec
 from .communication import (
     AckTracker,
@@ -968,7 +967,6 @@ class LowerComputerComm:
         self._heartbeat_enabled = False
         self._protocol_compatible = False
         self._offline_reported = False
-        self._auto_calib_logger = AutoCalibLogger(self.port)
         self._tactile_hold_groups: Optional[List[List[List[int]]]] = None
         self._tactile_zero_counts: List[List[int]] = [
             [0 for _ in range(3)] for _ in range(5)
@@ -1041,8 +1039,6 @@ class LowerComputerComm:
             self._last_tactile_summary_seq = None
             self._last_tactile_full_ts = 0.0
             self._reset_tactile_full_reassembly()
-            auto_calib_path = self._auto_calib_logger.start(self.port)
-            log_session("AUTO_CALIB", f"log started {auto_calib_path}")
             self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
             self._tx_thread = threading.Thread(target=self._tx_loop, daemon=True)
             self._rx_thread.start()
@@ -1069,9 +1065,6 @@ class LowerComputerComm:
     def disconnect(self):
         self.running = False
         self._heartbeat_enabled = False
-        auto_calib_path = self._auto_calib_logger.close()
-        if auto_calib_path:
-            log_session("AUTO_CALIB", f"log saved {auto_calib_path}")
         log_session("COMM", "serial disconnect requested")
         self._transport.close()
         rx_thread = self._rx_thread
@@ -1360,12 +1353,6 @@ class LowerComputerComm:
         stripped = text.strip()
         if stripped:
             log_session("FW", stripped)
-            if (
-                "[AUTO CALIB]" in stripped
-                or "[BOOT CALIB]" in stripped
-                or "[CALIB_TX_APPLY]" in stripped
-            ):
-                self._auto_calib_logger.log("FW", stripped)
         if not FIRMWARE_LOG_TO_TERMINAL:
             return
         if stripped.startswith(FIRMWARE_LOG_FILTER_PREFIXES):
@@ -1635,13 +1622,13 @@ class LowerComputerComm:
             isinstance(cmd, tuple) and len(cmd) == 2 and
             cmd[0] == "clear_calibration_scope"
         ):
-            self._auto_calib_logger.log("TX", str(cmd))
+            log_session("CALIB_TX", f"port={self.port} command={cmd}")
         elif isinstance(cmd, tuple) and len(cmd) >= 1 and cmd[0] in (
             "active_scope",
             "calib_load_limits",
             "calib_load_joint",
         ):
-            self._auto_calib_logger.log("TX", repr(cmd))
+            log_session("CALIB_TX", f"port={self.port} command={cmd!r}")
         if cmd == "stop":
             self._enqueue_stop_immediately()
             return True
@@ -1830,25 +1817,6 @@ class LowerComputerComm:
         self._transport.write(data)
         self._last_heartbeat_tx = now
         self._update_tx_diag("host_heartbeat", len(data))
-
-    def _log_auto_calib_diag(self, parsed: dict) -> None:
-        if parsed is None:
-            return
-        self._auto_calib_logger.log(
-            "CALIB_DIAG",
-            (
-                f"valid={int(bool(parsed.get('valid', False)))} "
-                f"reason={int(parsed.get('reason', 0) or 0)} "
-                f"phase={int(parsed.get('phase', 0) or 0)} "
-                f"joint={int(parsed.get('joint', 0xFF) or 0)} "
-                f"motor={int(parsed.get('motor', 0xFF) or 0)} "
-                f"valueA={int(parsed.get('valueA', 0) or 0)} "
-                f"valueB={int(parsed.get('valueB', 0) or 0)} "
-                f"valueC={int(parsed.get('valueC', 0) or 0)} "
-                f"bitmap=0x{int(parsed.get('bitmap', 0) or 0):08X} "
-                f"device_ms={int(parsed.get('timestamp_ms', 0) or 0)}"
-            ),
-        )
 
     def _encode_command(self, cmd: SendCmd) -> Optional[bytes]:
         if isinstance(cmd, tuple) and cmd and cmd[0] == 'maintenance_frame':

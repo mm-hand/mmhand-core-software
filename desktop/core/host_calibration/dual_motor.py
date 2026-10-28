@@ -711,15 +711,13 @@ class _DualMachine:
         for actuator, motor in enumerate((primary, secondary)):
             bounds = tendon_motor_abs_limits(
                 result, actuator, motor,
-                config.kMotorAbsReleaseMarginCounts,
-                config.kMotorAbsTightMarginCounts,
+                *config.calibration_margins(self.io),
             )
             if bounds is None:
                 lo, hi = sorted(measured[actuator])
                 bounds = extend_motor_abs_limits(
                     motor, lo, hi,
-                    config.kMotorAbsReleaseMarginCounts,
-                    config.kMotorAbsTightMarginCounts,
+                    *config.calibration_margins(self.io),
                 )
             if bounds is None:
                 self._diag(protocol.CALIB_DIAG_REASON_RESULT_BUILD_FAILED,

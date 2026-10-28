@@ -297,7 +297,7 @@ def build_fingerprint(manifest: dict, limits: list[tuple[int, float, float]],
     source_files = [p4_root / "ESP32-P4.ino"]
     source_files.extend(
         path for path in (p4_root / "src").rglob("*")
-        if path.is_file() and path.suffix.lower() in (".c", ".cpp", ".h")
+        if path.is_file() and path.suffix.lower() in (".c", ".cpp", ".h", ".def")
         and "generated" not in path.relative_to(p4_root / "src").parts
     )
     # 协议 schema 同样决定固件对外行为。虽然生成头位于 generated/ 并被排除，

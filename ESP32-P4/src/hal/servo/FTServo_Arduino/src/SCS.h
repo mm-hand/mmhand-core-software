@@ -10,6 +10,13 @@
 
 #include "INST.h"
 
+// Local read evidence only; never added to the host wire protocol.
+struct SCSReadDiagnostics {
+	u8 payloadBytes = 0;   // Actual data bytes copied, including a partial reply.
+	u8 replyLength = 0;    // Raw LENGTH byte, zero if no complete reply header.
+	bool statusValid = false; // Status belongs to a complete checksum-valid reply.
+};
+
 class SCS{
 public:
 	/** 当前产品单 BUS 最大同步回包为 12 * (15 + 6) = 252 byte。 */
@@ -44,6 +51,7 @@ public:
 	int Recal(u8 ID, u16 EncodedPosition);
 	u8 getState() { return u8Status; }
 	u8 getLastError() { return u8Error; }
+	const SCSReadDiagnostics& getReadDiagnostics() const { return readDiagnostics; }
 public:
 	u8 Level;//舵机返回等级
 	u8 End;//处理器大小端结构
@@ -58,6 +66,7 @@ public:
 	u16 syncReadRxBuffMax = 0;
 	u32 syncTimeOut = 0;
 protected:
+	SCSReadDiagnostics readDiagnostics;
 	virtual int writeSCS(unsigned char *nDat, int nLen) = 0;
 	virtual int readSCS(unsigned char *nDat, int nLen) = 0;
 	virtual int readSCS(unsigned char *nDat, int nLen, unsigned long TimeOut) = 0;

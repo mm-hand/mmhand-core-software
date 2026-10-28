@@ -13,7 +13,7 @@ from desktop.core.safety_rules import (
 
 def test_safety_rule_ids_are_unique_and_stable() -> None:
     table = safety_rule_table()
-    assert len(table) == 103
+    assert len(table) == 73
     assert table[1009]["code"] == "ACT-1009"
     assert table[3001]["code"] == "SYS-3001"
     assert table[8001]["code"] == "RUN-8001"
@@ -26,7 +26,7 @@ def test_safety_rule_ids_are_unique_and_stable() -> None:
 def test_reject_reasons_use_central_explanations() -> None:
     for reason in range(1, 7):
         assert f"DIR-{3100 + reason}" in explain_direct_reject(reason)
-    for reason in range(1, 8):
+    for reason in (1, 2, 3, 4, 6, 7):
         assert f"FBK-{3200 + reason}" in explain_feedback_reject(reason)
     for reason in range(1, 10):
         assert f"ROP-{3400 + reason}" in explain_rope_init_reason(reason)

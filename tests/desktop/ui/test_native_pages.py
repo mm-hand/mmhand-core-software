@@ -19,8 +19,10 @@ def test_unplugged_serial_choice_is_removed_but_active_identity_is_retained():
     assert device_selector_state({}, 'COM12', active) == ({'COM12': 'COM12'}, 'COM12')
 
 @pytest.fixture
-def page():
+def page(tmp_path):
     hand = HandBackend()
+    from desktop.core.control_parameters import ControlParameterStore
+    hand._control_parameters = ControlParameterStore(tmp_path / 'control.json')
     client = Client(ui.page('/test-console'))
     with client:
         yield hand, client

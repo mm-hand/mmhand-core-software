@@ -103,3 +103,17 @@ def test_parameter_readback_mismatch_cannot_authorize_controls(monkeypatch):
     monkeypatch.setattr(comm,'send_command',send)
     with pytest.raises(ValueError,match='readback differs'):
         comm.apply_control_parameters(data)
+
+
+def test_host_rejects_ramp_load_values_that_firmware_cannot_accept():
+    from desktop.core.control_parameters import validate, RAMP_BOUNDS
+    data = json.loads(DEFAULT_PATH.read_text())
+    for name in RAMP_BOUNDS:
+        if not name.startswith('load_limit_'):
+            continue
+        data['reversal_ramp'][name] = 1000
+        validate(data)
+        data['reversal_ramp'][name] = 1001
+        with pytest.raises(ValueError, match=name):
+            validate(data)
+        data['reversal_ramp'][name] = 900

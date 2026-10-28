@@ -89,6 +89,20 @@ struct ServoSyncReadResult {
     uint64_t completedUs;
 };
 
+/** 最近一次反馈读取的本地证据；只供任务层输出限频文本日志。 */
+struct ServoReadDiagnostic {
+    bool failed = false;
+    bool sync = false;
+    uint8_t communicationError = 0;
+    uint8_t motorStatus = 0;
+    SCSReadDiagnostics reply;
+    uint8_t expectedPayloadBytes = 0;
+    uint16_t busReceivedBytes = 0;
+    uint16_t busExpectedBytes = 0;
+    uint32_t elapsedMs = 0;
+    uint32_t sequence = 0;
+};
+
 /** 一条飞特 UART 总线的唯一驱动实例。 */
 class FeetechServoDriver {
 public:
@@ -289,6 +303,12 @@ public:
 
     uint64_t syncReadDeadlineUs() const { return _syncReadDeadlineUs; }
 
+    const ServoReadDiagnostic& getReadDiagnostic(uint8_t id) const
+    {
+        static const ServoReadDiagnostic empty;
+        return id <= MAX_SERVO_ID ? _readDiagnostics[id] : empty;
+    }
+
     /** 对一台离线舵机执行低频单播探测，成功时更新上线去抖状态。 */
     bool probeFeedback(uint8_t id,
                        uint16_t timeoutMs = SERVO_PROBE_TIMEOUT_MS)
@@ -299,8 +319,11 @@ public:
         // 扫描阶段临时缩短单播超时，避免一个不存在的 ID 长时间阻塞四条 BUS。
         const unsigned long previousTimeout = _sms.IOTimeOut;
         _sms.IOTimeOut = timeoutMs == 0 ? 1 : timeoutMs;
+        const uint32_t startedMs = millis();
         const int feedbackResult = _sms.FeedBack(id);
         _sms.IOTimeOut = previousTimeout;
+        captureReadDiagnostic(id, false, 15, millis() - startedMs,
+                              feedbackResult < 0 || _sms.getState() != 0);
         if (feedbackResult < 0 || _sms.getState() != 0) {
             markReadFailure(id);
             return false;
@@ -545,6 +568,22 @@ public:
     }
 
 private:
+    void captureReadDiagnostic(uint8_t id, bool sync, uint8_t expectedBytes,
+                               uint32_t elapsedMs, bool failed)
+    {
+        ServoReadDiagnostic& diagnostic = _readDiagnostics[id];
+        diagnostic.failed = failed;
+        diagnostic.sync = sync;
+        diagnostic.communicationError = _sms.getLastError();
+        diagnostic.motorStatus = _sms.getState();
+        diagnostic.reply = _sms.getReadDiagnostics();
+        diagnostic.expectedPayloadBytes = expectedBytes;
+        diagnostic.busReceivedBytes = sync ? _sms.syncReadBufferedBytes() : 0;
+        diagnostic.busExpectedBytes = sync ? _sms.syncReadExpectedBytes() : 0;
+        diagnostic.elapsedMs = elapsedMs;
+        diagnostic.sequence = sync ? _syncReadSequence : 0;
+    }
+
     /** 合并一帧有效反馈，并执行上线去抖和掉电前可信快照更新。 */
     void recordFeedbackSuccess(uint8_t id,
                                int16_t rawPos,
@@ -681,6 +720,7 @@ private:
     uint8_t _writeAcc[MAX_SERVOS_PER_BUS]; ///< 同步写加速度缓存。
     uint8_t _writeCount; ///< 当前同步写缓存中的有效命令数。
     ServoFeedbackInternal _feedback[MAX_SERVO_ID + 1]; ///< 按物理 ID 索引的驱动私有状态。
+    ServoReadDiagnostic _readDiagnostics[MAX_SERVO_ID + 1]; ///< 原始失败原因，不参与在线或运动准入。
     bool _torqueDisabled[MAX_SERVO_ID + 1]; ///< 最近一次成功设置的扭矩关闭状态。
     bool _multiTurnConfigured[MAX_SERVO_ID + 1]; ///< 本次上线是否已完成多圈配置。
     uint8_t _currentReadDivider; ///< 降频读取 Present Current 的分频计数器。

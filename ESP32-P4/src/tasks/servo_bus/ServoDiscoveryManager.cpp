@@ -6,6 +6,7 @@
 
 #include "../../hal/servo/ServoBusRegistry.h"
 #include "ServoRouteTable.h"
+#include "ServoReadDiagnostics.h"
 #include "../../config/topology/HardwareMap.h"
 #include "../../config/ServoConfig.h"
 #include "../../system/log/FirmwareLog.h"
@@ -189,6 +190,7 @@ bool ServoDiscoveryManager::step(uint32_t nowMs, bool motionActive)
     const bool present = driver && driver->probeFeedback(
         servoId,
         targetedScan ? kRecoveryProbeTimeoutMs : kDiscoveryProbeTimeoutMs);
+    if (!present) logServoReadFailure(driver, probedBus, servoId);
     servoRouteTable().recordProbe(probedBus, servoId, present);
 
     bool scanFinished = false;

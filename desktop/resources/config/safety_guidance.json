@@ -1,0 +1,1068 @@
+{
+  "schema_version": 1,
+  "rules": {
+    "1001": {
+      "title": "The motor command could not be used",
+      "category": "internal",
+      "impact": "The controller reported an internal problem.",
+      "steps": [
+        "Stop using motion controls and open Details.",
+        "When the hand is safe, restart the controller and reconnect.",
+        "If it happens again, save the session log for support."
+      ]
+    },
+    "1002": {
+      "title": "Motor locations are not known yet",
+      "category": "offline",
+      "impact": "Reliable feedback is needed before these motors can be controlled.",
+      "steps": [
+        "Check motor power and the affected bus connections.",
+        "Wait for the affected motors to show Online, then retry the original action."
+      ]
+    },
+    "1003": {
+      "title": "Two motors are using the same ID",
+      "category": "route_conflict",
+      "impact": "A unique motor address is required before control can start.",
+      "steps": [
+        "Open Renumber Motor and inspect the reported bus and ID.",
+        "Assign unique IDs using the existing maintenance procedure, then scan again."
+      ]
+    },
+    "1004": {
+      "title": "Too many motors are connected to one bus",
+      "category": "bus_capacity",
+      "impact": "The affected bus has more motors than its configured capacity.",
+      "steps": [
+        "Open Details to check the affected bus and allowed count.",
+        "Move extra motors to another bus, then scan again."
+      ]
+    },
+    "1005": {
+      "title": "Stop is still active",
+      "category": "stop",
+      "impact": "Motion requests are blocked while Stop remains active.",
+      "steps": [
+        "Check that the hand is clear of obstacles.",
+        "Click Clear Faults.",
+        "Retry the original action."
+      ]
+    },
+    "1006": {
+      "title": "Another task controls the motors",
+      "category": "busy",
+      "impact": "The controller did not accept this request in its current state.",
+      "steps": [
+        "Wait for the current action or mode change to finish.",
+        "If the app remains busy, click Stop, then Clear Faults before enabling again."
+      ]
+    },
+    "1007": {
+      "title": "This action is not available in the current mode",
+      "category": "busy",
+      "impact": "The controller did not accept this request in its current state.",
+      "steps": [
+        "Wait for the current action or mode change to finish.",
+        "If the app remains busy, click Stop, then Clear Faults before enabling again."
+      ]
+    },
+    "1008": {
+      "title": "Motor feedback is unavailable",
+      "category": "offline",
+      "impact": "Reliable feedback is needed before these motors can be controlled.",
+      "steps": [
+        "Check motor power and the affected bus connections.",
+        "Wait for the affected motors to show Online, then retry the original action."
+      ]
+    },
+    "1009": {
+      "title": "Motor positions need to be recovered",
+      "category": "position",
+      "impact": "The controller cannot safely interpret the affected motor positions.",
+      "steps": [
+        "Wait for position recovery to finish.",
+        "If recovery fails, open Motor Calibration and calibrate the affected joints."
+      ]
+    },
+    "1010": {
+      "title": "The motor command arrived too late",
+      "category": "busy",
+      "impact": "The controller did not accept this request in its current state.",
+      "steps": [
+        "Wait for the current action or mode change to finish.",
+        "If the app remains busy, click Stop, then Clear Faults before enabling again."
+      ]
+    },
+    "1012": {
+      "title": "The requested motor position is outside the hardware limit",
+      "category": "hardware_limit",
+      "impact": "The motor command was rejected because it exceeded the hardware travel limit.",
+      "steps": [
+        "Stop motion and check the affected motor position in Details.",
+        "Check the saved motor position and calibration before sending another target."
+      ]
+    },
+    "1013": {
+      "title": "A motor has reached its position safety limit",
+      "category": "position_limit",
+      "impact": "A motor position safety limit is blocking further control.",
+      "steps": [
+        "Check that the affected joint and tendons can move freely.",
+        "If Stop is active, click Clear Faults after checking the hand.",
+        "Open Motor Calibration, select the affected joints, and calibrate them again."
+      ]
+    },
+    "2001": {
+      "title": "Joint feedback is unavailable",
+      "category": "encoder",
+      "impact": "The controller cannot use the affected joint position readings.",
+      "steps": [
+        "Check the S3 sensor board and its power and CAN connections.",
+        "Wait for current joint readings to return before enabling control."
+      ]
+    },
+    "2002": {
+      "title": "The controller could not identify a joint",
+      "category": "internal",
+      "impact": "The controller reported an internal problem.",
+      "steps": [
+        "Stop using motion controls and open Details.",
+        "When the hand is safe, restart the controller and reconnect.",
+        "If it happens again, save the session log for support."
+      ]
+    },
+    "2003": {
+      "title": "A joint position sensor is not working reliably",
+      "category": "encoder",
+      "impact": "The controller cannot use the affected joint position readings.",
+      "steps": [
+        "Check the S3 sensor board and its power and CAN connections.",
+        "Wait for current joint readings to return before enabling control."
+      ]
+    },
+    "2004": {
+      "title": "A joint angle could not be calculated",
+      "category": "calibration",
+      "impact": "The selected joints are not ready for this action.",
+      "steps": [
+        "Open Joint Calibration and check the selected joints' Manual Min and Max.",
+        "Open Motor Calibration and calibrate the affected joints."
+      ]
+    },
+    "2005": {
+      "title": "Joint movement has been paused",
+      "category": "collision",
+      "impact": "The joint did not move as expected. Contact with an object is one possible cause.",
+      "steps": [
+        "Check whether the hand is touching an object or a joint is blocked.",
+        "When it is safe, send a target in the reverse direction to release the existing hold."
+      ]
+    },
+    "2006": {
+      "title": "A motor target has reached its configured limit",
+      "category": "boundary",
+      "impact": "The controller limited a motor target to its applied calibration boundary.",
+      "steps": [
+        "Check the requested target angle and the affected joint.",
+        "If ordinary targets keep reaching this limit, check calibration before continuing."
+      ]
+    },
+    "2007": {
+      "title": "A requested angle was limited to the allowed range",
+      "category": "boundary",
+      "impact": "The controller limited a requested joint angle to its allowed range.",
+      "steps": [
+        "Check the requested target angle and the affected joint.",
+        "If ordinary targets keep reaching this limit, check calibration before continuing."
+      ]
+    },
+    "2008": {
+      "title": "A joint moved beyond its calibrated warning boundary",
+      "category": "boundary",
+      "impact": "The measured joint angle exceeded its warning boundary. This warning alone does not stop motion.",
+      "steps": [
+        "Check the requested target angle and the affected joint.",
+        "If ordinary targets keep reaching this limit, check calibration before continuing."
+      ]
+    },
+    "2009": {
+      "title": "A reconnected motor is being held in position",
+      "category": "reconnected",
+      "impact": "The reconnected motor is held until a new target is explicitly sent.",
+      "steps": [
+        "Check that position recovery completed and the hand is clear.",
+        "Send a new target using the existing control."
+      ]
+    },
+    "3001": {
+      "title": "The controller lost contact with the app",
+      "category": "host_connection",
+      "impact": "The control connection was lost and a protective response was triggered.",
+      "steps": [
+        "Check the app and USB connection, then reconnect.",
+        "Check the hand and clear any remaining fault before enabling again."
+      ]
+    },
+    "3002": {
+      "title": "The controller cannot start this action yet",
+      "category": "busy",
+      "impact": "The controller did not accept this request in its current state.",
+      "steps": [
+        "Wait for the current action or mode change to finish.",
+        "If the app remains busy, click Stop, then Clear Faults before enabling again."
+      ]
+    },
+    "3101": {
+      "title": "Direct Control cannot start in the current state",
+      "category": "busy",
+      "impact": "The controller did not accept this request in its current state.",
+      "steps": [
+        "Wait for the current action or mode change to finish.",
+        "If the app remains busy, click Stop, then Clear Faults before enabling again."
+      ]
+    },
+    "3102": {
+      "title": "Selected motors are not ready",
+      "category": "offline",
+      "impact": "Reliable feedback is needed before these motors can be controlled.",
+      "steps": [
+        "Check motor power and the affected bus connections.",
+        "Wait for the affected motors to show Online, then retry the original action."
+      ]
+    },
+    "3103": {
+      "title": "Selected motor positions need to be recovered",
+      "category": "position",
+      "impact": "The controller cannot safely interpret the affected motor positions.",
+      "steps": [
+        "Wait for position recovery to finish.",
+        "If recovery fails, open Motor Calibration and calibrate the affected joints."
+      ]
+    },
+    "3104": {
+      "title": "The controller is busy handling earlier requests",
+      "category": "busy",
+      "impact": "The controller did not accept this request in its current state.",
+      "steps": [
+        "Wait for the current action or mode change to finish.",
+        "If the app remains busy, click Stop, then Clear Faults before enabling again."
+      ]
+    },
+    "3105": {
+      "title": "This Direct Control request is no longer current",
+      "category": "busy",
+      "impact": "The controller did not accept this request in its current state.",
+      "steps": [
+        "Wait for the current action or mode change to finish.",
+        "If the app remains busy, click Stop, then Clear Faults before enabling again."
+      ]
+    },
+    "3106": {
+      "title": "A device fault is blocking Direct Control",
+      "category": "device_fault",
+      "impact": "A device fault is blocking this action.",
+      "steps": [
+        "Open Diagnostics and resolve the current fault shown for the affected device.",
+        "After correcting the cause, click Clear Faults before enabling control again."
+      ]
+    },
+    "3201": {
+      "title": "Selected joints need Manual Min and Max values",
+      "category": "calibration",
+      "impact": "The selected joints are not ready for this action.",
+      "steps": [
+        "Open Joint Calibration and check the selected joints' Manual Min and Max.",
+        "Open Motor Calibration and calibrate the affected joints."
+      ]
+    },
+    "3202": {
+      "title": "Feedback Control cannot start in the current state",
+      "category": "busy",
+      "impact": "The controller did not accept this request in its current state.",
+      "steps": [
+        "Wait for the current action or mode change to finish.",
+        "If the app remains busy, click Stop, then Clear Faults before enabling again."
+      ]
+    },
+    "3203": {
+      "title": "Selected joints are outside the starting range",
+      "category": "workspace",
+      "impact": "The selected joints are outside the range required to start joint control.",
+      "steps": [
+        "Check that the hand can move freely.",
+        "Use the existing Enable flow to return the selected joints to the starting range."
+      ]
+    },
+    "3204": {
+      "title": "Selected motor positions need to be recovered",
+      "category": "position",
+      "impact": "The controller cannot safely interpret the affected motor positions.",
+      "steps": [
+        "Wait for position recovery to finish.",
+        "If recovery fails, open Motor Calibration and calibrate the affected joints."
+      ]
+    },
+    "3206": {
+      "title": "The controller is still changing control mode",
+      "category": "busy",
+      "impact": "The controller did not accept this request in its current state.",
+      "steps": [
+        "Wait for the current action or mode change to finish.",
+        "If the app remains busy, click Stop, then Clear Faults before enabling again."
+      ]
+    },
+    "3207": {
+      "title": "The controller is busy handling earlier requests",
+      "category": "busy",
+      "impact": "The controller did not accept this request in its current state.",
+      "steps": [
+        "Wait for the current action or mode change to finish.",
+        "If the app remains busy, click Stop, then Clear Faults before enabling again."
+      ]
+    },
+    "3301": {
+      "title": "Joint feedback mode is not selected",
+      "category": "mode",
+      "impact": "Joint-feedback readiness does not apply while another control mode is selected.",
+      "steps": [
+        "Select Feedback Control when you want to control joint angles."
+      ]
+    },
+    "3302": {
+      "title": "Motor positions are not ready for joint control",
+      "category": "position",
+      "impact": "The controller cannot safely interpret the affected motor positions.",
+      "steps": [
+        "Wait for position recovery to finish.",
+        "If recovery fails, open Motor Calibration and calibrate the affected joints."
+      ]
+    },
+    "3303": {
+      "title": "No joints are selected",
+      "category": "selection",
+      "impact": "This action needs at least one selected joint.",
+      "steps": [
+        "Select the joints you want to use, then retry the action."
+      ]
+    },
+    "3304": {
+      "title": "Current joint angles are unavailable",
+      "category": "encoder",
+      "impact": "The controller cannot use the affected joint position readings.",
+      "steps": [
+        "Check the S3 sensor board and its power and CAN connections.",
+        "Wait for current joint readings to return before enabling control."
+      ]
+    },
+    "3305": {
+      "title": "Selected joints need calibration data",
+      "category": "calibration",
+      "impact": "The selected joints are not ready for this action.",
+      "steps": [
+        "Open Joint Calibration and check the selected joints' Manual Min and Max.",
+        "Open Motor Calibration and calibrate the affected joints."
+      ]
+    },
+    "3306": {
+      "title": "A current joint angle is invalid",
+      "category": "encoder",
+      "impact": "The controller cannot use the affected joint position readings.",
+      "steps": [
+        "Check the S3 sensor board and its power and CAN connections.",
+        "Wait for current joint readings to return before enabling control."
+      ]
+    },
+    "3307": {
+      "title": "A joint is below its starting range",
+      "category": "workspace",
+      "impact": "The selected joints are outside the range required to start joint control.",
+      "steps": [
+        "Check that the hand can move freely.",
+        "Use the existing Enable flow to return the selected joints to the starting range."
+      ]
+    },
+    "3308": {
+      "title": "Joint calibration no longer matches its Manual endpoints",
+      "category": "calibration",
+      "impact": "The selected joints are not ready for this action.",
+      "steps": [
+        "Open Joint Calibration and check the selected joints' Manual Min and Max.",
+        "Open Motor Calibration and calibrate the affected joints."
+      ]
+    },
+    "3309": {
+      "title": "Joint position feedback is unavailable",
+      "category": "encoder",
+      "impact": "The controller cannot use the affected joint position readings.",
+      "steps": [
+        "Check the S3 sensor board and its power and CAN connections.",
+        "Wait for current joint readings to return before enabling control."
+      ]
+    },
+    "3310": {
+      "title": "A device fault is preventing the Ready state",
+      "category": "device_fault",
+      "impact": "A device fault is blocking this action.",
+      "steps": [
+        "Open Diagnostics and resolve the current fault shown for the affected device.",
+        "After correcting the cause, click Clear Faults before enabling control again."
+      ]
+    },
+    "3311": {
+      "title": "A motor position safety limit is preventing control",
+      "category": "position_limit",
+      "impact": "A motor position safety limit is blocking further control.",
+      "steps": [
+        "Check that the affected joint and tendons can move freely.",
+        "If Stop is active, click Clear Faults after checking the hand.",
+        "Open Motor Calibration, select the affected joints, and calibrate them again."
+      ]
+    },
+    "3401": {
+      "title": "Return to the starting range took too long",
+      "category": "workspace",
+      "impact": "The return action did not finish within its time limit. The final joint position is not confirmed.",
+      "steps": [
+        "Check for an obstruction or a joint that cannot move freely.",
+        "Check that live motor and joint position readings update.",
+        "Correct the observed problem before trying Enable again."
+      ]
+    },
+    "3402": {
+      "title": "Position updates stopped during the return movement",
+      "category": "encoder",
+      "impact": "The controller cannot use the affected joint position readings.",
+      "steps": [
+        "Check the S3 sensor board and its power and CAN connections.",
+        "Wait for current joint readings to return before enabling control."
+      ]
+    },
+    "3403": {
+      "title": "A motor stopped responding during the return movement",
+      "category": "offline",
+      "impact": "Reliable feedback is needed before these motors can be controlled.",
+      "steps": [
+        "Check motor power and the affected bus connections.",
+        "Wait for the affected motors to show Online, then retry the original action."
+      ]
+    },
+    "3404": {
+      "title": "Motor positions became uncertain during the return movement",
+      "category": "position",
+      "impact": "The controller cannot safely interpret the affected motor positions.",
+      "steps": [
+        "Wait for position recovery to finish.",
+        "If recovery fails, open Motor Calibration and calibrate the affected joints."
+      ]
+    },
+    "3405": {
+      "title": "The return movement needs Manual endpoints",
+      "category": "calibration",
+      "impact": "The selected joints are not ready for this action.",
+      "steps": [
+        "Open Joint Calibration and check the selected joints' Manual Min and Max.",
+        "Open Motor Calibration and calibrate the affected joints."
+      ]
+    },
+    "3406": {
+      "title": "The return movement needs motor calibration",
+      "category": "calibration",
+      "impact": "The selected joints are not ready for this action.",
+      "steps": [
+        "Open Joint Calibration and check the selected joints' Manual Min and Max.",
+        "Open Motor Calibration and calibrate the affected joints."
+      ]
+    },
+    "3407": {
+      "title": "The controller could not send the return target",
+      "category": "internal",
+      "impact": "The controller reported an internal problem.",
+      "steps": [
+        "Stop using motion controls and open Details.",
+        "When the hand is safe, restart the controller and reconnect.",
+        "If it happens again, save the session log for support."
+      ]
+    },
+    "3408": {
+      "title": "A device fault interrupted the return movement",
+      "category": "device_fault",
+      "impact": "A device fault is blocking this action.",
+      "steps": [
+        "Open Diagnostics and resolve the current fault shown for the affected device.",
+        "After correcting the cause, click Clear Faults before enabling control again."
+      ]
+    },
+    "3409": {
+      "title": "The return movement was cancelled",
+      "category": "cancelled",
+      "impact": "The return movement ended before completion.",
+      "steps": [
+        "Check the selected mode and start the intended action again when ready."
+      ]
+    },
+    "3501": {
+      "title": "The joint sensor board is not responding reliably",
+      "category": "encoder",
+      "impact": "The controller cannot use the affected joint position readings.",
+      "steps": [
+        "Check the S3 sensor board and its power and CAN connections.",
+        "Wait for current joint readings to return before enabling control."
+      ]
+    },
+    "3502": {
+      "title": "A motor load safety limit was reached",
+      "category": "overload",
+      "impact": "A load protection was triggered.",
+      "steps": [
+        "Check for an obstruction, a tight tendon, or a joint that cannot move freely.",
+        "After correcting the cause, click Clear Faults and retry the original action."
+      ]
+    },
+    "3503": {
+      "title": "Motor feedback is unavailable",
+      "category": "offline",
+      "impact": "Reliable feedback is needed before these motors can be controlled.",
+      "steps": [
+        "Check motor power and the affected bus connections.",
+        "Wait for the affected motors to show Online, then retry the original action."
+      ]
+    },
+    "3505": {
+      "title": "Motor positions are not trusted",
+      "category": "position",
+      "impact": "The controller cannot safely interpret the affected motor positions.",
+      "steps": [
+        "Wait for position recovery to finish.",
+        "If recovery fails, open Motor Calibration and calibrate the affected joints."
+      ]
+    },
+    "4101": {
+      "title": "A joint did not return far enough during calibration",
+      "category": "quality",
+      "impact": "Calibration found a possible assembly or travel issue. This does not identify a mechanical cause.",
+      "steps": [
+        "Check tendon routing, preload, and the affected joint's ability to move freely.",
+        "Correct the observed issue, then calibrate that joint again."
+      ]
+    },
+    "4102": {
+      "title": "A joint did not reach far enough during calibration",
+      "category": "quality",
+      "impact": "Calibration found a possible assembly or travel issue. This does not identify a mechanical cause.",
+      "steps": [
+        "Check tendon routing, preload, and the affected joint's ability to move freely.",
+        "Correct the observed issue, then calibrate that joint again."
+      ]
+    },
+    "4103": {
+      "title": "Measured joint travel differs from the model",
+      "category": "quality",
+      "impact": "Calibration found a possible assembly or travel issue. This does not identify a mechanical cause.",
+      "steps": [
+        "Check tendon routing, preload, and the affected joint's ability to move freely.",
+        "Correct the observed issue, then calibrate that joint again."
+      ]
+    },
+    "6001": {
+      "title": "The controller could not start the sensor connection",
+      "category": "communication",
+      "impact": "A communication update was incomplete or invalid.",
+      "steps": [
+        "Check the affected connection and confirm that the app and firmware versions match.",
+        "If the problem continues, open Details and save the session log."
+      ]
+    },
+    "6002": {
+      "title": "A sensor message could not be read",
+      "category": "communication",
+      "impact": "A communication update was incomplete or invalid.",
+      "steps": [
+        "Check the affected connection and confirm that the app and firmware versions match.",
+        "If the problem continues, open Details and save the session log."
+      ]
+    },
+    "6003": {
+      "title": "A complete joint position update was not received",
+      "category": "communication",
+      "impact": "A communication update was incomplete or invalid.",
+      "steps": [
+        "Check the affected connection and confirm that the app and firmware versions match.",
+        "If the problem continues, open Details and save the session log."
+      ]
+    },
+    "6004": {
+      "title": "A complete touch sensor update was not received",
+      "category": "communication",
+      "impact": "A communication update was incomplete or invalid.",
+      "steps": [
+        "Check the affected connection and confirm that the app and firmware versions match.",
+        "If the problem continues, open Details and save the session log."
+      ]
+    },
+    "6005": {
+      "title": "The controller could not read an app command",
+      "category": "communication",
+      "impact": "A communication update was incomplete or invalid.",
+      "steps": [
+        "Check the affected connection and confirm that the app and firmware versions match.",
+        "If the problem continues, open Details and save the session log."
+      ]
+    },
+    "8001": {
+      "title": "Some older diagnostic events were overwritten",
+      "category": "diagnostic",
+      "impact": "The available event history is incomplete; this does not by itself indicate a motor fault.",
+      "steps": [
+        "Save the current session log.",
+        "Check Details for a frequently repeated issue."
+      ]
+    },
+    "8002": {
+      "title": "The controller could not create an internal message channel",
+      "category": "internal",
+      "impact": "The controller reported an internal problem.",
+      "steps": [
+        "Stop using motion controls and open Details.",
+        "When the hand is safe, restart the controller and reconnect.",
+        "If it happens again, save the session log for support."
+      ]
+    },
+    "8003": {
+      "title": "The controller could not create an internal lock",
+      "category": "internal",
+      "impact": "The controller reported an internal problem.",
+      "steps": [
+        "Stop using motion controls and open Details.",
+        "When the hand is safe, restart the controller and reconnect.",
+        "If it happens again, save the session log for support."
+      ]
+    },
+    "8004": {
+      "title": "An essential controller task could not start",
+      "category": "internal",
+      "impact": "The controller reported an internal problem.",
+      "steps": [
+        "Stop using motion controls and open Details.",
+        "When the hand is safe, restart the controller and reconnect.",
+        "If it happens again, save the session log for support."
+      ]
+    },
+    "8005": {
+      "title": "A controller task is repeatedly running late",
+      "category": "runtime",
+      "impact": "Controller timing or memory headroom needs inspection.",
+      "steps": [
+        "If this repeats during movement, click Stop.",
+        "Save the session log and Task Runtime details for support."
+      ]
+    },
+    "8006": {
+      "title": "A controller task is running low on working memory",
+      "category": "runtime",
+      "impact": "Controller timing or memory headroom needs inspection.",
+      "steps": [
+        "If this repeats during movement, click Stop.",
+        "Save the session log and Task Runtime details for support."
+      ]
+    }
+  },
+  "host": {
+    "HOST_CONNECTION_LOST": {
+      "title": "The app is not receiving current device data",
+      "category": "host_connection",
+      "impact": "Device status cannot be confirmed.",
+      "steps": [
+        "Check the USB connection and controller power.",
+        "Click Connect and wait for current device data."
+      ]
+    },
+    "HOST_PARAMETERS_PENDING": {
+      "title": "Control parameters have not been applied yet",
+      "category": "parameters",
+      "impact": "Wait for parameter synchronization before starting calibration or control.",
+      "steps": [
+        "Open Control Parameters and wait for Applied.",
+        "If synchronization failed, open Details and correct the reported parameter."
+      ]
+    },
+    "HOST_PARAMETERS_INVALID": {
+      "title": "Some control parameters are not valid",
+      "category": "parameters",
+      "impact": "The controller cannot use this parameter set.",
+      "steps": [
+        "Open Control Parameters and correct the field shown in Details, or use Restore Defaults.",
+        "Apply the parameters before continuing."
+      ]
+    },
+    "HOST_SELECTION_EMPTY": {
+      "title": "Select joints or motors first",
+      "category": "selection",
+      "impact": "The action has no selected channels.",
+      "steps": [
+        "Select the channels you want to use, then repeat the action."
+      ]
+    },
+    "HOST_OPERATION_BUSY": {
+      "title": "Another action is still finishing",
+      "category": "busy",
+      "impact": "The app cannot start this action yet.",
+      "steps": [
+        "Wait for the current action to finish.",
+        "To cancel it, use Stop; clear the resulting stop before enabling again."
+      ]
+    },
+    "HOST_RESULT_UNKNOWN": {
+      "title": "The app could not confirm the action result",
+      "category": "result_unknown",
+      "impact": "The action may have reached the controller. Its completion is not confirmed.",
+      "steps": [
+        "Wait for current device status or reconnect.",
+        "Review the returned result in Details before starting the action again."
+      ]
+    },
+    "HOST_RESULT_PARTIAL": {
+      "title": "Only part of the action completed",
+      "category": "partial",
+      "impact": "Some channels completed the action; others did not.",
+      "steps": [
+        "Open Details to check the completed and failed channels.",
+        "Resolve the reported cause before repeating the action."
+      ]
+    },
+    "HOST_FIRMWARE_MISMATCH": {
+      "title": "The app and device versions do not match",
+      "category": "version",
+      "impact": "This connection cannot be used for control yet.",
+      "steps": [
+        "Install matching app and controller firmware versions.",
+        "Reconnect and wait for the version check to complete."
+      ]
+    },
+    "HOST_MANUAL_INVALID": {
+      "title": "The Manual endpoints could not be used",
+      "category": "calibration",
+      "impact": "The entered or captured joint endpoints are not valid.",
+      "steps": [
+        "Open Joint Calibration and check the affected joint's Min and Max.",
+        "Capture valid endpoints in the indicated direction and save them."
+      ]
+    },
+    "HOST_TARGET_INVALID": {
+      "title": "The requested movement is outside the allowed range",
+      "category": "boundary",
+      "impact": "The requested target could not be used as entered.",
+      "steps": [
+        "Choose a target within the range shown for the selected joint or motor.",
+        "Check calibration if the displayed range looks incorrect."
+      ]
+    },
+    "HOST_ACTION_FAILED": {
+      "title": "The app could not complete this action",
+      "category": "action",
+      "impact": "The exact cause is not confirmed by the available result.",
+      "steps": [
+        "Open Details for the original device response.",
+        "Save the session log if the problem continues."
+      ]
+    },
+    "HOST_ABS_REBASE_FAILED": {
+      "title": "Motor position reset did not complete",
+      "category": "position",
+      "impact": "The controller reported that position reset failed. The specific cause is not confirmed.",
+      "steps": [
+        "Open Details to identify the affected motors.",
+        "Check current motor status before repeating the reset."
+      ]
+    },
+    "HOST_CALIBRATION_FAILED": {
+      "title": "Calibration did not complete",
+      "category": "calibration",
+      "impact": "The affected joints are not confirmed calibrated.",
+      "steps": [
+        "Open Details for the failed phase and affected channels.",
+        "Correct the reported cause, then calibrate the affected joints."
+      ]
+    },
+    "HOST_CANCELLED": {
+      "title": "The action was cancelled",
+      "category": "cancelled",
+      "impact": "The action ended before completion; earlier completed steps may remain applied.",
+      "steps": [
+        "Check the current device state before starting the intended action again."
+      ]
+    },
+    "HOST_QUALITY_WARNING": {
+      "title": "Calibration found a possible assembly issue",
+      "category": "quality",
+      "impact": "A quality warning was reported; the mechanical cause has not been measured.",
+      "steps": [
+        "Check the affected joint, tendon routing, and preload.",
+        "Open Details for the measured result before recalibrating."
+      ]
+    },
+    "HOST_CALIB_1": {
+      "title": "Calibration stopped: no joints are selected",
+      "category": "selection",
+      "impact": "This action needs at least one selected joint.",
+      "steps": [
+        "Select the joints you want to use, then retry the action."
+      ]
+    },
+    "HOST_CALIB_5": {
+      "title": "Calibration stopped: joint feedback is unavailable",
+      "category": "encoder",
+      "impact": "The controller cannot use the affected joint position readings.",
+      "steps": [
+        "Check the S3 sensor board and its power and CAN connections.",
+        "Wait for current joint readings to return before enabling control."
+      ]
+    },
+    "HOST_CALIB_6": {
+      "title": "Calibration stopped: motor locations are not known yet",
+      "category": "offline",
+      "impact": "Reliable feedback is needed before these motors can be controlled.",
+      "steps": [
+        "Check motor power and the affected bus connections.",
+        "Wait for the affected motors to show Online, then retry the original action."
+      ]
+    },
+    "HOST_CALIB_8": {
+      "title": "Calibration stopped: a motor load safety limit was reached",
+      "category": "overload",
+      "impact": "A load protection was triggered.",
+      "steps": [
+        "Check for an obstruction, a tight tendon, or a joint that cannot move freely.",
+        "After correcting the cause, click Clear Faults and retry the original action."
+      ]
+    },
+    "HOST_CALIB_13": {
+      "title": "Calibration stopped: the zero position could not be estimated",
+      "category": "calibration",
+      "impact": "The recorded positions cannot produce a valid calibration.",
+      "steps": [
+        "Check the calibration start pose and magnetic encoder installation.",
+        "Check tendon routing and preload, then calibrate the affected joint again."
+      ]
+    },
+    "HOST_CALIB_14": {
+      "title": "Calibration stopped: the encoder travelled nearly a full turn",
+      "category": "calibration",
+      "impact": "The measured encoder travel cannot be used safely.",
+      "steps": [
+        "Check the encoder and magnet mounting and watch whether the live reading follows the joint.",
+        "Check the motor mapping and saved motor position before recalibrating."
+      ]
+    },
+    "HOST_CALIB_15": {
+      "title": "Calibration stopped: a requested motor position is outside the safe range",
+      "category": "boundary",
+      "impact": "The requested motor target was not accepted because it exceeded a safe position boundary.",
+      "steps": [
+        "Check the requested target angle and the affected joint.",
+        "If ordinary targets keep reaching this limit, check calibration before continuing."
+      ]
+    },
+    "HOST_CALIB_16": {
+      "title": "Calibration stopped: the motor command could not be used",
+      "category": "busy",
+      "impact": "A calibration motor target was not accepted.",
+      "steps": [
+        "Open Details to check the target rejection or control ownership.",
+        "Wait for the current mode change to finish; if Stop is active, check the hand and click Clear Faults before calibrating again."
+      ]
+    },
+    "HOST_CALIB_17": {
+      "title": "Calibration stopped: position feedback was lost",
+      "category": "feedback",
+      "impact": "The app could no longer confirm all required motor and joint positions.",
+      "steps": [
+        "Check live motor positions and joint encoder readings for the affected joints.",
+        "Check power and connections for the board or motors whose readings stopped.",
+        "Wait for reliable feedback before starting calibration again."
+      ]
+    },
+    "HOST_CALIB_18": {
+      "title": "Calibration stopped: the motor command could not be used",
+      "category": "internal",
+      "impact": "The controller reported an internal problem.",
+      "steps": [
+        "Stop using motion controls and open Details.",
+        "When the hand is safe, restart the controller and reconnect.",
+        "If it happens again, save the session log for support."
+      ]
+    },
+    "HOST_CALIB_20": {
+      "title": "Calibration stopped: another task controls the motors",
+      "category": "busy",
+      "impact": "The controller did not accept this request in its current state.",
+      "steps": [
+        "Wait for the current action or mode change to finish.",
+        "If the app remains busy, click Stop, then Clear Faults before enabling again."
+      ]
+    },
+    "HOST_CALIB_21": {
+      "title": "Calibration stopped: other joints could not be held safely",
+      "category": "offline",
+      "impact": "The controller could not hold the other selected joints during calibration.",
+      "steps": [
+        "Check the affected motors are Online and their positions are known.",
+        "Open Details to identify the affected motors and check their power and bus connections."
+      ]
+    },
+    "HOST_CALIB_22": {
+      "title": "Calibration stopped: the joint selection could not be used",
+      "category": "selection",
+      "impact": "The requested calibration joint list was invalid.",
+      "steps": [
+        "Select the required joints again.",
+        "If this repeats, save the session log for support."
+      ]
+    },
+    "HOST_CALIB_23": {
+      "title": "Calibration stopped: a joint was listed twice",
+      "category": "internal",
+      "impact": "The calibration sequence was rejected before it could run correctly.",
+      "steps": [
+        "Select the joints again.",
+        "If this repeats, save the session log for support."
+      ]
+    },
+    "HOST_CALIB_24": {
+      "title": "Calibration stopped: the required starting pose was not reached",
+      "category": "workspace",
+      "impact": "The helper joint could not reach the pose needed for this calibration.",
+      "steps": [
+        "Check the helper joint and its motors in Details.",
+        "Check for an obstruction, tendon binding, or missing motor feedback before retrying calibration."
+      ]
+    },
+    "HOST_CALIB_25": {
+      "title": "Calibration stopped: a joint did not complete its calibration",
+      "category": "calibration",
+      "impact": "No specific mechanical cause was reported for this failure.",
+      "steps": [
+        "Check the failed joints and preceding messages in Details.",
+        "Correct the reported problem before calibrating those joints again."
+      ]
+    },
+    "HOST_CALIB_26": {
+      "title": "Calibration stopped: motor recovery did not finish",
+      "category": "offline",
+      "impact": "Reliable motor feedback and trusted positions were not recovered in time.",
+      "steps": [
+        "Open Details to identify the unresolved motors.",
+        "Check those motors show Online and their live positions update.",
+        "Check motor power and bus connections before calibrating again."
+      ]
+    },
+    "HOST_CALIB_27": {
+      "title": "Calibration stopped: the tendon was released by more than two turns",
+      "category": "boundary",
+      "impact": "The release limit was reached before the required joint motion was confirmed.",
+      "steps": [
+        "Check for a loose, detached or broken tendon.",
+        "Check the winding direction and whether live encoder readings follow joint movement before recalibrating."
+      ]
+    },
+    "HOST_CALIB_28": {
+      "title": "Calibration stopped: the joint-to-motor mapping is invalid",
+      "category": "internal",
+      "impact": "The app cannot determine which motors should move this joint.",
+      "steps": [
+        "Stop using motion controls.",
+        "Verify the configured joint and motor mapping with support before calibrating again."
+      ]
+    },
+    "HOST_CALIB_29": {
+      "title": "Calibration stopped: the measured joint travel is invalid",
+      "category": "calibration",
+      "impact": "The encoder travel was too small, too large, or inconsistent for calibration.",
+      "steps": [
+        "Check the joint endpoints, encoder and magnet mounting.",
+        "Watch whether live encoder readings follow the joint before recalibrating."
+      ]
+    },
+    "HOST_CALIB_30": {
+      "title": "Calibration stopped: the samples could not form a usable calibration",
+      "category": "calibration",
+      "impact": "A valid motor-to-joint mapping could not be built from the recorded samples.",
+      "steps": [
+        "Check the Manual endpoints and live encoder readings.",
+        "Inspect the samples in Details and correct missing feedback before recalibrating."
+      ]
+    },
+    "HOST_CALIB_31": {
+      "title": "Calibration stopped: the new result could not be saved",
+      "category": "internal",
+      "impact": "The affected joint is not confirmed to have the new calibration installed.",
+      "steps": [
+        "Open Details and check the returned save or device rejection message.",
+        "Keep the session log; reconnect and verify the installed calibration before continuing."
+      ]
+    },
+    "HOST_CALIB_32": {
+      "title": "Calibration stopped: motor positions need to be recovered",
+      "category": "position",
+      "impact": "The controller cannot safely interpret the affected motor positions.",
+      "steps": [
+        "Wait for position recovery to finish.",
+        "If recovery fails, open Motor Calibration and calibrate the affected joints."
+      ]
+    },
+    "HOST_CALIB_33": {
+      "title": "Calibration stopped: the app could not confirm the action result",
+      "category": "result_unknown",
+      "impact": "The action may have reached the controller. Its completion is not confirmed.",
+      "steps": [
+        "Wait for current device status or reconnect.",
+        "Review the returned result in Details before starting the action again."
+      ]
+    },
+    "HOST_CALIB_34": {
+      "title": "Calibration stopped: the joint did not move during the tendon exchange",
+      "category": "mechanical",
+      "impact": "The expected joint motion was not confirmed; the cause is not yet known.",
+      "steps": [
+        "Check for binding and check both tendon winding directions and preload.",
+        "Watch whether live encoder readings follow joint movement before recalibrating."
+      ]
+    },
+    "HOST_CALIB_WARNING": {
+      "title": "Calibration completed with an assembly warning",
+      "category": "quality",
+      "impact": "Calibration results were saved, but the measured travel or return needs inspection.",
+      "steps": [
+        "Open Motor Calibration and inspect the affected joints.",
+        "Check tendon routing, preload and joint or encoder installation before continuing."
+      ]
+    },
+    "HOST_MANUAL_MISSING": {
+      "title": "Selected joints need Manual Min and Max values",
+      "category": "calibration",
+      "impact": "The selected joints are not ready for this action.",
+      "steps": [
+        "Open Joint Calibration and check the selected joints' Manual Min and Max.",
+        "Open Motor Calibration and calibrate the affected joints."
+      ]
+    },
+    "HOST_CALIBRATION_MISSING": {
+      "title": "Selected joints need calibration data",
+      "category": "calibration",
+      "impact": "The selected joints are not ready for this action.",
+      "steps": [
+        "Open Joint Calibration and check the selected joints' Manual Min and Max.",
+        "Open Motor Calibration and calibrate the affected joints."
+      ]
+    },
+    "HOST_FEEDBACK_RECOVERY_FAILED": {
+      "title": "Calibration could not obtain reliable motor feedback",
+      "category": "offline",
+      "impact": "Calibration stopped before the selected motors could be prepared safely.",
+      "steps": [
+        "Check the affected motors show Online and that live position readings update.",
+        "Check motor power and bus connections.",
+        "If a scan finds all motors but live feedback is still missing, save the session log for support."
+      ]
+    }
+  }
+}

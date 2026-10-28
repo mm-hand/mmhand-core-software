@@ -657,3 +657,26 @@ class TestActiveDirectScopeReuse:
             ("active_scope", 1 << 11, 1 << 8, False)
         )
         controller.comm.wait_for_ack.assert_called_once()
+
+
+def test_failed_anchor_read_is_retried_instead_of_cached_as_empty(tmp_path):
+    """读锚点失败不能被缓存成"这台机器没有锚点"，下一次调用必须重读。"""
+    controller = HandController()
+    bundle = tmp_path / 'bundle.mmcal.json'
+    bundle.write_text('{}')
+    controller._multiturn_store = BundleMultiTurnStore(bundle)
+    identity = {'device_id': 'A' * 16, 'urdf_repo_path': 'hand.urdf'}
+    results = [OSError('bundle busy'), {'valid_motor_mask': '0x00000003'}]
+
+    def fake_load(identity):
+        item = results.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    controller._multiturn_store.load = fake_load
+    assert controller._load_multiturn_store(identity) is None
+    assert controller._load_multiturn_store(identity) == {'valid_motor_mask': '0x00000003'}
+    # 读到之后仍然走缓存，不会每次调用都读盘
+    assert controller._load_multiturn_store(identity) == {'valid_motor_mask': '0x00000003'}
+    assert results == []

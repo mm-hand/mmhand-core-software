@@ -31,6 +31,7 @@ from .session_log import close_session_log, log_session, session_log_since
 from .communication.connection_diagnostics import describe_connection_failure
 from .console_snapshot import enrich_snapshot, motor_quality
 from .id_actions import IdResetActions
+from .user_issues import operation_issue, issue_text, host_issue, IssueMessage
 from .control_parameters import ControlParameterStore
 from .protocol import (
     ServoOnlineCheck,
@@ -48,6 +49,20 @@ from .protocol import (
 # 串口枚举在 Windows 上每次约 20-100ms；0.2s 轮询会持续占用 ~12% 单核。
 # 设备列表 1s 刷新一次即可满足人工连接操作，连接失败时随后快速重试。
 DEVICE_DISCOVERY_INTERVAL_S = 1.0
+
+# P4 收绳上限 20 s（RopeInitSafetyPolicy）；主机多留 5 s 等结果回写。
+ROPE_INIT_HOST_TIMEOUT_S = 25
+
+# System 状态标签直接对应 P4 的 7 种状态；'Unknown' 只用于未列出的编号。
+_P4_STATE_DEVICE_LABELS = {
+    SYSTEM_STATE_UNCONTROLLABLE: 'Stopped',
+    SYSTEM_STATE_IDLE: 'Idle',
+    SYSTEM_STATE_READY: 'Ready',
+    SYSTEM_STATE_RUN_DIRECT: 'Direct',
+    SYSTEM_STATE_RUN_FEEDBACK: 'Running',
+    SYSTEM_STATE_ROPE_INIT_RUNNING: 'Rope Init',
+    SYSTEM_STATE_RECOVERY_REQUIRED: 'Recovery',
+}
 
 
 @dataclass(frozen=True)
@@ -70,30 +85,6 @@ def validate_manual_pair(minimum: int, maximum: int) -> int:
     if not 0 < span < 8192:
         raise ValueError('Manual endpoints are equal or reversed. Capture again; endpoints are never swapped automatically.')
     return span
-
-
-RETRY_HINT = 'Please try again.'
-# 只有“原样再点一次可能成功”的失败才提示重试。显式操作、固件/版本、
-# 输入校验、取消和越界夹紧都需要先做别的事，提示重试会误导。
-RETRY_HINT_EXCLUDED = (
-    'clear faults', 'e-stop', 'estop', 'latched', 'stopped', 'firmware',
-    'invalid', 'exceeds', 'must contain', 'select', 'no automatic retry',
-    'shutting down', 'still finishing', 'cancelled',
-    'would require clamping', 'outside the permitted workspace',
-)
-
-
-def retry_hint(message: str) -> str:
-    """给可重试的失败消息追加统一提示；不适用时原样返回。"""
-    text = str(message or '').strip()
-    if not text:
-        return text
-    lowered = text.lower()
-    if any(marker in lowered for marker in RETRY_HINT_EXCLUDED):
-        return text
-    if lowered.endswith(RETRY_HINT.lower()):
-        return text
-    return f'{text} {RETRY_HINT}'
 
 
 class ApplicationActions(IdResetActions):
@@ -162,14 +153,18 @@ class ApplicationActions(IdResetActions):
                 config=InputFilterConfig(**self._control_parameters.snapshot()['ros2_input']))
 
     def request_save_control_parameters(self, proposed):
-        try:
-            self._control_parameters.save(proposed)
-            self._control_parameter_sync = 'PENDING'
-            self._control_parameter_retry_count = 0
-            self._control_parameter_retry_after = 0.0
-            return OperationResult(True, None, 'Parameters saved; P4 synchronization pending until idle')
-        except (OSError, ValueError, TypeError) as exc:
-            return OperationResult(False, None, str(exc))
+        with self._application_lock:
+            if self._calibration_operation_id or self._calibration_workflow.is_host_calibration_active():
+                return OperationResult(False, None, 'Wait for calibration to finish before changing control parameters')
+            try:
+                self._control_parameters.save(proposed)
+                self._control_parameter_sync = 'PENDING'
+                self._controller._applied_output_margins = None
+                self._control_parameter_retry_count = 0
+                self._control_parameter_retry_after = 0.0
+                return OperationResult(True, None, 'Parameters saved; P4 synchronization pending until idle')
+            except (OSError, ValueError, TypeError) as exc:
+                return OperationResult(False, None, str(exc))
 
     def request_apply_control_parameters(self, proposed):
         """保存并立即尝试同步；P4 非 idle 时由设备轮询稍后应用。"""
@@ -182,14 +177,18 @@ class ApplicationActions(IdResetActions):
         return OperationResult(True, None, 'Parameters saved; P4 synchronization pending until idle')
 
     def request_restore_control_defaults(self):
-        try:
-            self._control_parameters.restore_defaults()
-            self._control_parameter_sync = 'PENDING'
-            self._control_parameter_retry_count = 0
-            self._control_parameter_retry_after = 0.0
-            return OperationResult(True, None, 'Default parameters restored; P4 synchronization pending until idle')
-        except (OSError, ValueError, TypeError) as exc:
-            return OperationResult(False, None, str(exc))
+        with self._application_lock:
+            if self._calibration_operation_id or self._calibration_workflow.is_host_calibration_active():
+                return OperationResult(False, None, 'Wait for calibration to finish before changing control parameters')
+            try:
+                self._control_parameters.restore_defaults()
+                self._control_parameter_sync = 'PENDING'
+                self._controller._applied_output_margins = None
+                self._control_parameter_retry_count = 0
+                self._control_parameter_retry_after = 0.0
+                return OperationResult(True, None, 'Default parameters restored; P4 synchronization pending until idle')
+            except (OSError, ValueError, TypeError) as exc:
+                return OperationResult(False, None, str(exc))
 
     def _synchronize_control_parameters(self, epoch):
         if self._control_parameters.error:
@@ -200,20 +199,25 @@ class ApplicationActions(IdResetActions):
             data = self.control_parameter_snapshot()
             revision, crc, ramp_revision, ramp_crc = self.comm.apply_control_parameters(
                 data, cancelled=lambda: epoch != self._application_epoch)
-            if epoch != self._application_epoch:
-                self._control_parameter_sync = 'PENDING'
-                return False, 'Parameter synchronization cancelled by STOP'
-            latest = self.control_parameter_snapshot()
-            if data['revision'] != latest['revision'] or data['ramp_revision'] != latest['ramp_revision']:
-                self._control_parameter_sync = 'PENDING'
-                return False, 'Parameters changed during synchronization; apply the new revision first'
-            self._control_parameter_sync = (
-                f'APPLIED revision {revision} / {crc:08X} '
-                f'ramp {ramp_revision} / {ramp_crc:08X}')
-            self._control_parameter_retry_count = 0
-            self._control_parameter_retry_after = 0.0
-            self._update_input_filter()
-            return True, 'P4 control parameters applied and read back'
+            with self._application_lock:
+                if epoch != self._application_epoch:
+                    self._control_parameter_sync = 'PENDING'
+                    return False, 'Parameter synchronization cancelled by STOP'
+                latest = self.control_parameter_snapshot()
+                if data['revision'] != latest['revision'] or data['ramp_revision'] != latest['ramp_revision']:
+                    self._control_parameter_sync = 'PENDING'
+                    return False, 'Parameters changed during synchronization; apply the new revision first'
+                with self._controller.state_lock:
+                    self._controller._applied_output_margins = tuple(
+                        int(data['output'][key]) for key in
+                        ('lut_release_margin_counts', 'lut_tight_margin_counts'))
+                self._control_parameter_sync = (
+                    f'APPLIED revision {revision} / {crc:08X} '
+                    f'ramp {ramp_revision} / {ramp_crc:08X}')
+                self._control_parameter_retry_count = 0
+                self._control_parameter_retry_after = 0.0
+                self._update_input_filter()
+                return True, 'P4 control parameters applied and read back'
         except InterruptedError as exc:
             self._control_parameter_sync = 'PENDING'
             self._control_parameter_retry_after = 0.0
@@ -237,7 +241,8 @@ class ApplicationActions(IdResetActions):
         if time.monotonic() < self._control_parameter_retry_after:
             return
         state = self.get_state_snapshot()
-        if (self._application_busy or not self._fresh_application_state() or
+        if (self._application_busy or self._calibration_workflow.is_host_calibration_active() or
+                not self._fresh_application_state() or
                 state.control_enabled or state.servo_target_owner or
                 state.system_state not in (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE, SYSTEM_STATE_READY, SYSTEM_STATE_RECOVERY_REQUIRED)):
             return
@@ -325,6 +330,17 @@ class ApplicationActions(IdResetActions):
     def log_operation(self, message):
         log_session('APP', message)
 
+    def record_operation_issue(self, message, *, name='Request rejected', scope='System'):
+        """Persist a synchronous rejection for the same Details/history as async failures."""
+        with self._application_lock:
+            operation_id = uuid4().hex[:12]
+            item = dict(operation_id=operation_id, name=name, time=time.strftime('%H:%M:%S'),
+                        scope=scope, status='RUNNING', message=str(message), phase='rejected',
+                        notification_shown=True)
+            self._application_operations.append(item)
+            self._finish_application_operation(operation_id, False, message, phase='rejected')
+            return deepcopy(item['user_issue'])
+
     def log_since(self, sequence=0):
         return session_log_since(sequence)
 
@@ -395,18 +411,24 @@ class ApplicationActions(IdResetActions):
             self._last_reported_device_id = device_id
             if not initial_identity:
                 self._application_epoch += 1
+                self._controller._applied_output_margins = None
+                self._control_parameter_sync = 'PENDING'
             self._manual_drafts.clear()
             self._manual_saved_pairs.clear()
             self._import_previews.clear()
             return True
 
-    def _finish_application_operation(self, operation_id, ok, message, *, phase=None):
+    def _finish_application_operation(self, operation_id, ok, message, *, phase=None, user_issue=None):
         with self._application_lock:
             for item in self._application_operations:
                 if item['operation_id'] == operation_id:
                     item.update(status='SUCCESS' if ok else 'FAILED', message=str(message),
                                 phase=phase or ('complete' if ok else 'failed'),
                                 finished_at=time.time())
+                    if not ok:
+                        item['user_issue'] = user_issue or operation_issue(
+                            message, scope=item.get('scope', 'System')).to_dict()
+                        log_session('USER_ISSUE', issue_text(item['user_issue']))
                     break
             self._last_operation_message = str(message)
             log_session('APP', f'{operation_id} {"SUCCESS" if ok else "FAILED"}: {message}')
@@ -773,7 +795,7 @@ class ApplicationActions(IdResetActions):
     def _recover_enable_workspace(self, joints, mask, epoch):
         """Enable 前把低于下界的关节拉回工作区；返回 (ok, failure_message)。
 
-        P4 的 Rope Init（0xE9）就是为此设计的动作：只收绳、8 秒超时、连续 3 帧
+        P4 的 Rope Init（0xE9）就是为此设计的动作：只收绳、20 秒超时、连续 3 帧
         进入工作区才算成功。这里不暴露给操作员，Enable 自动执行一次。
         """
         state = self.get_state_snapshot()
@@ -790,12 +812,14 @@ class ApplicationActions(IdResetActions):
             return False, f'Enable blocked: {message}. Automatic recovery was not accepted by the P4.'
         if not self._wait_application(
                 lambda s: s.rope_init_sequence != baseline and s.rope_init_status in (2, 3),
-                epoch, 10):
-            return False, f'Enable blocked: {message}. Automatic recovery did not finish within 10 s.'
+                epoch, ROPE_INIT_HOST_TIMEOUT_S):
+            return False, (f'Enable blocked: {message}. Automatic recovery did not finish '
+                           f'within {ROPE_INIT_HOST_TIMEOUT_S:.0f} s.')
         state = self.get_state_snapshot()
         if int(state.rope_init_status) != 2:
-            return False, (f'Enable blocked: {message}. Automatic recovery failed '
-                           f'(P4 reason={int(state.rope_init_reason)}).')
+            reason = int(state.rope_init_reason)
+            return False, IssueMessage(f'Enable blocked: {message}. Automatic recovery failed '
+                f'(P4 reason={reason}).', f'ROP-{3400 + reason}' if 1 <= reason <= 9 else 'HOST_ACTION_FAILED')
         blocked, clamped, message = self._enable_holding_workspace(state, joints, mask)
         if blocked or clamped:
             return False, f'Enable blocked: {message}. Automatic recovery left the joint outside its workspace.'
@@ -1025,6 +1049,8 @@ class ApplicationActions(IdResetActions):
             mask = sum(1 << j for j in joints)
             if not mask or not self._fresh_application_state():
                 return OperationResult(False, None, 'Select joints and connect P4 with fresh status')
+            if self._controller._applied_output_margins is None:
+                return OperationResult(False, None, 'Control parameters are not applied. Wait for parameter synchronization before calibrating.')
             for j in joints:
                 if not state.manual_reference_valid_bitmap & (1 << j):
                     return OperationResult(False, None, f'J{j:02d} is missing Manual Min / Max')
@@ -1139,23 +1165,30 @@ class ApplicationActions(IdResetActions):
                     joints = [f'J{j:02d}' for j in range(ENCODER_COUNT) if failed_mask & (1 << j)]
                     if joints:
                         messages.append('Failed joints: ' + ', '.join(joints))
-                    if failed and retry_hint(event.message) != event.message:
-                        messages.append(RETRY_HINT)
                     if summary['active']:
                         messages.append(summary['message'])
                     elif warned:
                         messages.append('Calibration ended with warnings. Check Motor Calibration and Diagnostics for details.')
+                    scope = ', '.join(joints) or 'Selected calibration'
+                    if failed:
+                        explanation = (host_issue('HOST_CANCELLED', scope=scope, details={
+                            **event.details, 'original_message': str(event.message)}) if event.details.get('cancelled') else
+                            operation_issue(event.message, scope=scope, diagnostic_reason=event.details.get('diagnostic_reason'),
+                                            details=event.details)).to_dict()
+                    else:
+                        explanation = host_issue('HOST_CALIB_WARNING', scope=scope,
+                            status='Last action completed with warnings', details=event.details).to_dict()
                     alert = dict(
                         title=('Selected-joint Calibration failed' if failed else
                                'Selected-joint Calibration completed with warnings'),
                         message='\n\n'.join(message for message in messages if message),
-                        severity='negative' if failed else 'warning')
+                        severity='negative' if failed else 'warning', user_issue=explanation)
                     for item in self._application_operations:
                         if item['operation_id'] == operation_id:
                             item['calibration_alert'] = alert
                             item['alert_acknowledged'] = False
-                self._finish_application_operation(operation_id, event.ok, event.message,
-                                                   phase=terminal)
+                self._finish_application_operation(operation_id, not failed, event.message,
+                    phase=terminal, user_issue=explanation if failed else None)
                 self._calibration_operation_id = None
             else:
                 for item in self._application_operations:
@@ -1404,6 +1437,8 @@ class ApplicationActions(IdResetActions):
             if self._estop_requested_at:
                 return OperationResult(False, None,
                     'Device is stopped (E-STOP latched); use the top-right Clear Faults button first')
+            if self._controller._applied_output_margins is None:
+                return OperationResult(False, None, IssueMessage('Control parameters are not applied. Wait for parameter synchronization before loading calibration.', 'HOST_PARAMETERS_PENDING'))
             operation_id = uuid4().hex[:12]
             from .calibration_snapshot import parse_mask
             payload = preview['payload']
@@ -1606,10 +1641,10 @@ class ApplicationActions(IdResetActions):
             device = 'Fault'
         elif state.control_enabled and state.servo_target_owner and state.system_state in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK):
             device = 'Controlling'
-        elif state.system_state == SYSTEM_STATE_READY:
-            device = 'Ready'
         else:
-            device = 'Disabled'
+            # P4 的状态直说，不再把 Stopped/Idle/Rope Init/Recovery 压成同一个
+            # 'Disabled'——那会让"急停锁死"看起来像正常待机。
+            device = _P4_STATE_DEVICE_LABELS.get(int(state.system_state), 'Unknown')
         problems = []
         if self._recording_error:
             problems.append(f'Recording: {self._recording_error}. This session may be incomplete. Check the disk and recording directory.')

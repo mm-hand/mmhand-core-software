@@ -27,8 +27,8 @@ from .protocol import (
 )
 
 _SYSTEM_STATE_LABELS = {
-    0: 'LOCKED', 1: 'IDLE', 2: 'RUN', 4: 'CALIB', 5: 'READY', 6: 'DIRECT',
-    8: 'ROPE INIT', 9: 'RECOVERY',
+    0: 'Stopped', 1: 'Idle', 2: 'Running', 4: 'Retired Calib',
+    5: 'Ready', 6: 'Direct', 8: 'Rope Init', 9: 'Recovery',
 }
 
 
@@ -84,13 +84,13 @@ def motor_quality(valid, result, fresh=True, *, joint=None):
         return ['PENDING']
     if not result or result.get('success') is not True or not result.get('hasAssemblyWarningFields'):
         return ['UNKNOWN']
-    if 'autoMinOffsetCounts' not in result or 'autoMaxShortfallCounts' not in result:
+    if any(key not in result for key in ('autoMinOffsetCounts', 'autoMaxShortfallCounts', 'assemblyWarningReason')):
         return ['UNKNOWN']
     warnings = []
     reason = int(result.get('assemblyWarningReason', 0))
-    if reason & 1 or int(result['autoMinOffsetCounts']) >= 350:
+    if reason & 1:
         warnings.append('HIGH FRICTION' if joint in DUAL_TENDON_JOINT_INDICES else 'WEAK RETURN')
-    if reason & 2 or int(result['autoMaxShortfallCounts']) >= 300:
+    if reason & 2:
         warnings.append('HIGH FRICTION')
     return list(dict.fromkeys(warnings)) or ['READY']
 
@@ -262,6 +262,7 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
                 taxels=sensor.contact_forces.tolist() if valid and state.tactile_data_level == 'FULL' else None))
     snapshot['diagnostics']['routes'] = [dict(motor=m['motor'], bus=m['bus'], route=m['route'], online=m['online']) for m in snapshot['motors']]
     snapshot['diagnostics']['raw_warning_bitmap'] = state.calibration_warning_bitmap
+    snapshot['diagnostics']['applied_output_margins'] = getattr(hand._controller, '_applied_output_margins', None)
     snapshot['diagnostics'].update(direct_reject_reason=state.direct_reject_reason,
         feedback_reject_reason=state.feedback_reject_reason, encoder_fault_bitmap=state.encoder_fault_bitmap,
         multi_turn_unknown_bitmap=state.multi_turn_unknown_bitmap,
@@ -284,4 +285,15 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
                     guidance='Check installation, spring return, tendon routing and preload. Labels describe symptoms, not measured force.')))
     snapshot['issues'] = issues
     snapshot['stop_latched'] = bool(getattr(hand, '_estop_requested_at', 0.0))
+    # Clear Faults 只在真有事可清时可用：急停锁存、P4 卡在 0（Uncontrollable）、
+    # 或上报了非零故障位。其余时候按钮灰着，避免用户靠"点一下试试"猜状态。
+    snapshot['p4_state_code'] = (
+        int(getattr(state, 'system_state', -1))
+        if fresh and getattr(state, 'has_system_status_data', False) else None)
+    snapshot['fault_active'] = bool(fresh and getattr(state, 'system_fault_bitmap', 0))
+    snapshot['clear_faults_applicable'] = bool(
+        snapshot['stop_latched'] or snapshot['fault_active']
+        or snapshot['p4_state_code'] == 0)
+    from .user_issues import snapshot_issues
+    snapshot['user_issues'] = snapshot_issues(state, snapshot, fresh=fresh)
     return snapshot

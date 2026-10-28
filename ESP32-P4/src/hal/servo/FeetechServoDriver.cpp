@@ -166,6 +166,9 @@ ServoSyncReadResult FeetechServoDriver::collectSyncRead(uint64_t nowUs)
         if (id > MAX_SERVO_ID) {
             continue;
         }
+        captureReadDiagnostic(id, true, _syncReadFeedbackLen,
+                              (uint32_t)((nowUs - _syncReadStartedUs) / 1000U),
+                              rxLen != _syncReadFeedbackLen || _sms.getState() != 0);
         if (rxLen == _syncReadFeedbackLen && _sms.getState() == 0) {
             const int16_t current = _syncReadIncludeCurrent
                 ? decodeSigned(rxBuf[13], rxBuf[14])

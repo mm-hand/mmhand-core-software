@@ -37,11 +37,20 @@ def safety_rule_table() -> Mapping[int, dict]:
     return table
 
 
+@lru_cache(maxsize=1)
+def safety_rule_archive() -> Mapping[int, dict]:
+    """Historical decode data is separate from the active firmware contract."""
+    data = json.loads((_RULE_PATH.parent / 'safety_rules.archive.json').read_text(encoding='utf-8'))
+    return {int(item['rule_id']): item for item in data['rules']}
+
+
 def explain_safety_rule(rule_id: int) -> str:
     """Return the rule code, action, and recovery guidance."""
     item = safety_rule_table().get(int(rule_id))
     if item is None:
-        return f"Unknown safety rule {int(rule_id)}"
+        item = safety_rule_archive().get(int(rule_id))
+        if item is None:
+            return f"Unknown safety rule {int(rule_id)}"
     return (
         f"{item['code']} {item['title']}; "
         f"Action: {item['action']}; Recovery: {item['recovery']}"

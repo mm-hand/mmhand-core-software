@@ -39,7 +39,7 @@ def test_every_registered_rule_has_a_closed_safety_path() -> None:
         )
     }
     definitions = checker.load_rule_definitions()
-    active = [rule for rule in definitions if not checker.is_retired_rule(rule)]
+    active = definitions
     assert report["rule_count"] == len(active)
     assert report["retired_rule_count"] == len(definitions) - len(active)
     assert failures == {}

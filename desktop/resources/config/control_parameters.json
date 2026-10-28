@@ -1,7 +1,7 @@
 {
   "schema_version": 7,
-  "revision": 559,
-  "ramp_revision": 138,
+  "revision": 561,
+  "ramp_revision": 140,
   "joint_kp": {
     "aa": 0.45,
     "mcp": 1.0,
@@ -31,7 +31,7 @@
     "cmc": 0.1
   },
   "dual_tendon": {
-    "pair_recovery_gain": 0.0
+    "pair_recovery_gain": 0.3
   },
   "feedback": {
     "fast_window_ms": 20,

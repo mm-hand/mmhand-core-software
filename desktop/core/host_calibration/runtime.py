@@ -81,6 +81,7 @@ class HostCalibrationIO:
     def __init__(self, controller, cancel_check, selected_joint_mask,
                  selected_motor_mask, *, snapshot_store=None):
         self.controller = controller
+        self._output_margins = getattr(controller, '_applied_output_margins', None)
         self.cancel_check = cancel_check
         self.selected_joint_mask = int(selected_joint_mask)
         self.active_joint_mask = self.selected_joint_mask
@@ -114,6 +115,11 @@ class HostCalibrationIO:
         self._target_token = None
         self._session_finished = False
         self._saved_mode = controller.get_control_mode()
+
+    def lut_margins(self):
+        if not isinstance(self._output_margins, tuple) or len(self._output_margins) != 2:
+            raise ValueError('Control parameters are not applied. Wait for parameter synchronization before calibrating.')
+        return self._output_margins
 
     def cancel(self):
         self._cancel.set()
@@ -775,6 +781,11 @@ class HostCalibrationIO:
                           state.received_at('servo_abs_last_rx_ts')) <= kFeedbackReadyServoTimeoutMs)
 
     def _prepare_device(self):
+        try:
+            self.lut_margins()
+        except ValueError as exc:
+            self.feedback_recovery_error = str(exc)
+            return False
         # 每次标定入口只复位P4控制状态；电机坐标在逐关节准备时设零。
         # 直接走通信端口，controller.reset() 会取消当前宿主工作线程。
         if not self.owns_control():
@@ -1222,6 +1233,10 @@ class HostCalibrationIO:
 
     def finish_session(self, success, completed, failed):
         finished_ok = False
+        # Rope Init 失败是可预期结果：P4 已断扭矩并停在 RECOVERY_REQUIRED/IDLE，
+        # 这两个状态都允许再次收绳。此时补发 STOP 会锁存 E-STOP，把状态打成
+        # UNCONTROLLABLE，之后 Enable 的自动收绳永远被拒，必须先 Clear Faults。
+        rope_init_failed = False
         try:
             if not success or self._cancel.is_set() or self.cancel_check():
                 if self.controller.comm and self.controller._host_calibration_io is self:
@@ -1256,6 +1271,7 @@ class HostCalibrationIO:
                               self._state().rope_init_status in (2, 3), 30000):
                 return False, 'calibration complete; Rope Init result timeout'
             if self._state().rope_init_status != 2:
+                rope_init_failed = True
                 return False, 'Rope Init failed'
             # 原 Auto 任务的双腱 LUT0 收尾由 host 执行，P4 仍是普通直控。
             from .finish import finish_dual_zero
@@ -1263,7 +1279,8 @@ class HostCalibrationIO:
             return finished_ok, message
         finally:
             self._lut_sampling_windows.clear()
-            if (success and not finished_ok and self.controller.comm and
+            if (success and not finished_ok and not rope_init_failed
+                    and self.controller.comm and
                     self.controller._host_calibration_io is self):
                 self.controller.invalidate_direct_commands()
                 self.controller.comm.send_command('stop')

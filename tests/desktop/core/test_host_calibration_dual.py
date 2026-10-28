@@ -504,8 +504,8 @@ def test_complete_thumb_dual_trace_releases_then_searches_preloads_exchanges_and
     for actuator, motor in enumerate(config.joint_motors(16)):
         assert outcome["limits"][motor] == tendon_motor_abs_limits(
             result, actuator, motor,
-            config.kMotorAbsReleaseMarginCounts,
-            config.kMotorAbsTightMarginCounts)
+            config.DEFAULT_OUTPUT_MARGINS[0],
+            config.DEFAULT_OUTPUT_MARGINS[1])
     assert io.limits == outcome["limits"]
 
 
@@ -624,8 +624,8 @@ def test_dual_uses_primary_endpoint_as_urdf_max(
     for actuator, motor in enumerate((primary, secondary)):
         assert outcome["limits"][motor] == tendon_motor_abs_limits(
             result, actuator, motor,
-            config.kMotorAbsReleaseMarginCounts,
-            config.kMotorAbsTightMarginCounts)
+            config.DEFAULT_OUTPUT_MARGINS[0],
+            config.DEFAULT_OUTPUT_MARGINS[1])
     assert protocol.build_calib_load_joint_cmd(result)
 
 

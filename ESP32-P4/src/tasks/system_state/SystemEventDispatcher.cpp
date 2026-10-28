@@ -547,11 +547,6 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                 break;
             }
             if (!p4::system::canAcceptRunDirect(sharedData->system_state)) {
-                p4::safety::reportSafetyRuleEvent(
-                    sharedData,
-                    SafetyRuleId::SystemDirectStateRejected,
-                    (int32_t)event.token,
-                    sharedData->system_state);
                 FW_LOG_INFO_PRINTF("[STATE] reject RUN_DIRECT in state=%u\r\n",
                               (unsigned)sharedData->system_state);
                 rejectPendingDirectCommand(sharedData,
@@ -723,11 +718,6 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                 }
             }
             if (!p4::system::canAcceptRunFeedback(sharedData->system_state)) {
-                p4::safety::reportSafetyRuleEvent(
-                    sharedData,
-                    SafetyRuleId::SystemFeedbackStateRejected,
-                    (int32_t)event.token,
-                    sharedData->system_state);
                 FW_LOG_INFO_PRINTF("[STATE] reject RUN_FEEDBACK in state=%u\r\n",
                               (unsigned)sharedData->system_state);
                 setFeedbackAdmissionResult(sharedData, event.token,

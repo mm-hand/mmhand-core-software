@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -77,6 +78,8 @@ NATIVE_SOURCE = r'''
 #include "hal/servo/FeetechServoDriver.h"
 #include "tasks/servo_bus/ServoAbsoluteRestore.h"
 #include <climits>
+#include <cstdarg>
+#include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -86,6 +89,23 @@ using Bytes = std::vector<unsigned char>;
 static void require(bool value, const char* message) {
     if (!value) throw std::runtime_error(message);
 }
+
+static std::vector<std::string> diagnosticLogs;
+namespace p4::platform::time {
+    static uint32_t diagnosticNowMs = 0;
+    static uint32_t monotonicMillis() { return diagnosticNowMs; }
+}
+static void captureDiagnosticLog(const char* format, ...) {
+    char buffer[256];
+    va_list args;
+    va_start(args, format);
+    const int size = vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    require(size >= 0 && size < int(sizeof(buffer)), "diagnostic text was truncated");
+    diagnosticLogs.emplace_back(buffer);
+}
+#define FW_LOG_WARN_PRINTF(...) captureDiagnosticLog(__VA_ARGS__)
+/* PRODUCTION_READ_DIAGNOSTICS */
 
 static unsigned char checksum(const Bytes& bytes, std::size_t end) {
     unsigned sum = 0;
@@ -445,11 +465,88 @@ static void halScenario(const std::string& name) {
     }
 }
 
+static void diagnosticScenario(const std::string& name) {
+    FeetechServoDriver driver;
+    driver.begin(2, 1, 2, 1000000);
+    const bool sync = name.rfind("sync_", 0) == 0;
+    const auto fault = name.substr(sync ? 5 : 6);
+    Serial3.onPacket = [&](const Bytes& frame) {
+        if (fault == "timeout") return;
+        const auto reply = [&](unsigned char id, unsigned size) {
+            if (fault == "stale_status" && id == 6) return;
+            auto bytes = Device::response(id, fault == "status" || fault == "stale_status" ? 4 : 0,
+                                          Bytes(size, 0));
+            if (fault == "checksum") bytes.back() ^= 1;
+            if (fault == "length") { bytes[3]++; bytes.back() = checksum(bytes, bytes.size()-1); }
+            if (fault == "wrong_id") { bytes[2]++; bytes.back() = checksum(bytes, bytes.size()-1); }
+            if (fault == "partial" || (fault == "partial_batch" && id == 6)) bytes.resize(7); // Header plus two payload bytes.
+            Device::enqueue(Serial3, bytes);
+        };
+        if (sync) {
+            require(frame[4] == INST_SYNC_READ, "diagnostics generated an extra UART command");
+            for (std::size_t i=7; i+1<frame.size(); ++i) reply(frame[i], frame[6]);
+        } else {
+            require(frame[4] == INST_READ, "probe diagnostics generated an extra UART command");
+            reply(frame[2], frame[6]);
+        }
+    };
+    if (sync) {
+        const uint8_t ids[]{5,6};
+        const uint8_t count = fault == "stale_status" || fault == "partial_batch" ? 2 : 1;
+        require(driver.beginSyncRead(ids, count, 123, 1000), "sync begin failed");
+        const auto result = driver.collectSyncRead(6000);
+        require(result.successCount == (fault == "good" || fault == "partial_batch" ? 1 : 0), "sync admitted failed feedback");
+    } else {
+        require(driver.probeFeedback(5) == (fault == "good"), "probe admitted failed feedback");
+    }
+    const uint8_t id = fault == "stale_status" || fault == "partial_batch" ? 6 : 5;
+    const auto& diagnostic = driver.getReadDiagnostic(id);
+    const auto expectedError = fault == "checksum" ? ERR_CRC_CMP :
+        fault == "length" ? ERR_BUFF_LEN : fault == "wrong_id" ? ERR_SLAVE_ID :
+        fault == "timeout" || fault == "partial" || fault == "partial_batch" || fault == "stale_status" ? ERR_NO_REPLY : 0;
+    require(diagnostic.communicationError == expectedError, "read failure cause lost");
+    require(diagnostic.failed == (fault != "good") && diagnostic.sync == sync,
+            "read failure mode lost");
+    require(diagnostic.reply.statusValid == (fault == "status" || fault == "good"),
+            "unverified reply supplied a trusted status byte");
+    if (fault == "status") require(diagnostic.motorStatus == 4, "raw motor status lost");
+    if (fault == "stale_status") require(diagnostic.motorStatus == 0,
+        "missing sync reply inherited another motor's fault status");
+    if (fault == "partial" || fault == "partial_batch") require(diagnostic.reply.payloadBytes == 2,
+        "partial reply byte count lost");
+    if (sync) require(diagnostic.busExpectedBytes == (fault == "stale_status" || fault == "partial_batch" ? 42 : 21) &&
+                      diagnostic.sequence == 123, "sync batch evidence lost");
+    logServoReadFailure(&driver, 2, id);
+    if (fault == "good") { require(diagnosticLogs.empty(), "good feedback generated failure text"); return; }
+    require(diagnosticLogs.size() == 1 && diagnosticLogs[0].find("bus=2 id=" + std::to_string(id)) != std::string::npos,
+            "failure text lost physical route");
+    const std::string reason = fault == "status" ? "motor_status" :
+        fault == "partial" || fault == "partial_batch" || fault == "stale_status" ? "timeout" : fault;
+    require(diagnosticLogs[0].find("reason=" + reason) != std::string::npos,
+            "failure text lost failure reason");
+    logServoReadFailure(&driver, 2, id);
+    p4::platform::time::diagnosticNowMs = 4999;
+    logServoReadFailure(&driver, 2, id);
+    require(diagnosticLogs.size() == 1, "repeated failure flooded text logs");
+    p4::platform::time::diagnosticNowMs = 5000;
+    logServoReadFailure(&driver, 2, id);
+    require(diagnosticLogs.size() == 2 && diagnosticLogs.back().find("suppressed=2") != std::string::npos,
+            "failure did not resume after throttle interval");
+    logServoReadFailure(&driver, 1, id);
+    require(diagnosticLogs.size() == 3, "one BUS suppressed another BUS's evidence");
+    p4::platform::time::diagnosticNowMs = UINT32_MAX - 100;
+    logServoReadFailure(&driver, 2, id);
+    p4::platform::time::diagnosticNowMs = 4900;
+    logServoReadFailure(&driver, 2, id);
+    require(diagnosticLogs.size() == 5, "millis rollover suppressed diagnostics permanently");
+}
+
 int main(int argc, char** argv) {
     try {
         require(argc == 2, "scenario required");
         const std::string name(argv[1]);
-        if (name.rfind("sdk_",0) == 0) sdkScenario(name.substr(4));
+        if (name.rfind("diag_",0) == 0) diagnosticScenario(name.substr(5));
+        else if (name.rfind("sdk_",0) == 0) sdkScenario(name.substr(4));
         else halScenario(name);
         return 0;
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
@@ -491,7 +588,9 @@ def native_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dict
     include.mkdir()
     (include / "Arduino.h").write_text(ARDUINO_STUB, encoding="utf-8")
     source = directory / "servo_custom_position_test.cpp"
-    source.write_text(NATIVE_SOURCE, encoding="utf-8")
+    diagnostics = (P4_SRC / "tasks/servo_bus/ServoReadDiagnostics.cpp").read_text(encoding="utf-8")
+    diagnostics = re.sub(r'^#include[^\n]*\n', '', diagnostics, flags=re.MULTILINE)
+    source.write_text(NATIVE_SOURCE.replace("/* PRODUCTION_READ_DIAGNOSTICS */", diagnostics), encoding="utf-8")
     executable = directory / "servo_custom_position_test.exe"
     sms_source = SDK_SRC / "SMS_STS.cpp"
     msvc = Path(compiler).name.lower() in {"cl", "cl.exe"}
@@ -530,4 +629,15 @@ SCENARIOS = (
 def test_production_custom_position_transaction(native_harness, scenario: str) -> None:
     executable, env = native_harness
     subprocess.run([str(executable), scenario], check=True,
+                   cwd=executable.parent, env=env, timeout=10)
+
+
+@pytest.mark.parametrize("scenario", (
+    "probe_good", "probe_timeout", "probe_checksum", "probe_wrong_id", "probe_length",
+    "probe_status", "probe_partial", "sync_good", "sync_timeout", "sync_checksum",
+    "sync_length", "sync_status", "sync_partial", "sync_partial_batch", "sync_stale_status",
+))
+def test_feedback_failure_evidence_and_log_throttle(native_harness, scenario):
+    executable, env = native_harness
+    subprocess.run([str(executable), "diag_" + scenario], check=True,
                    cwd=executable.parent, env=env, timeout=10)

@@ -49,16 +49,8 @@ OBSOLETE_FIRMWARE_INDEX_FILES = (
 )
 
 _ROW_RE = re.compile(r"^P4_SAFETY_RULE\((.*)\)\s*$")
-# 旧固件自动标定编号继续解释历史日志，不再登记运行调用链。
-# CAW 是上传 LUT 的装配质量告警，继续保留活动绑定。
-# LogicalRange/FeedbackAbsLimit 随 2026-10 限位简化退役：唯一边界收敛为
-# LUT±可调扩放量，编号保留用于解读历史日志。
-RETIRED_RULE_NAMES = frozenset({
-    "SystemCalibrationStateRejected",
-    "FaultCalibration",
-    "ActuatorLogicalRange",
-    "FeedbackAbsLimitRejected",
-})
+ARCHIVE = ROOT / "desktop/resources/config/safety_rules.archive.json"
+GUIDANCE = ROOT / "desktop/resources/config/safety_guidance.json"
 _ACTION_TEXT = {
     "Allow": "Allow",
     "RejectCommand": "Reject command",
@@ -291,6 +283,15 @@ def load_rule_definitions() -> list[dict]:
                 "recovery": _unquote(recovery),
             }
         )
+    reserved = {r['rule_id'] for r in json.loads(ARCHIVE.read_text())['rules']}
+    if ids & reserved:
+        raise ValueError(f"reserved safety IDs reused: {sorted(ids & reserved)}")
+    guidance = json.loads(GUIDANCE.read_text(encoding='utf-8'))['rules']
+    if set(guidance) != {str(rule['rule_id']) for rule in rules}:
+        raise ValueError('Every active safety rule must have exactly one user explanation')
+    for item in guidance.values():
+        if not item.get('title') or not item.get('impact') or not 1 <= len(item.get('steps', [])) <= 3:
+            raise ValueError('Incomplete user guidance')
     return rules
 
 
@@ -306,19 +307,11 @@ def load_rules() -> list[dict]:
 def resolve_rule_binding(rule: dict) -> RuleBinding | None:
     """按单条覆盖优先、规则族默认次之的顺序解析调用链。"""
 
-    if is_retired_rule(rule):
-        return None
     return RULE_BINDING_OVERRIDES.get(
         str(rule["name"]),
         GROUP_BINDINGS.get(str(rule["code"]).split("-", 1)[0]),
     )
 
-
-def is_retired_rule(rule: dict) -> bool:
-    """只有明确移除的固件自动标定规则退役，结果质量告警仍活动。"""
-
-    return (str(rule["code"]).startswith("CAL-")
-            or str(rule["name"]) in RETIRED_RULE_NAMES)
 
 
 def render() -> str:
@@ -364,16 +357,6 @@ def render_firmware_index_json() -> str:
 
     items: list[dict] = []
     for rule in load_rule_definitions():
-        if is_retired_rule(rule):
-            items.append({
-                "name": rule["name"],
-                "rule_id": rule["rule_id"],
-                "code": rule["code"],
-                "active": False,
-                "retired": True,
-                "retirement_reason": "Automatic calibration runs on the host; retained for historical logs.",
-            })
-            continue
         contract = resolve_rule_binding(rule)
         if contract is None:
             raise ValueError(f"missing safety binding for {rule['code']} {rule['name']}")

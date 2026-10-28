@@ -6,7 +6,7 @@ import time
 import queue
 from unittest.mock import Mock
 import pytest
-from desktop.core.application_actions import retry_hint, validate_manual_pair
+from desktop.core.application_actions import validate_manual_pair
 from desktop.core.hand_backend import HandBackend
 from desktop.core.protocol import SYSTEM_STATE_READY, SYSTEM_STATE_RUN_DIRECT, HOST_PROTOCOL_VERSION, STATE_SYNC_ALL
 from desktop.core.core_logic import HandController, ServoRebaseZeroResult
@@ -81,6 +81,8 @@ def test_queued_anchor_older_than_verified_zero_feedback_is_discarded(monkeypatc
 @pytest.fixture
 def hand(monkeypatch, tmp_path):
     hand = HandBackend()
+    from desktop.core.generated_control_parameters import DEFAULT_OUTPUT_MARGINS
+    hand._controller._applied_output_margins = DEFAULT_OUTPUT_MARGINS
     from desktop.core.calibration_workflow import CalibrationWorkflowService
     hand._calibration_workflow._executor.shutdown(wait=True)
     hand._calibration_workflow = CalibrationWorkflowService(hand._controller, tmp_path / "test.mmcal.json")
@@ -724,23 +726,6 @@ def test_port_discovery_failure_clears_stale_choices(hand):
     assert 'USB enumeration failed' in snapshot['discovery_error']
 
 
-def test_retry_hint_only_for_retryable_failures():
-    assert retry_hint('Enable preparation was not confirmed. Check the P4 rejection reason.').endswith(
-        'Please try again.')
-    assert retry_hint('workspace servo feedback recovery failed: partly completed').endswith(
-        'Please try again.')
-    for text in (
-        'Device is stopped (E-STOP latched); use the top-right Clear Faults button first',
-        'Enable blocked: holding the current pose would require clamping. J00, J20',
-        'Enable blocked: current pose is outside the permitted workspace.',
-        'M00 firmware 3.9 is older than 3.10',
-        'J00 target exceeds URDF limits [-10, 10]',
-        'No joint selected',
-        'ABS zero may have completed; new trusted feedback/JSON save is unconfirmed. No automatic retry.',
-        'Application is shutting down',
-    ):
-        assert retry_hint(text) == text
-
 
 def test_enable_recovery_runs_rope_init_when_pose_below_workspace(hand, monkeypatch):
     """Enable 前发现低于工作区时，自动用 P4 Rope Init 回正，成功后再继续。"""
@@ -798,3 +783,52 @@ def test_enable_recovery_is_skipped_when_pose_is_inside(hand, monkeypatch):
     ok, message = hand._recover_enable_workspace([0], 1, 0)
 
     assert ok and message == '' and calls == []
+
+
+def test_calibration_rejects_unapplied_parameters_before_reset_or_motion(hand, monkeypatch):
+    from desktop.core.user_issues import operation_issue
+    hand._controller._applied_output_margins = None
+    hand._selected_joints = (0,)
+    prepared = Mock()
+    monkeypatch.setattr(hand, '_prepare_maintenance_switch', prepared)
+    result = hand.request_calibration()
+    assert not result.accepted
+    assert operation_issue(result.message).code == 'HOST_PARAMETERS_PENDING'
+    prepared.assert_not_called()
+    assert not hand._application_operations
+
+
+@pytest.mark.parametrize('action', ['save', 'defaults'])
+def test_parameter_changes_cannot_change_calibration_margins_mid_operation(hand, monkeypatch, action):
+    hand._calibration_operation_id = 'preparing-calibration'
+    saved = Mock()
+    monkeypatch.setattr(hand._control_parameters, 'save', saved)
+    monkeypatch.setattr(hand._control_parameters, 'restore_defaults', saved)
+    before = hand._controller._applied_output_margins
+    result = hand.request_save_control_parameters({}) if action == 'save' else hand.request_restore_control_defaults()
+    assert not result.accepted
+    saved.assert_not_called()
+    assert hand._controller._applied_output_margins == before
+
+
+def test_save_parameters_requires_fresh_application_before_new_calibration(hand, tmp_path):
+    from desktop.core.control_parameters import ControlParameterStore
+    hand._control_parameters = ControlParameterStore(tmp_path / 'parameters.json')
+    data = hand._control_parameters.snapshot()
+    data.pop('crc32'); data.pop('ramp_crc32')
+    assert hand.request_save_control_parameters(data).accepted
+    assert hand._controller._applied_output_margins is None
+
+
+def test_synchronous_rejection_retains_evidence_without_changing_motion_ownership(hand):
+    from desktop.core.user_issues import IssueMessage
+    hand._application_busy = 'existing-action'
+    before = hand.get_state_snapshot()
+    issue = hand.record_operation_issue(IssueMessage('F1 status=9 rejected', 'ACT-1005'), scope='M02')
+    assert issue['code'] == 'ACT-1005'
+    assert issue['details']['original_message'] == 'F1 status=9 rejected'
+    item = hand.application_snapshot()['operations'][-1]
+    assert item['status'] == 'FAILED' and item['notification_shown']
+    assert item['scope'] == 'M02'
+    assert hand._application_busy == 'existing-action'
+    assert hand.get_state_snapshot().servo_target_owner == before.servo_target_owner

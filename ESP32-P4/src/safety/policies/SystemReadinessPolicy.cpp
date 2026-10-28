@@ -10,6 +10,7 @@
 #include "../../data/SafetyTypes.h"
 #include "../../generated/UrdfJointLimits.generated.h"
 #include "../../system/calibration/CalibrationMath.h"
+#include "../../system/calibration/CalibrationValidity.h"
 #include "../../system/calibration/CalibrationRuntimeStore.h"
 #include "../../system/calibration/ManualEncoderReferenceStore.h"
 #include "../../system/rtos/SharedSafetyState.h"
@@ -89,7 +90,11 @@ bool requiredServosOnline(SystemRuntimeContext* runtime,
                           const ServoAngleData_t& servoSnapshot)
 {
     const uint32_t mask = requiredMotorMask(runtime);
-    if (mask == 0 || !routesControllable(runtime, mask)) {
+    // 没有任何电机被要求时，条件真空成立；不能把"空 scope"报成舵机离线。
+    if (mask == 0) {
+        return true;
+    }
+    if (!routesControllable(runtime, mask)) {
         return false;
     }
     for (uint8_t motor = 0; motor < SERVO_TOTAL_NUM; ++motor) {
@@ -174,6 +179,8 @@ FeedbackReadinessDecision evaluateFeedbackReadiness(
     SystemRuntimeContext* runtime,
     uint32_t nowMs)
 {
+    if (runtime && (sharedAtomicLoad(&runtime->active_joint_mask) & kManualEncoderReferenceFullMask) == 0)
+        return reject(FEEDBACK_READY_REJECT_EMPTY_SCOPE, sharedAtomicLoad(&runtime->active_motor_mask));
     if (!runtime || !manualReferenceGateReady(runtime)) {
         return reject(FEEDBACK_READY_REJECT_CALIBRATION_MISSING);
     }
@@ -199,19 +206,11 @@ FeedbackReadinessDecision evaluateFeedbackReadiness(
     const uint32_t activeMask =
         sharedAtomicLoad(&runtime->active_joint_mask) &
         kManualEncoderReferenceFullMask;
-    if (activeMask == 0) {
-        return reject(FEEDBACK_READY_REJECT_EMPTY_SCOPE,
-                      sharedAtomicLoad(&runtime->active_motor_mask));
-    }
-
-    RemoteSensorData_t sensor = {};
-    const uint32_t onlineMask =
-        sharedAtomicLoad(&runtime->encoder_online_bitmap);
-    const uint32_t faultMask =
-        sharedAtomicLoad(&runtime->encoder_fault_bitmap);
-    const uint8_t canOnline = sharedAtomicLoad(&runtime->can_link_online);
-    const bool sensorFresh = runtime->canRxQueue.peek(&sensor) && sensor.isValid &&
-        (uint32_t)(nowMs - sensor.timestamp) <= kStateCanOfflineTimeoutMs;
+    const auto health = p4::safety::readSystemHealth(runtime, nowMs);
+    const uint32_t onlineMask = health.encoderOnlineMask;
+    const uint32_t faultMask = health.encoderFaultMask;
+    const uint8_t canOnline = health.canOnline;
+    const bool sensorFresh = health.sensorFresh;
     if (!sensorFresh || canOnline == 0 ||
         (activeMask & ~onlineMask) != 0 ||
         (activeMask & faultMask) != 0) {
@@ -221,7 +220,7 @@ FeedbackReadinessDecision evaluateFeedbackReadiness(
                       sensorFresh ? 1 : 0,
                       canOnline);
     }
-    const uint32_t faults = p4::safety::collectSystemFaults(runtime);
+    const uint32_t faults = health.faults;
     if (faults != 0) {
         return reject(FEEDBACK_READY_REJECT_SYSTEM_FAULT, faults);
     }
@@ -268,9 +267,7 @@ FeedbackReadinessDecision evaluateFeedbackReadiness(
         }
         const uint32_t manualCrc = manualEncoderReferenceEntryCrc(
             joint, snapshot.manual);
-        if (calib.mappingVersion != kManualScaledUrdfFeedbackMappingVersion ||
-            calib.urdfConfigCrc != kManualScaledUrdfConfigCrc ||
-            calib.manualReferenceCrc != manualCrc) {
+        if (!calibrationMatchesManual(snapshot, manualCrc)) {
             return reject(FEEDBACK_READY_REJECT_CALIBRATION_MISMATCH,
                           joint,
                           calib.mappingVersion,

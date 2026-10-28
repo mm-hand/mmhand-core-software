@@ -8,8 +8,9 @@
 禁止依赖：禁止直接操作协议、串口和控制器。
 """
 import time
+import json
 from nicegui import core, ui
-from desktop.core.application_actions import retry_hint
+from desktop.core.user_issues import issue_text, operation_issue
 from . import refresh_policy as policy
 from .web import renumber_motors, renumber_tactile, joint_calibration, motor_calibration, feedback_control, direct_control
 from .web import replay, plots, tactile, diagnostics, control_parameters
@@ -23,19 +24,25 @@ SUBTABS = {
     'Settings': ['Renumber Motor', 'Renumber Tactile', 'Control Parameters', 'Diagnostics'],
 }
 def status_background(value):
+    """状态色卡：红=必须人工处理，黄=机器要自救/警告，蓝=正在动作，绿=可操作。"""
     status = str(value).upper()
-    if status.startswith('NEED CALIBRATION') or status.startswith('PENDING'):
+    # 标签可能带 P4 编号后缀，如 'Recovery (9)'，比对前去掉。
+    base = status.split(' (')[0].strip()
+    if base.startswith('NEED CALIBRATION') or base in ('PENDING', 'WARN', 'WARNING',
+                                                       'SYNCING', 'RECOVERY'):
         return '#fde68a'
-    if status.startswith('READY'):
+    if base == 'READY' or base.startswith('READY'):
         return '#bbf7d0'
-    if status in ('FEEDBACK', 'DIRECT', 'CALIBRATING', 'RUNNING', 'CONTROLLING'):
+    if base in ('FEEDBACK', 'DIRECT', 'CALIBRATING', 'RUNNING', 'CONTROLLING',
+                'ROPE INIT'):
         return '#bfdbfe'
-    if status in ('FAILED', 'FAULT', 'ERROR', 'ACTIVE', 'HOLD', 'MISSING', 'STOPPED'):
+    if base in ('FAILED', 'FAULT', 'ERROR', 'ACTIVE', 'HOLD', 'MISSING',
+                'STOPPED', 'LOCKED'):
         return '#fecaca'
-    if status in ('READY', 'KNOWN', 'CLEAR', 'SUCCESS', 'OFF', 'ARMED'):
+    if base in ('KNOWN', 'CLEAR', 'SUCCESS', 'OFF', 'ARMED'):
         return '#bbf7d0'
-    if status in ('WARN', 'WARNING', 'PENDING', 'SYNCING'):
-        return '#fde68a'
+    if base == 'IDLE':
+        return '#d1fae5'
     return '#e2e8f0'
 
 
@@ -232,6 +239,8 @@ def build_page(hand):
     with ui.dialog().props('persistent') as calibration_dialog, ui.card().classes('w-[600px] max-w-full'):
         calibration_title = ui.label().classes('font-semibold text-lg')
         calibration_message = ui.label().classes('whitespace-pre-wrap text-sm')
+        with ui.expansion('Details').classes('w-full'):
+            calibration_evidence = ui.code('', language='json').classes('w-full')
         ui.button('Close', on_click=calibration_dialog.close).props('dense')
     displayed_firmware_alerts = set()
     firmware_alert_device = [None]
@@ -272,7 +281,8 @@ def build_page(hand):
             operation_id, alert = pending_calibration_alerts.pop(0)
             calibration_title.set_text(alert['title'])
             calibration_title.style('color:#dc2626' if alert['severity'] == 'negative' else 'color:#ea880c')
-            calibration_message.set_text(alert['message'])
+            calibration_message.set_text(issue_text(alert.get('user_issue')) or alert['message'])
+            calibration_evidence.set_content(json.dumps(alert, indent=2, default=str))
             hand.acknowledge_calibration_alert(operation_id)
             calibration_dialog.open()
 
@@ -289,19 +299,20 @@ def build_page(hand):
             if operation_id in displayed_failed_operations:
                 continue
             displayed_failed_operations.add(operation_id)
-            if operation.get('calibration_alert'):
+            if operation.get('calibration_alert') or operation.get('notification_shown'):
                 continue
-            ui.notify(retry_hint(operation.get('message') or 'Operation failed'),
-                      type='negative', timeout=8000)
+            ui.notify(issue_text(operation.get('user_issue') or operation_issue(
+                operation.get('message') or 'Operation failed', scope=operation.get('scope', 'System')).to_dict()),
+                      type='negative', timeout=10000, multi_line=True)
     def act(action):
         try:
             result = action()
             if not result.accepted:
-                hand.log_operation('Rejected: ' + result.message)
-                ui.notify(retry_hint(result.message), type='warning')
+                issue = hand.record_operation_issue(result.message)
+                ui.notify(issue_text(issue), type='warning', multi_line=True, timeout=10000)
         except Exception as exc:
-            hand.log_operation(f'Operation failed: {exc}')
-            ui.notify(str(exc), type='negative')
+            issue = hand.record_operation_issue(str(exc), name='Action failed')
+            ui.notify(issue_text(issue), type='negative', multi_line=True, timeout=10000)
     def confirm(message, action):
         with ui.dialog() as dialog, ui.card().classes('max-w-lg'):
             ui.label(message)
@@ -341,12 +352,6 @@ def build_page(hand):
         storage.set_text(f"Default data directory: {paths['data_dir']}")
         import_info.set_text('Choose a calibration file to validate.'); load.set_enabled(False)
         importer.open()
-    def top_stop_action():
-        snapshot = hand.application_snapshot(include_curves=False)
-        if snapshot.get('stop_latched'):
-            act(hand.request_clear_faults)
-        else:
-            act(hand.stop_motion)
     with ui.element('div').classes('console-shell'):
         with ui.row().classes('connection-bar items-center w-full'):
             ui.label('MM-Hand Console').classes('font-semibold text-base whitespace-nowrap')
@@ -362,7 +367,12 @@ def build_page(hand):
                 with ages[name]: ui.tooltip('Time since the latest data received on this connection, in milliseconds.')
             ui.space()
             save = ui.button('Save Data: ON', on_click=lambda: act(lambda: hand.request_recording(not hand.application_snapshot(include_curves=False)['recording']['enabled']))).props('dense outline')
-            top_stop = ui.button('■ STOP', on_click=top_stop_action, color='negative').props('dense').classes('font-bold px-5')
+            top_stop = ui.button('■ STOP', on_click=lambda: act(hand.stop_motion), color='negative').props('dense').classes('font-bold px-5')
+            top_clear = ui.button('Clear Faults', on_click=lambda: act(hand.request_clear_faults), color='grey-6').props('dense').classes('font-bold px-4')
+            top_clear.set_enabled(False)
+            with top_clear:
+                ui.tooltip('Usable only while a STOP is latched, P4 reports a fault, '
+                           'or P4 is stopped and needs an explicit reset.')
         with ui.row().classes('status-bar items-center w-full'):
             badges = {name: ui.label().classes('status-chip text-xs cursor-pointer') for name in ['System', 'P4', 'Calibration', 'Mode', 'Overload', 'Collision', 'Multi-turn']}
         with ui.tabs(value=TABS[0]).classes('console-tabs w-full').props('dense no-caps active-color=primary outside-arrows mobile-arrows') as tabs:
@@ -426,7 +436,7 @@ def build_page(hand):
 
     # Display caches: NiceGUI values are only written when they actually changed.
     text_cache, enabled_cache, style_cache = {}, {}, {}
-    top_stop_color = [None]
+    top_clear_color = [None]
     running = {'fast': False, 'heavy': False, 'plots': False}
     slow_ticks = {'fast': 0, 'heavy': 0, 'plots': 0}
     heartbeat_at = [0.0]
@@ -486,15 +496,16 @@ def build_page(hand):
         mode_value = snapshot.get('control_mode', 'UNKNOWN')
         set_text(('badge', 'Mode'), badges['Mode'], f'Mode: {mode_value}')
         set_style(('badge-style', 'Mode'), badges['Mode'], f'background-color:{status_background(mode_value)}')
-        stop_latched = bool(snapshot.get('stop_latched'))
-        stop_label = 'Clear Faults' if stop_latched else '■ STOP'
-        set_text('top-stop', top_stop, stop_label)
-        color = 'warning' if stop_latched else 'negative'
-        if top_stop_color[0] != color:
-            top_stop_color[0] = color
-            top_stop.props(f'color={color}')
-        set_enabled('top-stop', top_stop,
-                    snapshot['communication'] == 'Online' and not snapshot['busy'])
+        online = snapshot['communication'] == 'Online' and not snapshot['busy']
+        set_text('top-stop', top_stop, '■ STOP')
+        set_enabled('top-stop', top_stop, online)
+        # Clear Faults 独立按钮：只有真有事可清时才是黄色可点，其余灰着。
+        clear_ready = bool(snapshot.get('clear_faults_applicable')) and online
+        set_enabled('top-clear', top_clear, clear_ready)
+        clear_color = 'warning' if clear_ready else 'grey-6'
+        if top_clear_color[0] != clear_color:
+            top_clear_color[0] = clear_color
+            top_clear.props(f'color={clear_color}')
         set_text('save', save, 'Save Data: ON' if snapshot['recording']['enabled'] else 'Save Data: OFF')
         preview = snapshot['import_preview']
         if preview and importer.value and preview['token'] != preview_token[0]:

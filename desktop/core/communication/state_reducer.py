@@ -971,14 +971,6 @@ class StateReducer:
         parsed = parse_proto_ack(payload)
         if parsed is not None:
             ack_cmd, applied_mode, status = parsed
-            if ack_cmd in (
-                CMD_CLEAR_CALIBRATION,
-                CMD_CLEAR_CALIBRATION_SCOPE,
-            ):
-                owner._auto_calib_logger.log(
-                    "ACK",
-                    f"cmd=0x{int(ack_cmd):02X} mode={int(applied_mode)} status={int(status)}",
-                )
             log_session(
                 "PROTO",
                 f"ACK cmd=0x{int(ack_cmd):02X} mode={int(applied_mode)} status={int(status)}",

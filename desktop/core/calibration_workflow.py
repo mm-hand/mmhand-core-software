@@ -328,6 +328,7 @@ class CalibrationWorkflowService:
                         "warning_summary": None,
                         "completed_joint_mask": int(outcome.get("completed_joint_mask", 0)),
                         "failed_joint_mask": int(outcome.get("failed_joint_mask", 0)),
+                        "diagnostic": getattr(io, '_last_diag', None),
                     }
                     if warning:
                         state_lock = getattr(self._controller, "state_lock", None)
@@ -377,6 +378,8 @@ class CalibrationWorkflowService:
                             "completed_joint_mask": session.completed_joint_mask,
                             "failed_joint_mask": session.failed_joint_mask,
                             "cancelled": session.cancelled,
+                            "diagnostic_reason": getattr(io, '_last_diag', None)[0] if getattr(io, '_last_diag', None) else None,
+                            "diagnostic": getattr(io, '_last_diag', None),
                         },
                     ))
             except Exception as exc:
