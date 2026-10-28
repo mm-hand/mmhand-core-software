@@ -9,7 +9,7 @@
 """
 from nicegui import ui
 from .common import (FINGERS, finger_cards, selection, label, show, quality, table, set_rows,
-                     maintenance_allowed, maintenance_button, auto_span, request_calibration)
+                     maintenance_allowed, maintenance_button, auto_span, request_calibration, select_all_and_request)
 
 
 def detail_text(row, limits='—'):
@@ -31,6 +31,9 @@ def build(hand, act, load_calibration):
         ui.button('Load Joint & Motor Calibration', on_click=load_calibration)
         calibrate = maintenance_button(ui.button(
             'Calibrate Selected', on_click=lambda: act(lambda: request_calibration(hand, 'Motor Calibration'))))
+        calibrate_all = maintenance_button(ui.button(
+            'Calibrate All', on_click=lambda: act(lambda: select_all_and_request(
+                hand, 'selected_joints', lambda: request_calibration(hand, 'Motor Calibration')))))
         selected = label()
     with finger_cards():
         for name, indices in FINGERS:
@@ -56,6 +59,7 @@ def build(hand, act, load_calibration):
                     refreshers.append(refresh)
     def refresh(snapshot):
         calibrate.set_enabled(maintenance_allowed(snapshot))
+        calibrate_all.set_enabled(maintenance_allowed(snapshot))
         chosen = set(snapshot['selected_joints'])
         selected.set_text(f"Selected: {len(chosen)} joints / {sum(m['joint'] in chosen for m in snapshot['motors'])} motors")
         for update in refreshers:

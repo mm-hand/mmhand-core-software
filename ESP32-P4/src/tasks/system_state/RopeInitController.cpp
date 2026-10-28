@@ -150,10 +150,9 @@ void stepRopeInitController(SystemRuntimeContext* sharedData, uint32_t nowMs)
             finish(sharedData, false, ROPE_INIT_REASON_AUTO_REQUIRED, nowMs);
             return;
         }
-        // Enable 把“当前姿态”当保持目标下发，上位机要求角度 >= URDF 下限（0 容差）。
-        // 所以回正必须收进下限里侧（outsideCounts 归零），不能像 READY 那样停在
-        // −24 counts 的容差带里，否则回正完主机仍然会夹回。
-        if (mapped.outsideCounts[joint] >= 0) {
+        // Enable 要求当前姿态落在完整的 Manual/URDF 区间内。
+        const int32_t outside = mapped.outsideCounts[joint];
+        if (outside == 0) {
             continue;
         }
 
@@ -170,8 +169,8 @@ void stepRopeInitController(SystemRuntimeContext* sharedData, uint32_t nowMs)
                 finish(sharedData, false, ROPE_INIT_REASON_SERVO_OFFLINE, nowMs);
                 return;
             }
-            const int32_t tendonDelta =
-                actuator == 0 ? kTightenStepCounts : -kReleaseStepCounts;
+            const bool tighten = (outside < 0) == (actuator == 0);
+            const int32_t tendonDelta = tighten ? kTightenStepCounts : -kReleaseStepCounts;
             const int32_t target = motorApplyTendonDelta(
                 motor, servo.servoAngles[motor], tendonDelta);
             if (!appendMotorTarget(&batch, motor, target)) {

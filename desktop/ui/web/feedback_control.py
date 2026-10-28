@@ -8,7 +8,7 @@
 禁止依赖：禁止直接操作协议、串口和控制器。
 """
 from nicegui import ui
-from .common import FINGERS, finger_cards, selection, target_editor, label, show, quality, control_note
+from .common import FINGERS, finger_cards, selection, target_editor, label, show, quality, control_note, select_all_and_request
 
 def build(hand, act):
     drafts, refreshers, syncing = {}, [], [False]
@@ -17,6 +17,7 @@ def build(hand, act):
         act(lambda: hand.request_targets({j: drafts[j]['value'] for j in selected}))
     with ui.row().classes('page-toolbar'):
         ui.button('ENABLE Selected', on_click=lambda: act(hand.request_enable))
+        ui.button('ENABLE All', on_click=lambda: act(lambda: select_all_and_request(hand, 'selected_joints', hand.request_enable)))
         ui.button('Send Selected', on_click=send_selected)
         ros = ui.switch('ROS2 INPUT', on_change=lambda e: None if syncing[0] else act(lambda: hand.request_ros_input(e.value)))
     control_note()

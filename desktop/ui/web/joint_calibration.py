@@ -9,7 +9,7 @@
 """
 from nicegui import ui
 from .common import (FINGERS, finger_cards, selection, label, show, quality,
-                     maintenance_allowed, maintenance_button, json_status)
+                     maintenance_allowed, maintenance_button, json_status, select_all_and_request)
 
 BADGE_TOOLTIP = ('Manual endpoint state. Release keeps the Manual endpoints; '
                  'automatic calibration state is on Motor Calibration.')
@@ -32,6 +32,9 @@ def build(hand, act, load_calibration, confirm):
         release_button = maintenance_button(ui.button('Release Selected Tendons', on_click=lambda: confirm(
             "Release only the selected joints' tendons by another 1500 counts. Their motor calibration and multi-turn anchors will be reset. Stop motion first.",
             hand.request_release_rope)))
+        release_all_button = maintenance_button(ui.button('Release All Tendons', on_click=lambda: confirm(
+            'Release all joints\' tendons by another 1500 counts. Their motor calibration and multi-turn anchors will be reset. Stop motion first.',
+            lambda: select_all_and_request(hand, 'selected_joints', hand.request_release_rope))))
         counts = label()
     with finger_cards():
         for name, indices in FINGERS:
@@ -76,7 +79,7 @@ def build(hand, act, load_calibration, confirm):
                     refreshers.append(refresh)
     def refresh(snapshot):
         allowed = maintenance_allowed(snapshot)
-        for button in (load_button, clear_button, release_button):
+        for button in (load_button, clear_button, release_button, release_all_button):
             button.set_enabled(allowed)
         counts.set_text(f"Manual: {sum(j['manual_valid'] for j in snapshot['joints'])}/21")
         for update in refreshers:

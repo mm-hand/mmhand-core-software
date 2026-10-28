@@ -124,6 +124,15 @@ def quality():
                         ui.tooltip(tooltip)
     return refresh
 
+def select_all_and_request(hand, key, request):
+    snapshot = hand.application_snapshot(include_curves=False)
+    if key == 'selected_motors':
+        result = hand.select_motors(row['motor'] for row in snapshot['motors'])
+    else:
+        result = hand.select_joints(range(len(snapshot['joints'])))
+    return request() if result.accepted else result
+
+
 def selection(hand, key, indices, text):
     syncing = [False]
     def changed(event):

@@ -9,7 +9,7 @@
 """
 from nicegui import ui
 from .common import (FINGERS, finger_cards, selection, target_editor, label, show, quality,
-                     control_note)
+                     control_note, select_all_and_request)
 
 ZERO_PROMPT = (
     'No motor calibration is loaded, so Direct Control has no motor coordinates. '
@@ -63,6 +63,7 @@ def build(hand, act, confirm, leave=None):
         act(lambda: hand.request_motors({m: drafts[m]['value'] for m in selected}))
     with ui.row().classes('page-toolbar'):
         ui.button('ENABLE Selected', on_click=lambda: act(hand.request_direct_enable))
+        ui.button('ENABLE All', on_click=lambda: act(lambda: select_all_and_request(hand, 'selected_motors', hand.request_direct_enable)))
         ui.button('Send Selected', on_click=send_selected)
         ui.label('Logical ABS (counts)').classes('text-sm text-slate-600')
     control_note()
