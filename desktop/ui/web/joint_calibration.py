@@ -8,7 +8,7 @@
 禁止依赖：禁止直接操作协议、串口和控制器。
 """
 from nicegui import ui
-from .common import (FINGERS, finger_cards, selection, label, show, quality,
+from .common import (FINGERS, finger_cards, selection, label, show, quality, joint_label, display_joints,
                      maintenance_allowed, maintenance_button, json_status, select_all_and_request)
 
 BADGE_TOOLTIP = ('Manual endpoint state. Release keeps the Manual endpoints; '
@@ -40,10 +40,10 @@ def build(hand, act, load_calibration, confirm):
         for name, indices in FINGERS:
             with ui.card().classes('w-full'):
                 refreshers.append(selection(hand, 'selected_joints', indices, name))
-                for j in indices:
+                for j in display_joints(indices):
                     with ui.column().classes('joint-row w-full gap-1'):
                         with ui.row().classes('items-center gap-2'):
-                            refreshers.append(selection(hand, 'selected_joints', [j], f'J{j:02d}'))
+                            refreshers.append(selection(hand, 'selected_joints', [j], joint_label(j)))
                             badge = quality()
                         with ui.row().classes('items-center gap-2 flex-nowrap'):
                             raw = label().classes('text-base font-bold text-slate-900 whitespace-nowrap')

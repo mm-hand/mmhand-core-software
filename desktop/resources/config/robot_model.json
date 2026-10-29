@@ -468,190 +468,163 @@
         "channel": 0,
         "servo_id": 0,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 1,
         "servo_id": 1,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 2,
         "servo_id": 2,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 3,
         "servo_id": 3,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 4,
         "servo_id": 4,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 5,
         "servo_id": 5,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 6,
         "servo_id": 6,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 7,
         "servo_id": 7,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 8,
         "servo_id": 8,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 9,
         "servo_id": 9,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 10,
         "servo_id": 10,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 11,
         "servo_id": 11,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 12,
         "servo_id": 12,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 13,
         "servo_id": 13,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 14,
         "servo_id": 14,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 15,
         "servo_id": 15,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 16,
         "servo_id": 16,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 17,
         "servo_id": 17,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 18,
         "servo_id": 18,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 19,
         "servo_id": 19,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 20,
         "servo_id": 20,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 21,
         "servo_id": 21,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 22,
         "servo_id": 22,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 23,
         "servo_id": 23,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 24,
         "servo_id": 24,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 25,
         "servo_id": 25,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       },
       {
         "channel": 26,
         "servo_id": 26,
         "raw_modulo": 4096,
-        "feedback_abs_sign": 1,
-        "tendon_shorten_abs_sign": 1
+        "feedback_abs_sign": 1
       }
     ],
     "joints": [

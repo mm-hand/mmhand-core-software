@@ -49,6 +49,8 @@ def test_generator_outputs_desktop_and_p4_contracts(tmp_path: Path) -> None:
 
     assert mapping["schema_version"] == 4
     assert [item["joint_index"] for item in mapping["joints"]] == list(range(21))
+    assert all("tendon_shorten_abs_sign" not in item for item in mapping["motors"])
+    assert all("tendon_shorten_abs_sign" in item for item in model["manifest"]["motors"])
     assert len(fingerprint["control_model_crc"]) == 8
     assert len(fingerprint["firmware_source_crc"]) == 8
 

@@ -11,7 +11,7 @@
 from .protocol import ENCODER_COUNT, MOTOR_ABS_CMD_MAX, MOTOR_ABS_CMD_MIN, MOTOR_COUNT
 
 
-from .robot_model import mapping as _mapping
+from .robot_model import manifest as _manifest, mapping as _mapping
 
 _MODEL = _mapping()
 MOTOR_TO_JOINT_INDEX = [-1] * MOTOR_COUNT
@@ -24,7 +24,7 @@ for _motor_idx, _joint_idx in enumerate(MOTOR_TO_JOINT_INDEX):
     if 0 <= _joint_idx < ENCODER_COUNT and JOINT_TO_PRIMARY_MOTOR_INDEX[_joint_idx] < 0:
         JOINT_TO_PRIMARY_MOTOR_INDEX[_joint_idx] = _motor_idx
 
-MOTOR_TENDON_SHORTEN_ABS_SIGN = [int(motor["tendon_shorten_abs_sign"]) for motor in _MODEL["motors"]]
+MOTOR_TENDON_SHORTEN_ABS_SIGN = [int(motor["tendon_shorten_abs_sign"]) for motor in _manifest()["motors"]]
 
 
 def clamp_motor_abs(value: int) -> int:

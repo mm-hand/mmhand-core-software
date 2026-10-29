@@ -8,7 +8,7 @@
 禁止依赖：禁止直接操作协议、串口和控制器。
 """
 from nicegui import ui
-from .common import label, show, table, set_rows, selection, FINGERS
+from .common import label, show, table, set_rows, selection, FINGERS, joint_label, display_joints
 
 def build(hand, act):
     async def upload(event):
@@ -27,8 +27,8 @@ def build(hand, act):
         for name, joints in FINGERS:
             with ui.column().classes('gap-1'):
                 selectors.append(selection(hand, 'selected_joints', joints, name))
-                for joint in joints:
-                    selectors.append(selection(hand, 'selected_joints', [joint], f'J{joint:02d}'))
+                for joint in display_joints(joints):
+                    selectors.append(selection(hand, 'selected_joints', [joint], joint_label(joint)))
     preview = table([('joint', 'Joint'), ('angle', 'Current deg'), ('valid', 'Valid'), ('target', 'Replay Target'), ('error', 'Error')])
     with ui.row().classes('w-full items-center'):
         status = label()

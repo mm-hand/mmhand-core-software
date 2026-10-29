@@ -467,6 +467,7 @@ def test_blocked_rebase_scope_cannot_restore_old_json_anchor(monkeypatch):
 
 def test_reconcile_loads_resealed_shifted_snapshot(tmp_path, monkeypatch):
     controller = _controller(monkeypatch)
+    controller.current_state.multi_turn_unknown_bitmap = 1
     path = tmp_path / 'snapshot.json'
     snapshot = _empty_v7_snapshot()
     snapshot['multiturn_anchor_valid_bitmap'] = '0x1'
@@ -484,6 +485,25 @@ def test_reconcile_loads_resealed_shifted_snapshot(tmp_path, monkeypatch):
 
     ok, _ = controller.reconcile_multiturn_frame(1)
     assert ok
+    controller.comm.send_command.assert_called_once_with(('trust_multiturn', 1))
+
+
+def test_reconcile_shifts_only_unknown_motors(tmp_path, monkeypatch):
+    controller = _controller(monkeypatch)
+    controller.current_state.multi_turn_unknown_bitmap = 1
+    controller.current_state.servo_angles[:2] = [200, 2600]
+    path = tmp_path / 'snapshot.json'
+    snapshot = _empty_v7_snapshot()
+    snapshot['multiturn_anchor_valid_bitmap'] = '0x3'
+    snapshot['multiturn_anchor_logical_abs'][:2] = [5402, 5402]
+    atomic_write_snapshot(path, snapshot)
+    controller._multiturn_store = MagicMock(path=path)
+    controller._multiturn_recovery_anchors = lambda _state: (
+        3, read_snapshot(path)['multiturn_anchor_logical_abs'], [0] * MOTOR_COUNT, True,
+    )
+    controller.load_calibration_snapshot = MagicMock(return_value=(True, 'loaded'))
+    assert controller.reconcile_multiturn_frame(3)[0]
+    assert read_snapshot(path)['multiturn_anchor_logical_abs'][:2] == [1306, 5402]
     controller.comm.send_command.assert_called_once_with(('trust_multiturn', 1))
 
 
@@ -635,6 +655,7 @@ def test_rebase_invalidates_only_old_scope_and_captures_runtime_before_new_auto(
 
 def test_reconcile_retries_load_without_shifting_twice(tmp_path, monkeypatch):
     controller = _controller(monkeypatch)
+    controller.current_state.multi_turn_unknown_bitmap = 1
     path = tmp_path / 'snapshot.json'
     snapshot = _empty_v7_snapshot()
     snapshot['multiturn_anchor_valid_bitmap'] = '0x1'

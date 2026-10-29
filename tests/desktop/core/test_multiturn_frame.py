@@ -2,7 +2,7 @@
 
 import pytest
 
-from desktop.core.multiturn_frame import shift_snapshot, turn_offsets
+from desktop.core.multiturn_frame import shift_snapshot, turn_offset
 
 
 def _snapshot():
@@ -16,9 +16,20 @@ def _snapshot():
     }
 
 
-def test_turn_offsets_match_the_lost_integer_turns():
-    # 18109 上电后读 1725；-488 读 3607（差一圈）。
-    assert turn_offsets([18109, -488, 41], [1725, 3607, 41]) == [4, -1, 0]
+@pytest.mark.parametrize('anchor,current,sign,offset', [
+    (5402, 200, 1, 1), (5402, 2600, 1, 0),
+    (3172, 1042, 1, 0), (2409, 205, 1, 0),
+    (18109, 1725, 1, 4), (-488, 3607, 1, -1),
+    (-5402, -200, -1, -1), (-5402, -2600, -1, 0),
+    (0, 0, 1, 0), (0, 4095, 1, -1), (0, 1, -1, 0),
+])
+def test_turn_offset_follows_release_direction(anchor, current, sign, offset):
+    assert turn_offset(anchor, current, sign) == offset
+
+
+def test_turn_offset_rejects_unknown_direction():
+    with pytest.raises(ValueError):
+        turn_offset(0, 0, 0)
 
 
 def test_shift_moves_anchors_limits_and_lut_but_not_encoder_raw():

@@ -16,6 +16,10 @@ public:
                        uint32_t nowMs)
     {
         if (!active_) {
+            reason_ = "precheck";
+            startedAt_ = nowMs;
+            sequence_ = 0;
+            turnsCleared_ = false;
             if (!driver || !driver->isOnline(id) ||
                 !driver->isMultiTurnConfigured(id)) return RestoreResult::Failed;
             driver_ = driver;
@@ -25,43 +29,55 @@ public:
             deadline_ = nowMs + 750;
             calibratedAt_ = nowMs;
             turnsCleared_ = false;
+            reason_ = "correction_rejected";
             if (!driver->beginAbsoluteRestore(id)) return RestoreResult::Failed;
+            reason_ = "waiting_correction_feedback";
             active_ = true;
             return RestoreResult::Pending;
         }
         if (driver != driver_ || id != id_ || !driver || !driver->isOnline(id) ||
             driver->getFeedback(id).onlineSessionGeneration != session_) {
             active_ = false;
+            reason_ = "session_changed";
             return RestoreResult::Failed;
         }
         if (!turnsCleared_) {
             if (int32_t(nowMs - calibratedAt_) < 250 ||
                 driver->getFeedback(id).feedbackSequence == sequence_) {
-                if (int32_t(nowMs - deadline_) >= 0) { active_ = false; return RestoreResult::Failed; }
+                if (int32_t(nowMs - deadline_) >= 0) { active_ = false; reason_ = "correction_feedback_timeout"; return RestoreResult::Failed; }
                 return RestoreResult::Pending;
             }
-            if (!driver->clearAbsoluteTurns(id)) { active_ = false; return RestoreResult::Failed; }
+            if (!driver->clearAbsoluteTurns(id)) { active_ = false; reason_ = "reset_rejected"; return RestoreResult::Failed; }
             sequence_ = driver->getFeedback(id).feedbackSequence;
             turnsCleared_ = true;
+            reason_ = "waiting_reset_feedback";
             deadline_ = nowMs + 500;
             return RestoreResult::Pending;
         }
         if (driver->confirmAbsoluteRestore(id, sequence_)) {
             active_ = false;
+            reason_ = "verified";
             return RestoreResult::Success;
         }
         if (int32_t(nowMs - deadline_) >= 0) {
             active_ = false;
+            reason_ = driver->getFeedback(id).feedbackSequence == sequence_
+                ? "reset_feedback_timeout" : "position_outside_tolerance";
             return RestoreResult::Failed;
         }
         return RestoreResult::Pending;
     }
     const char* phase() const { return turnsCleared_ ? "verify_zero" : "calibrate"; }
+    const char* reason() const { return reason_; }
+    uint32_t startedAt() const { return startedAt_; }
+    uint32_t baselineSequence() const { return sequence_; }
     bool active() const { return active_; }
     void cancel() { active_ = false; }
 private:
     FeetechServoDriver* driver_ = nullptr;
     uint32_t calibratedAt_ = 0;
+    uint32_t startedAt_ = 0;
+    const char* reason_ = "not_started";
     bool turnsCleared_ = false;
     uint32_t sequence_ = 0;
     uint32_t session_ = 0;

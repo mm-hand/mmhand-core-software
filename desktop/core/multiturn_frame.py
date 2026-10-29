@@ -17,10 +17,11 @@ ABS_COMMAND_LIMIT = 30715
 _SERVO_ABS_FIELDS = ("startServoAbs", "tightServoAbs", "zeroServoAbs")
 
 
-def turn_offsets(anchors, currents) -> list[int]:
-    """每台电机丢了几圈：k = round((anchor - current) / 4096)。"""
-    return [int(round((int(a) - int(c)) / TURN_COUNTS))
-            for a, c in zip(anchors, currents)]
+def turn_offset(anchor: int, current: int, shorten_sign: int) -> int:
+    """断电后只沿放绳方向移动不足一圈，将标定平移到当前坐标。"""
+    if shorten_sign not in (-1, 1):
+        raise ValueError('invalid tendon direction')
+    return shorten_sign * (shorten_sign * (int(anchor) - int(current)) // TURN_COUNTS)
 
 
 def shift_snapshot(snapshot: dict, offsets: dict[int, int]) -> dict:

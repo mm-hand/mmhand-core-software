@@ -101,6 +101,12 @@ struct ServoReadDiagnostic {
     uint32_t sequence = 0;
 };
 
+struct ServoZeroCommandDiagnostic {
+    int8_t correctionAck = -1, resetAck = -1;
+    uint8_t correctionError = 0, correctionStatus = 0;
+    uint8_t resetError = 0, resetStatus = 0;
+};
+
 /** 一条飞特 UART 总线的唯一驱动实例。 */
 class FeetechServoDriver {
 public:
@@ -485,6 +491,7 @@ public:
     /** 只发送一次位置校正；结果由下一轮正常原生反馈验收。 */
     bool beginAbsoluteRestore(uint8_t id)
     {
+        _zeroDiagnostic = {};
         if (!_serial || id > MAX_SERVO_ID || !_feedback[id].online ||
             !_multiTurnConfigured[id]) return false;
         ServoFeedbackInternal& fb = _feedback[id];
@@ -497,6 +504,9 @@ public:
         fb.restorePending = true;
         // 丢ACK可能发生在写入之后；后续同样等待新的原生反馈，不重复置数。
         const bool acknowledged = _sms.CalibratePosition(id, 0) > 0;
+        _zeroDiagnostic.correctionAck = acknowledged ? 1 : 0;
+        _zeroDiagnostic.correctionError = _sms.getLastError();
+        _zeroDiagnostic.correctionStatus = _sms.getState();
         if (!acknowledged && _sms.getLastError() == 0) {
             // 电机明确返回错误，与应答丢失不同。
             fb.restorePending = false;
@@ -539,6 +549,7 @@ public:
     /** 显式归零会建立新基准，必须先撤销旧未决恢复。 */
     void discardAbsoluteRestore(uint8_t id)
     {
+        _zeroDiagnostic = {};
         if (id <= MAX_SERVO_ID) {
             _feedback[id].restorePending = false;
             _feedback[id].absoluteReliable = false;
@@ -549,8 +560,15 @@ public:
         if (id > MAX_SERVO_ID || !_feedback[id].online || !_torqueDisabled[id]) return false;
         abortSyncRead(false);
         const bool acknowledged = _sms.Reset(id) > 0;
-        return acknowledged || _sms.getLastError() != 0;
+        _zeroDiagnostic.resetAck = acknowledged ? 1 : 0;
+        _zeroDiagnostic.resetError = _sms.getLastError();
+        _zeroDiagnostic.resetStatus = _sms.getState();
+        // A missing reply is ambiguous; an explicit motor error is a rejection.
+        return (acknowledged && _zeroDiagnostic.resetStatus == 0) ||
+               (!acknowledged && _zeroDiagnostic.resetError != 0);
     }
+
+    const ServoZeroCommandDiagnostic& zeroCommandDiagnostic() const { return _zeroDiagnostic; }
 
 private:
     void captureReadDiagnostic(uint8_t id, bool sync, uint8_t expectedBytes,
@@ -679,6 +697,7 @@ private:
     }
 
     SMS_STS _sms; ///< 唯一允许接触的飞特 SDK 实例。
+    ServoZeroCommandDiagnostic _zeroDiagnostic{}; ///< 最近一笔串行归零指令的应答证据。
     HardwareSerial* _serial; ///< 当前驱动绑定的 UART，未 begin 时为空。
     uint8_t _busIndex; ///< 当前 HardwareSerial 对应的物理 BUS 编号。
     int _rxPin; ///< restartTransport() 复用的 RX 引脚。

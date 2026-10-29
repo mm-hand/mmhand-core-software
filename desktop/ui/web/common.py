@@ -15,6 +15,13 @@ from nicegui import ui
 
 FINGERS = [('Thumb', range(16, 21)), ('Index', range(12, 16)), ('Middle', range(8, 12)), ('Ring', range(4, 8)), ('Pinky', range(0, 4))]
 
+def joint_label(joint):
+    name = 'CMC' if joint == 20 else ('MCP-AA', 'MCP-FE', 'PIP', 'DIP')[joint % 4]
+    return f'{name} (J{joint:02d})'
+
+def display_joints(joints):
+    return (20, 16, 17, 18, 19) if 20 in joints else joints
+
 # Shown on maintenance buttons that are only safe while P4 is idle.
 MAINTENANCE_TOOLTIP = 'Stop motion before maintenance.'
 CONTROL_ACTIVE_MODES = ('FEEDBACK', 'DIRECT')

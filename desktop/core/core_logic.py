@@ -36,14 +36,14 @@ from .calibration_snapshot import (
     validate_snapshot_for_load,
 )
 from .comm_layer import LowerComputerComm
-from .multiturn_frame import shift_snapshot, turn_offsets
+from .multiturn_frame import shift_snapshot, turn_offset
 from .data_models import HandModel
 from .device_state_store import (
     DeviceStateStoreError,
     BundleMultiTurnStore,
     canonical_product_fingerprint,
 )
-from .motor_mapping import MOTOR_TO_JOINT_INDEX, motor_abs_after_tendon_action
+from .motor_mapping import MOTOR_TO_JOINT_INDEX, motor_abs_after_tendon_action, motor_tendon_shorten_abs_sign
 from desktop.paths import CALIB_ACTIVE_SNAPSHOT_PATH, CONFIG_DIR
 from .protocol import (
     ServoOnlineCheck,
@@ -994,7 +994,7 @@ class HandController:
                 return False, 'no multi-turn anchors to reconcile'
             with self._multiturn_anchor_capture_lock:
                 blocked_mask = int(self._multiturn_anchor_capture_blocked_mask)
-            usable = (int(motor_mask) & anchors_mask & ~blocked_mask
+            usable = (int(motor_mask) & int(state.multi_turn_unknown_bitmap) & anchors_mask & ~blocked_mask
                       & int(state.servo_online_bitmap)
                       & int(state.servo_route_controllable_bitmap)
                       & ~int(state.servo_route_conflict_bitmap)
@@ -1005,9 +1005,12 @@ class HandController:
             device_id = self.servo_abs_zero_device_id(state)
             currents = [int(value) for value in state.servo_angles]
             offsets = {}
+            decisions = []
             for motor in range(MOTOR_COUNT):
                 if usable & (1 << motor):
-                    turns = turn_offsets([anchors[motor]], [currents[motor]])[0]
+                    sign = motor_tendon_shorten_abs_sign(motor)
+                    turns = turn_offset(anchors[motor], currents[motor], sign)
+                    decisions.append(f'M{motor:02d} anchor={anchors[motor]} current={currents[motor]} sign={sign:+d} k={turns:+d}')
                     if turns:
                         offsets[motor] = turns
             if offsets:
@@ -1018,8 +1021,7 @@ class HandController:
                 shifted = atomic_write_snapshot(self._multiturn_store.path, shifted)
                 self._multiturn_store_payload = None
                 self._multiturn_store_identity = None
-                log_session('MULTITURN', 'reconcile frame ' + ', '.join(
-                    f'M{motor:02d} k={turns:+d}' for motor, turns in sorted(offsets.items())))
+            log_session('MULTITURN', 'reconcile frame ' + ', '.join(decisions))
 
             snapshot = read_snapshot(self._multiturn_store.path)
             ok, message = self.load_calibration_snapshot(snapshot)
@@ -1137,7 +1139,7 @@ class HandController:
                     f"{self._format_motor_mask(missing_anchor)}",
                 )
             if not reconciled:
-                ok, message = self.reconcile_multiturn_frame(target_mask)
+                ok, message = self.reconcile_multiturn_frame(unknown_mask)
                 reconciled = True
                 if not ok:
                     return False, message

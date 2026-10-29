@@ -418,11 +418,15 @@ static void halScenario(const std::string& name) {
     if(name=="ack_missing")device.fault=Fault::AckMissing;
     if(name=="ack_status")device.fault=Fault::AckStatus;
     if(name=="torque_missing")device.fault=Fault::TorqueMissing;
+    if(name=="reset_ack_missing")device.fault=Fault::ResetAckMissing;
+    if(name=="reset_ack_status")device.fault=Fault::ResetAckStatus;
     auto first=writer.step(&driver,1,1000);
     if(name=="ack_status" || name=="torque_missing") {
         require(first==Result::Failed,"rejected write accepted");return;
     }
     require(first==Result::Pending && !driver.isAbsoluteReliable(1),"cached sample trusted");
+    require(driver.zeroCommandDiagnostic().correctionAck == (name=="ack_missing" ? 0 : 1), "correction ACK evidence lost");
+    require(driver.zeroCommandDiagnostic().resetAck == -1, "reset reported before it was sent");
     require(device.corrections==1 && device.resets==0,"wrong command order");
     if(name=="cancel") {writer.cancel(); require(!writer.active(),"cancel failed");return;}
     if(name=="stale") {
@@ -430,7 +434,15 @@ static void halScenario(const std::string& name) {
     }
     require(driver.probeFeedback(1),"post-calibration feedback missing");
     require(writer.step(&driver,1,1249)==Result::Pending && device.resets==0,"reset sent before settle");
-    require(writer.step(&driver,1,1250)==Result::Pending && device.resets==1,"turn reset missing");
+    const auto resetResult = writer.step(&driver,1,1250);
+    require(device.resets==1, "turn reset missing");
+    if(name=="reset_ack_status") {
+        require(resetResult==Result::Failed && driver.zeroCommandDiagnostic().resetStatus==4, "reset error accepted");
+        require(std::string(writer.reason())=="reset_rejected", "reset rejection reason missing");
+        return;
+    }
+    require(resetResult==Result::Pending, "reset did not wait for verification");
+    require(driver.zeroCommandDiagnostic().resetAck == (name=="reset_ack_missing" ? 0 : 1), "reset ACK evidence missing");
     require(writer.step(&driver,1,1251)==Result::Pending,"pre-reset sample accepted");
     if(name=="read_missing")device.fault=Fault::ReadMissing;
     if(name=="read_mismatch")device.fault=Fault::ReadMismatch;
@@ -438,6 +450,7 @@ static void halScenario(const std::string& name) {
     driver.probeFeedback(1);
     const bool bad=name=="read_missing" || name=="read_mismatch" || name=="read_status";
     require(writer.step(&driver,1,1750)==(bad?Result::Failed:Result::Success),"full-coordinate verification incorrect");
+    require(std::string(writer.reason()) == (name=="read_mismatch" ? "position_outside_tolerance" : bad ? "reset_feedback_timeout" : "verified"), "verification reason incorrect");
     require(driver.isAbsoluteReliable(1)==!bad,"incorrect coordinate trust");
     require(device.corrections==1 && device.resets==1,"commands repeated");
     if(name=="disconnect") {
@@ -598,6 +611,7 @@ def native_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dict
 
 
 SCENARIOS = (
+    "reset_ack_missing", "reset_ack_status",
     "sdk_example", "sdk_zero", "sdk_negative", "sdk_signed_limits",
     "sdk_minimum_invalid", "sdk_invalid_id", "sdk_broadcast", "sdk_level_zero",
     "sdk_level_zero_missing", "sdk_short_tx", "sdk_legacy_recal", "sdk_ack_missing",

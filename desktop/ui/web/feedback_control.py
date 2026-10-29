@@ -8,7 +8,7 @@
 禁止依赖：禁止直接操作协议、串口和控制器。
 """
 from nicegui import ui
-from .common import FINGERS, finger_cards, selection, target_editor, label, show, quality, control_note, select_all_and_request
+from .common import FINGERS, finger_cards, selection, target_editor, label, show, quality, control_note, select_all_and_request, joint_label, display_joints
 
 def build(hand, act):
     drafts, refreshers, syncing = {}, [], [False]
@@ -27,11 +27,11 @@ def build(hand, act):
         for name, indices in FINGERS:
             with ui.card().classes('w-full'):
                 refreshers.append(selection(hand, 'selected_joints', indices, name))
-                for j in indices:
+                for j in display_joints(indices):
                     row = initial['joints'][j]
                     with ui.column().classes('joint-row w-full gap-1'):
                         with ui.row().classes('items-center'):
-                            refreshers.append(selection(hand, 'selected_joints', [j], f'J{j:02d}'))
+                            refreshers.append(selection(hand, 'selected_joints', [j], joint_label(j)))
                             control = quality()
                             feedback = label()
                         drafts[j], number, slider = target_editor(

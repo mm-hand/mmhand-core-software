@@ -1,5 +1,7 @@
 # Repository agent instructions
 
+Keep code simple and concise; avoid unnecessary abstractions and duplication.
+
 ## ESP32 JTAG debugging (P4/S3)
 
 The Arduino build produces an ELF with DWARF debug symbols. The debug stack is

@@ -51,6 +51,22 @@ def test_every_native_page_builds_and_refreshes_unknown_feedback(page, name):
     confirm.assert_not_called()
     assert client.elements
 
+@pytest.mark.parametrize('name', ['Joint Calibration', 'Motor Calibration', 'Feedback Control', 'Replay'])
+def test_finger_joint_labels_and_order(page, name):
+    hand, client = page
+    builders = {
+        'Joint Calibration': lambda: joint_calibration.build(hand, Mock(), Mock(), Mock()),
+        'Motor Calibration': lambda: motor_calibration.build(hand, Mock(), Mock()),
+        'Feedback Control': lambda: feedback_control.build(hand, Mock()),
+        'Replay': lambda: replay.build(hand, Mock()),
+    }
+    builders[name]()
+    labels = [element.text for element in client.elements.values() if isinstance(element, ui.checkbox)]
+    expected = ['CMC (J20)', 'MCP-AA (J16)', 'MCP-FE (J17)', 'PIP (J18)', 'DIP (J19)']
+    expected += [f'{kind} (J{joint:02d})' for base in (12, 8, 4, 0)
+                 for joint, kind in zip(range(base, base + 4), ('MCP-AA', 'MCP-FE', 'PIP', 'DIP'))]
+    assert [label for label in labels if label in expected] == expected
+
 def test_hand_models_follow_feedback_and_control_state(page):
     hand, client = page
     refresh = hand_view.build(hand)
@@ -174,7 +190,7 @@ def slider_controls(page, direct):
     act = Mock(side_effect=lambda callback: callback())
     refresh = direct_control.build(hand, act, Mock()) if direct else feedback_control.build(hand, act)
     snapshot = hand.application_snapshot()
-    index = next(row['motor'] for row in snapshot['motors'] if row['joint'] in FINGERS[0][1]) if direct else FINGERS[0][1][0]
+    index = next(row['motor'] for row in snapshot['motors'] if row['joint'] in FINGERS[0][1]) if direct else 20
     if direct:
         snapshot['motors'][index].update(abs=125, limits=(-30719, 30719), online=True)
     refresh(snapshot)

@@ -200,7 +200,8 @@ def render_mapping(manifest: dict, limits: list[tuple[int, float, float]],
         "source_urdf": "desktop/resources/hku_hand_v2_urdf/urdf/hand.urdf",
         "source_commit": source_commit,
         "source_urdf_path": source_urdf_path,
-        "motors": manifest["motors"],
+        "motors": [{key: value for key, value in motor.items() if key != "tendon_shorten_abs_sign"}
+                   for motor in manifest["motors"]],
         "joints": joints,
     }
     return json.dumps(data, ensure_ascii=False, indent=2) + "\n"

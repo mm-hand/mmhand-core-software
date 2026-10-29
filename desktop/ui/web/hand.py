@@ -39,13 +39,13 @@ def build(hand):
     for j in joints:
         by_parent.setdefault(j.find('parent').attrib['link'], []).append(j)
     with ui.row().classes('page-toolbar'):
-        ui.label('Green: target · Red: measured').classes('text-sm')
+        ui.label('Green: target · Gray: measured').classes('text-sm')
         reset = ui.button('Reset view')
     status = ui.label('Waiting for feedback')
     camera = ui.scene.perspective_camera(fov=42, near=0.01)
     for key, value in CAMERA.items():
         setattr(camera, key, value)
-    scene = ui.scene(width=800, height=360, grid=False, camera=camera).classes('w-full')
+    scene = ui.scene(width=800, height=360, grid=False, camera=camera, background_color='#ffffff').classes('w-full')
     shown = False
     reset.on_click(lambda: scene.move_camera(**CAMERA))
     poses = []
@@ -78,7 +78,7 @@ def build(hand):
         if poses:
             return
         with scene:
-            for color, opacity in (('#20b45a', 0.45), ('#e53935', 0.85)):
+            for color, opacity in (('#20b45a', 0.45), ('#808080', 0.85)):
                 motors = []
                 with scene.group() as model:
                     for root in roots: add_link(root, motors, color, opacity)
