@@ -184,39 +184,98 @@ int main() {
         assert(!collision.armed && !collision.holdActive); // a stationary joint never arms itself
     }
 
-    // Adaptive Kp: a persistent lag plus a clean hold raises only that joint.
+    // Adaptive Kp: fresh, sustained lag raises only the moving joint.
     p.values[AdaptiveKpEnabled] = 1.0f;
     p.values[AdaptiveKpLagLimitS] = 0.12f;
     p.values[AdaptiveKpOvershootDeg] = 2.0f;
-    JointFeedbackController adaptive;
     FeedbackEstimate afb; afb.ready = afb.fresh = true; afb.sampleDt = 0.01f;
     ServoAngleData_t aservo; aservo.onlineStatus[0] = 1; aservo.onlineStatus[1] = 1;
     ServoTelemetryData_t atel;
-    for (uint32_t t = 1000; t <= 61000; t += 10) {
-        const float atarget = t < 1500 ? (t - 1000) * 0.02f : 10.0f;
-        afb.fast = atarget - 3.0f;
+    auto sample = [&](JointFeedbackController& c, uint32_t t, float target, float error) {
+        afb.fast = target - error;
         afb.slow = afb.fast;
-        aservo.servoAngles[0] = 1000 + (int32_t)(afb.fast * 10.0f);
-        adaptive.compute(0, atarget, afb, t, aservo, atel, lut, 3, p, ramp);
+        return c.compute(0, target, afb, t, aservo, atel, lut, 3, p, ramp);
+    };
+    const float errors[] = {-3.0f, 1.0f, 2.0f};
+    for (float error : errors) {
+        JointFeedbackController c;
+        uint32_t changed = 0;
+        float previous = 1.0f;
+        for (uint32_t t = 1000; t <= 18000; t += 10) {
+            sample(c, t, fminf((t - 1000) * 0.01f, 140.0f), error);
+            const float scale = c.kpScaleOf(0);
+            if (t < 1500) assert(scale == 1.0f); // needs 500 ms of evidence
+            if (scale != previous) {
+                assert(!changed || t - changed >= 2000);
+                changed = t;
+                previous = scale;
+            }
+            if (t > 15500) assert(changed <= 15000); // no growth at rest
+        }
+        assert(fabsf(c.kpScaleOf(0) - (error == 2.0f ? 1.3f : 1.0f)) < 1e-6f);
+        assert(c.kpScaleOf(1) == 1.0f);
     }
-    assert(adaptive.kpScaleOf(0) > 1.25f);
-    assert(fabsf(adaptive.kpScaleOf(1) - 1.0f) < 1e-6f); // no cross-joint coupling
 
-    // A completed move/hold with 3 deg overshoot lowers that joint once.
-    JointFeedbackController overshoot;
-    FeedbackEstimate ofb; ofb.ready = ofb.fresh = true; ofb.sampleDt = 0.01f;
-    for (uint32_t t = 1000; t <= 3200; t += 10) {
-        const float target = t < 1500 ? (t - 1000) * 0.02f : 10.0f;
-        ofb.fast = t < 1650 ? target : 13.0f;
-        ofb.slow = ofb.fast;
-        aservo.servoAngles[0] = 1000 + (int32_t)(ofb.fast * 10.0f);
-        overshoot.compute(0, target, ofb, t, aservo, atel, lut, 3, p, ramp);
+    // Small noise, slow crossings and a one-way overshoot must not lower Kp.
+    for (int mode = 0; mode < 3; ++mode) {
+        JointFeedbackController c;
+        for (uint32_t t = 1000; t <= 6000; t += 10) {
+            const float error = mode == 0 ? (t / 250 % 2 ? 1.9f : -1.9f) :
+                mode == 1 ? ((t - 1000) / 1200 % 2 ? 3.0f : -3.0f) : (t < 1500 ? 3.0f : -3.0f);
+            sample(c, t, 10.0f, error);
+        }
+        assert(c.kpScaleOf(0) == 1.0f);
     }
-    assert(fabsf(overshoot.kpScaleOf(0) - 0.9f) < 0.01f);
 
-    // Revision changes reset the learned scale; disabling falls back to base Kp.
+    // Static-target oscillation still lowers Kp at a boundary, including clock wrap.
+    JointFeedbackController adaptive;
+    aservo.servoAngles[0] = 20000;
+    uint32_t decreased = 0;
+    for (uint32_t elapsed = 0; elapsed <= 20000; elapsed += 10) {
+        const uint32_t t = 0xfffff000U + elapsed;
+        const float previous = adaptive.kpScaleOf(0);
+        assert(sample(adaptive, t, 10, elapsed / 250 % 2 ? -3 : 3).boundaryClamped);
+        if (adaptive.kpScaleOf(0) != previous) {
+            assert(!decreased || elapsed - decreased >= 1000);
+            decreased = elapsed;
+        }
+    }
+    assert(fabsf(adaptive.kpScaleOf(0) - 0.3f) < 1e-6f);
+    aservo.servoAngles[0] = 0;
+
+    // Gaps, suspension, invalid data and disabling discard unfinished cycles.
+    for (int mode = 0; mode < 5; ++mode) {
+        JointFeedbackController c;
+        for (uint32_t t = 1000; t <= 1200; t += 10) sample(c, t, 10, t < 1100 ? 3 : -3);
+        uint32_t resume = 1210;
+        if (mode == 0) c.suspend(0, 1200);
+        if (mode == 1) {
+            afb.fresh = false;
+            for (uint32_t t = 1210; t <= 1400; t += 10) sample(c, t, 10, -3);
+            afb.fresh = true;
+            resume = 1410;
+        }
+        if (mode == 2) { afb.ready = false; sample(c, 1210, 10, -3); afb.ready = true; resume = 1220; }
+        if (mode == 3) {
+            p.values[AdaptiveKpEnabled] = 0;
+            sample(c, 1210, 10, -3);
+            p.values[AdaptiveKpEnabled] = 1;
+            resume = 1220;
+        }
+        if (mode == 4) resume = 1410;
+        for (uint32_t t = resume; t < resume + 100; t += 10) sample(c, t, 10, 3);
+        assert(c.kpScaleOf(0) == 1.0f);
+        for (uint32_t t = resume + 100; t < resume + 400; t += 10) sample(c, t, 10, t < resume + 300 ? -3 : 3);
+        assert(fabsf(c.kpScaleOf(0) - 0.9f) < 1e-6f);
+        for (uint32_t t = resume + 400; t < resume + 2300; t += 10) sample(c, t, 10 + (t - resume - 400) * 0.01f, 1.5f);
+        assert(fabsf(c.kpScaleOf(0) - 0.9f) < 1e-6f); // 2 s cooldown after lowering
+        for (uint32_t t = resume + 2300; t <= resume + 2400; t += 10) sample(c, t, 10 + (t - resume - 400) * 0.01f, 1.5f);
+        assert(c.kpScaleOf(0) > 0.9f);
+    }
+
+    // A revision resets the multiplier; disabling uses the configured base Kp.
     p.revision++;
-    adaptive.compute(0, 10.0f, afb, 61010, aservo, atel, lut, 3, p, ramp);
+    sample(adaptive, 30000, 10, 0);
     assert(fabsf(adaptive.kpScaleOf(0) - 1.0f) < 1e-6f);
     p.values[AdaptiveKpEnabled] = 0.0f;
     assert(fabsf(adaptive.effectiveKpOf(0, p) - p[JointKpAa]) < 1e-6f);

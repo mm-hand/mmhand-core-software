@@ -68,7 +68,8 @@ def build(hand, act):
                             adaptive_enable[0] = ui.button('Enable Adaptive Kp Control', on_click=lambda: toggle_adaptive())
                             adaptive_enable[0].set_enabled(False)
                             continue
-                        controls[(group, name)] = ui.number(name.upper() if group.startswith('joint_') else name.replace('_', ' '), min=lower, max=upper,
+                        label = 'oscillation threshold deg' if (group, name) == ('adaptive_kp', 'overshoot_deg') else name.replace('_', ' ')
+                        controls[(group, name)] = ui.number(name.upper() if group.startswith('joint_') else label, min=lower, max=upper,
                                                            step=1 if isinstance(lower, int) and isinstance(upper, int) else 0.01).props('dense outlined').classes('w-44')
                 if group == 'adaptive_kp':
                     adaptive_status[0] = ui.label('Adaptive: waiting for P4').classes('text-sm')

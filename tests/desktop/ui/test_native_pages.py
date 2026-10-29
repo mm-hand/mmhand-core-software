@@ -106,6 +106,8 @@ def test_adaptive_kp_is_one_expansion_after_kd_with_one_enable_button(page):
     expansions = [e.text for e in client.elements.values() if isinstance(e, ui.expansion)]
     assert expansions[expansions.index('Kd config') + 1] == 'Adaptive Kp (runtime multiplier)'
     assert sum('Adaptive' in text for text in expansions) == 1
+    assert any(e.label == 'oscillation threshold deg'
+               for e in client.elements.values() if isinstance(e, ui.number))
     adaptive = button(client, 'Enable Adaptive Kp Control')
     snapshot['adaptive_kp'].update(valid=False)
     refresh(snapshot)

@@ -58,18 +58,18 @@ private:
         float lastFast = 0;
         float lastDerivativeTarget = 0;
         float derivativeFiltered = 0;
-        // Adaptive Kp: slow closed-loop evidence, never a fast control loop.
-        float lagScore = 0, overScore = 0;
-        uint32_t lastLagMs = 0, lastEventMs = 0, noIncreaseUntilMs = 0;
-        bool lagFresh = false, overFresh = false;
-        float targetVelocity = 0, stableTarget = 0, lastHoldTarget = 0;
-        float holdTarget = 0, holdPeak = 0, holdAmplitude = 0;
-        uint32_t lastTargetMs = 0, lastTargetChangeMs = 0, holdStartMs = 0;
-        int8_t moveDir = 0;
-        bool holdActive = false, suspended = false, boundaryClamped = false;
+        float targetVelocity = 0;
+        uint32_t lastTargetMs = 0, kpChangeMs = 0;
+        bool kpChanged = false, kpDecreased = false;
+        struct {
+            uint32_t feedbackMs = 0, lagSince = 0, crossingMs[2] = {};
+            uint8_t crossings = 0;
+            int8_t side = 0;
+            bool lagging = false;
+        } adaptive;
+        bool suspended = false, boundaryClamped = false;
     } states[ENCODER_TOTAL_NUM];
     float kpScale[ENCODER_TOTAL_NUM];
     uint32_t scaleRevision = 0;
-    uint32_t lastAdaptiveCheckMs = 0;
 };
 }

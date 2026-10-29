@@ -65,16 +65,14 @@ def test_rejected_existing_openocd_is_never_cleaned_up(monkeypatch, tmp_path):
         module.main()
 
 
-def test_windows_launcher_child_cannot_keep_timeout_cleanup_blocked():
-    if sys.platform != 'win32':
-        pytest.skip('Windows GDB launcher process-tree behavior')
-    path = Path(__file__).resolve().parents[2] / 'tools/debug/gdb_batch.py'
-    spec = importlib.util.spec_from_file_location('mmhand_gdb_batch', path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    program = ('import subprocess,sys,time; '
-               'subprocess.Popen([sys.executable,"-c","import time; time.sleep(15)"]); '
-               'time.sleep(15)')
+def test_launcher_cannot_keep_timeout_cleanup_blocked():
+    module = load_debug_module()
+    program = 'import time; time.sleep(15)'
+    if sys.platform == 'win32':
+        # Only the Windows GDB launcher creates a second process.
+        program = ('import subprocess,sys,time; '
+                   'subprocess.Popen([sys.executable,"-c","import time; time.sleep(15)"]); '
+                   'time.sleep(15)')
     start = time.monotonic()
     with pytest.raises(subprocess.TimeoutExpired):
         module.bounded_gdb([sys.executable, '-c', program], .5)

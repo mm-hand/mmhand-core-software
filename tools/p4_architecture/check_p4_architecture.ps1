@@ -438,11 +438,11 @@ if (-not (Select-String -LiteralPath $desktopSafetyParser `
 Push-Location $repoRoot
 try {
     foreach ($check in @(
-        @("tools\generate_upper_protocol.py", "Upper protocol"),
-        @("tools\generate_p4_safety_catalog.py", "P4 safety catalog")
+        @("tools/generate_upper_protocol.py", "Upper protocol"),
+        @("tools/generate_p4_safety_catalog.py", "P4 safety catalog")
     )) {
         $generatorArgs = @("--check")
-        if ($FirmwareOnly -and $check[0] -ne "tools\generate_upper_protocol.py") {
+        if ($FirmwareOnly -and $check[0] -ne "tools/generate_upper_protocol.py") {
             $generatorArgs += "--firmware-only"
         }
         & python -B $check[0] @generatorArgs
@@ -454,7 +454,7 @@ try {
     if ($LASTEXITCODE -ne 0) {
         Add-Failure "Robot model generated files are stale."
     }
-    & python -B "tools\p4_architecture\check_safety_rule_closure.py"
+    & python -B "tools/p4_architecture/check_safety_rule_closure.py"
     if ($LASTEXITCODE -ne 0) {
         Add-Failure "P4 safety rules have not completed registration/execution/event/recovery closure."
     }

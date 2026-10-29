@@ -120,15 +120,13 @@ void JointFeedbackController::suspend(uint8_t joint, uint32_t now) {
     state.derivativeFiltered = 0;
     // Cancels any half-finished adaptive event; adaptation resumes on fresh data only.
     state.suspended = true;
-    state.holdActive = false;
-    state.moveDir = 0;
+    state.adaptive = {};
     state.targetVelocity = 0;
 }
 void JointFeedbackController::resetAll() {
     for (auto& state : states) state = {};
     for (auto& scale : kpScale) scale = 1.0f;
     scaleRevision = 0;
-    lastAdaptiveCheckMs = 0;
 }
 
 JointControlResult JointFeedbackController::compute(uint8_t joint, float target, const FeedbackEstimate& fb,
@@ -136,7 +134,11 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
     const JointCalibrationResult& lut, uint32_t motorMask, const Parameters& p,
     const RampParameters& ramp) {
     JointControlResult out;
-    if (joint >= ENCODER_TOTAL_NUM || !p.configured || !fb.ready || !isfinite(target)) return out;
+    if (joint >= ENCODER_TOTAL_NUM) return out;
+    if (!p.configured || !fb.ready || !isfinite(target) || !isfinite(fb.fast)) {
+        states[joint].adaptive = {};
+        return out;
+    }
     const uint8_t count = getJointActuatorCount(joint);
     if (!count || count > MAX_JOINT_ACTUATORS || count > TENDON_LUT_ACTUATOR_COUNT) return out;
     float slope[MAX_JOINT_ACTUATORS] = {}, model[MAX_JOINT_ACTUATORS] = {};
@@ -167,16 +169,12 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
     if (p.revision != scaleRevision) {
         for (auto& scale : kpScale) scale = 1.0f;
         scaleRevision = p.revision;
-        lastAdaptiveCheckMs = 0;
     }
     if (!state.initialized || state.revision != p.revision) {
         state = {};
         state.initialized = true; state.revision = p.revision;
         state.lastTarget = target;
         state.lastTargetMs = now;
-        state.stableTarget = target;
-        state.lastTargetChangeMs = now;
-        state.lastHoldTarget = target;
     }
     const bool suspendedThisCycle = state.suspended;
     if (suspendedThisCycle) {
@@ -184,17 +182,15 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
         state.lastTarget = target;
         state.lastTargetMs = now;
         state.targetVelocity = 0;
-        state.stableTarget = target;
-        state.lastTargetChangeMs = now;
-        state.lastHoldTarget = target;
-        state.holdActive = false;
-        state.moveDir = 0;
+        state.adaptive = {};
         state.suspended = false;
     }
     const uint32_t targetDtMs = now - state.lastTargetMs;
     float rawTargetVelocity = 0.0f;
     if (targetDtMs > 0 && targetDtMs <= 100) {
         rawTargetVelocity = (target - state.lastTarget) * 1000.0f / (float)targetDtMs;
+    } else {
+        state.targetVelocity = 0;
     }
     const float velocityAlpha = 1.0f - expf(-(float)(targetDtMs > 100 ? 100 : targetDtMs) * 0.001f / 0.1f);
     state.targetVelocity += velocityAlpha * (rawTargetVelocity - state.targetVelocity);
@@ -348,96 +344,54 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
 
 void JointFeedbackController::updateAdaptiveKp(uint8_t joint, float target, const FeedbackEstimate& fb,
                                                uint32_t now, const Parameters& p) {
-    if (joint >= ENCODER_TOTAL_NUM) return;
     auto& state = states[joint];
-    auto finalizeHold = [&]() {
-        if (state.holdAmplitude >= 2.0f) {
-            const float peak = state.holdPeak;
-            if (!state.overFresh || now - state.lastEventMs > 30000) {
-                state.overScore = peak;
-            } else {
-                const float dt = (float)(now - state.lastEventMs) * 0.001f;
-                const float alpha = 1.0f - expf(-dt / 10.0f);
-                state.overScore = (1.0f - alpha) * state.overScore + alpha * peak;
-            }
-            state.overFresh = true;
-            state.lastEventMs = now;
-            if (peak > p[AdaptiveKpOvershootDeg]) {
-                kpScale[joint] = fmaxf(0.3f, kpScale[joint] * 0.9f);
-                state.noIncreaseUntilMs = now + 2000u;
-            }
-        }
-        state.holdActive = false;
-        state.lastHoldTarget = state.holdTarget;
-        state.moveDir = 0;
-    };
+    auto& evidence = state.adaptive;
+    if (!(p[AdaptiveKpEnabled] > 0.5f) || now - evidence.feedbackMs > 100) {
+        evidence = {};
+    }
+    if (!(p[AdaptiveKpEnabled] > 0.5f) || !fb.fresh || !(fb.sampleDt > 0)) return;
+    evidence.feedbackMs = now;
 
-    if (!(p[AdaptiveKpEnabled] > 0.5f)) {
-        state.holdActive = false;
-        state.moveDir = 0;
+    const float error = target - fb.fast;
+    // Keep the existing wire parameter; it now sets the oscillation threshold.
+    const float threshold = p[AdaptiveKpOvershootDeg];
+    const int8_t side = error > threshold ? 1 : error < -threshold ? -1 : 0;
+    bool oscillating = false;
+    if (side && side != evidence.side) {
+        oscillating = evidence.crossings == 2 && now - evidence.crossingMs[0] <= 2000;
+        evidence.crossingMs[0] = evidence.crossingMs[1];
+        evidence.crossingMs[1] = now;
+        if (evidence.crossings < 2) ++evidence.crossings;
+        evidence.side = side;
+    }
+    if (oscillating) {
+        evidence.lagging = false;
+        if (!state.kpChanged || !state.kpDecreased || now - state.kpChangeMs >= 1000) {
+            kpScale[joint] = fmaxf(0.3f, kpScale[joint] * 0.9f);
+            state.kpChanged = state.kpDecreased = true;
+            state.kpChangeMs = now;
+        }
         return;
     }
 
-    const float targetDelta = target - state.stableTarget;
-    if (fabsf(targetDelta) >= 0.05f) {
-        if (state.holdActive) finalizeHold();
-        state.moveDir = sign(targetDelta);
-        state.stableTarget = target;
-        state.lastTargetChangeMs = now;
+    const bool lagging = state.phase == Tracking && state.candidate == 0 &&
+        !state.saturated && !state.boundaryClamped && fabsf(state.targetVelocity) >= 3.0f &&
+        error / state.targetVelocity > p[AdaptiveKpLagLimitS];
+    if (!lagging) {
+        evidence.lagging = false;
+        return;
     }
-
-    if (!state.holdActive && state.moveDir != 0 && now - state.lastTargetChangeMs >= 150) {
-        state.holdActive = true;
-        state.holdStartMs = now;
-        state.holdTarget = target;
-        state.holdPeak = fmaxf(0.0f, state.moveDir * (fb.fast - target));
-        state.holdAmplitude = fabsf(target - state.lastHoldTarget);
+    if (!evidence.lagging) {
+        evidence.lagging = true;
+        evidence.lagSince = now;
     }
-
-    if (state.holdActive) {
-        if (state.phase != Tracking || state.candidate != 0 ||
-            state.saturated || state.boundaryClamped) {
-            state.holdActive = false;
-            state.lastHoldTarget = target;
-            state.moveDir = 0;
-        } else {
-            state.holdPeak = fmaxf(state.holdPeak, state.moveDir * (fb.fast - state.holdTarget));
-            if (now - state.holdStartMs >= 800) finalizeHold();
-        }
-    }
-
-    // Lag learns only while a moving target is actually being tracked.
-    if (fb.fresh && state.phase == Tracking && state.candidate == 0 &&
-        !state.saturated && !state.boundaryClamped &&
-        fabsf(state.targetVelocity) >= 3.0f) {
-        const float error = target - fb.fast;
-        if (sign(error) == sign(state.targetVelocity)) {
-            const float lag = clip(error / state.targetVelocity, 0.0f, 0.5f);
-            if (!state.lagFresh || now - state.lastLagMs > 30000) {
-                state.lagScore = lag;
-            } else {
-                const float dt = (float)(now - state.lastLagMs) * 0.001f;
-                const float alpha = 1.0f - expf(-dt / 10.0f);
-                state.lagScore = (1.0f - alpha) * state.lagScore + alpha * lag;
-            }
-            state.lagFresh = true;
-            state.lastLagMs = now;
-        }
-    }
-
-    if (now - lastAdaptiveCheckMs < 2000) return;
-    lastAdaptiveCheckMs = now;
-    for (uint8_t j = 0; j < ENCODER_TOTAL_NUM; ++j) {
-        auto& candidate = states[j];
-        if (!candidate.lagFresh || !candidate.overFresh) continue;
-        if (now - candidate.lastLagMs > 30000 || now - candidate.lastEventMs > 30000) continue;
-        if (candidate.phase != Tracking || candidate.candidate != 0 ||
-            candidate.saturated || candidate.boundaryClamped) continue;
-        if (now < candidate.noIncreaseUntilMs) continue;
-        if (candidate.lagScore > p[AdaptiveKpLagLimitS] &&
-            candidate.overScore <= p[AdaptiveKpOvershootDeg]) {
-            kpScale[j] = fminf(1.3f, kpScale[j] * 1.05f);
-        }
+    if (now - evidence.lagSince >= 500 &&
+        (!state.kpChanged || now - state.kpChangeMs >= 2000)) {
+        kpScale[joint] = fminf(1.3f, kpScale[joint] * 1.05f);
+        state.kpChanged = true;
+        state.kpDecreased = false;
+        state.kpChangeMs = now;
+        evidence.lagging = false;
     }
 }
 }
