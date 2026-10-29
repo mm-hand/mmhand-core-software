@@ -16,7 +16,7 @@ from nicegui import ui
 FINGERS = [('Thumb', range(16, 21)), ('Index', range(12, 16)), ('Middle', range(8, 12)), ('Ring', range(4, 8)), ('Pinky', range(0, 4))]
 
 # Shown on maintenance buttons that are only safe while P4 is idle.
-MAINTENANCE_TOOLTIP = 'Press STOP first; Clear Faults before re-enable.'
+MAINTENANCE_TOOLTIP = 'Stop motion before maintenance.'
 CONTROL_ACTIVE_MODES = ('FEEDBACK', 'DIRECT')
 
 def show(value, suffix=''):
@@ -43,7 +43,7 @@ def control_active(snapshot):
             or any(row.get('direct_control_status') == 'ENABLED' for row in snapshot.get('motors', ())))
 
 def stop_latched(snapshot):
-    """True when the last STOP is still latched and Clear Faults has not run."""
+    """True when the last STOP is still latched; the next operation resets it."""
     value = snapshot.get('stop_latched')
     if value is not None:
         return bool(value)
@@ -53,7 +53,7 @@ def maintenance_allowed(snapshot):
     """Maintenance actions need fresh P4 status, no operation, and an idle controller."""
     if snapshot.get('communication') != 'Online' or snapshot.get('busy'):
         return False
-    if stop_latched(snapshot) or control_active(snapshot):
+    if control_active(snapshot):
         return False
     mode = snapshot.get('control_mode')
     if mode is None:
@@ -63,7 +63,7 @@ def maintenance_allowed(snapshot):
     return str(mode).upper() == 'IDLE'
 
 def maintenance_button(button):
-    """Attach the shared STOP/Clear Faults hint and return the button."""
+    """Attach the shared maintenance hint and return the button."""
     with button:
         ui.tooltip(MAINTENANCE_TOOLTIP)
     return button
@@ -71,7 +71,7 @@ def maintenance_button(button):
 def control_note():
     """Explain tab versus handover semantics on both control pages."""
     return ui.label('Tabs only change the view; ENABLE Selected requests a P4 handover to this page. '
-                    'After STOP latches, Clear Faults must be pressed before enabling again.').classes(
+                    'ENABLE prepares the device after STOP.').classes(
                         'text-sm text-slate-600 whitespace-pre-wrap')
 
 def json_status(row):
@@ -118,7 +118,7 @@ def quality():
         container.clear()
         with container:
             for value in values:
-                color = 'primary' if value == 'CALIBRATING' else 'positive' if value in ('READY', 'ENABLED') else 'negative' if value in ('FAILED', 'COLLISION DETECTED', 'FAULT') else 'warning' if value in ('OFFSET', 'WEAK RETURN', 'HIGH FRICTION') else 'grey'
+                color = 'primary' if value == 'CALIBRATING' else 'positive' if value in ('READY', 'ENABLED') else 'negative' if value in ('FAILED', 'COLLISION DETECTED', 'FAULT') else 'warning' if value in ('OFFSET', 'WEAK RETURN', 'HIGH FRICTION', 'JOINT BEYOND WORKSPACE', 'MOTOR BEYOND WORKSPACE') else 'grey'
                 with ui.badge(quality_name(value), color=color):
                     if tooltip:
                         ui.tooltip(tooltip)

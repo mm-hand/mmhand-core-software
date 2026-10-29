@@ -1,4 +1,4 @@
-"""finish.py - 上位机执行旧标定 Rope Init 之后的双腱 LUT 零度收尾。
+"""finish.py - 上位机执行旧标定 Pull Joint into Workspace 之后的双腱 LUT 零度收尾。
 
 职责：使用本轮宿主结果计算零度目标，通过普通直控完成原收尾动作。
 线程：由校准工作线程串行调用，不创建线程。
@@ -70,7 +70,7 @@ def dual_lut_targets(result, motors, angle):
 
 
 def finish_dual_zero(io, completed_joint_mask):
-    """普通 Rope Init 成功后，按旧关节顺序发送一次 LUT(0°) 直控。"""
+    """普通 Pull Joint into Workspace 成功后，按旧关节顺序发送一次 LUT(0°) 直控。"""
     selected = int(io.selected_joint_mask) & int(completed_joint_mask)
     host_result = getattr(io, 'calibration_result', None)
     # 本轮已提交的 host 结果是收尾数据源；不能等异步 P4 echo 才取得自己的 LUT。
@@ -102,4 +102,4 @@ def finish_dual_zero(io, completed_joint_mask):
             return False, 'zero finish cancelled or control lost before release'
         if not io._release_motion():
             return False, 'zero finish direct owner release failed'
-    return True, 'Rope Init and dual LUT zero finish completed'
+    return True, 'Pull Joint into Workspace and dual LUT zero finish completed'

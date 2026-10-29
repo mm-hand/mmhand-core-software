@@ -964,9 +964,9 @@ def test_host_zero_finish_failure_stops_ordinary_motion(io, monkeypatch):
     io.controller.set_active_scope = MagicMock(return_value=True)
 
     def ack(command, _value):
-        if command == runtime.CMD_ROPE_INIT:
-            state.rope_init_sequence += 1
-            state.rope_init_status = 2
+        if command == runtime.CMD_PULL_JOINT_INTO_WORKSPACE:
+            state.pull_joint_into_workspace_sequence += 1
+            state.pull_joint_into_workspace_status = 2
         return True
 
     monkeypatch.setattr(io, '_ack', ack)

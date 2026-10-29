@@ -25,7 +25,7 @@
       "CTL": "PID、碰撞、过载和闭环控制规则。",
       "SYS": "系统状态机、E-STOP、运动所有权和租约规则。",
       "CAL": "自动标定流程及标定结果规则。",
-      "RCV": "Rope Init、多圈、热插拔和恢复规则。",
+      "RCV": "Pull Joint into Workspace、多圈、热插拔和恢复规则。",
       "COM": "CAN、串口、协议和数据完整性规则。",
       "RUN": "任务、队列、周期、栈和运行时资源规则。",
       "WRN": "不阻断控制的诊断警告。"
@@ -1137,220 +1137,220 @@
       "registry_function": "ruleForFeedbackReadyRejectReason"
     },
     {
-      "name": "RopeInitTimeout",
+      "name": "PullJointIntoWorkspaceTimeout",
       "rule_id": 3401,
       "code": "ROP-3401",
       "active": true,
       "retired": false,
       "policy": {
-        "file": "safety/policies/RopeInitSafetyPolicy.cpp",
-        "symbol": "evaluateRopeInitSession"
+        "file": "safety/policies/PullJointIntoWorkspaceSafetyPolicy.cpp",
+        "symbol": "evaluatePullJointIntoWorkspaceSession"
       },
       "caller": {
-        "file": "tasks/system_state/RopeInitController.cpp",
-        "symbol": "evaluateRopeInitSession"
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
+        "symbol": "evaluatePullJointIntoWorkspaceSession"
       },
       "event": {
-        "file": "tasks/system_state/RopeInitController.cpp",
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
         "symbol": "reportSafetyRuleEvent"
       },
       "recovery": {
-        "file": "tasks/system_state/RopeInitController.cpp",
-        "symbol": "ROPE_INIT_REASON_NONE"
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
+        "symbol": "PULL_JOINT_INTO_WORKSPACE_REASON_NONE"
       },
-      "registry_function": "ruleForRopeInitReason"
+      "registry_function": "ruleForPullJointIntoWorkspaceReason"
     },
     {
-      "name": "RopeInitFeedbackStale",
+      "name": "PullJointIntoWorkspaceFeedbackStale",
       "rule_id": 3402,
       "code": "ROP-3402",
       "active": true,
       "retired": false,
       "policy": {
-        "file": "safety/policies/RopeInitSafetyPolicy.cpp",
-        "symbol": "evaluateRopeInitSession"
+        "file": "safety/policies/PullJointIntoWorkspaceSafetyPolicy.cpp",
+        "symbol": "evaluatePullJointIntoWorkspaceSession"
       },
       "caller": {
-        "file": "tasks/system_state/RopeInitController.cpp",
-        "symbol": "evaluateRopeInitSession"
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
+        "symbol": "evaluatePullJointIntoWorkspaceSession"
       },
       "event": {
-        "file": "tasks/system_state/RopeInitController.cpp",
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
         "symbol": "reportSafetyRuleEvent"
       },
       "recovery": {
-        "file": "tasks/system_state/RopeInitController.cpp",
-        "symbol": "ROPE_INIT_REASON_NONE"
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
+        "symbol": "PULL_JOINT_INTO_WORKSPACE_REASON_NONE"
       },
-      "registry_function": "ruleForRopeInitReason"
+      "registry_function": "ruleForPullJointIntoWorkspaceReason"
     },
     {
-      "name": "RopeInitServoOffline",
+      "name": "PullJointIntoWorkspaceServoOffline",
       "rule_id": 3403,
       "code": "ROP-3403",
       "active": true,
       "retired": false,
       "policy": {
-        "file": "safety/policies/RopeInitSafetyPolicy.cpp",
-        "symbol": "evaluateRopeInitSession"
+        "file": "safety/policies/PullJointIntoWorkspaceSafetyPolicy.cpp",
+        "symbol": "evaluatePullJointIntoWorkspaceSession"
       },
       "caller": {
-        "file": "tasks/system_state/RopeInitController.cpp",
-        "symbol": "evaluateRopeInitSession"
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
+        "symbol": "evaluatePullJointIntoWorkspaceSession"
       },
       "event": {
-        "file": "tasks/system_state/RopeInitController.cpp",
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
         "symbol": "reportSafetyRuleEvent"
       },
       "recovery": {
-        "file": "tasks/system_state/RopeInitController.cpp",
-        "symbol": "ROPE_INIT_REASON_NONE"
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
+        "symbol": "PULL_JOINT_INTO_WORKSPACE_REASON_NONE"
       },
-      "registry_function": "ruleForRopeInitReason"
+      "registry_function": "ruleForPullJointIntoWorkspaceReason"
     },
     {
-      "name": "RopeInitMultiTurnUnknown",
+      "name": "PullJointIntoWorkspaceMultiTurnUnknown",
       "rule_id": 3404,
       "code": "ROP-3404",
       "active": true,
       "retired": false,
       "policy": {
-        "file": "safety/policies/RopeInitSafetyPolicy.cpp",
-        "symbol": "evaluateRopeInitSession"
+        "file": "safety/policies/PullJointIntoWorkspaceSafetyPolicy.cpp",
+        "symbol": "evaluatePullJointIntoWorkspaceSession"
       },
       "caller": {
-        "file": "tasks/system_state/RopeInitController.cpp",
-        "symbol": "evaluateRopeInitSession"
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
+        "symbol": "evaluatePullJointIntoWorkspaceSession"
       },
       "event": {
-        "file": "tasks/system_state/RopeInitController.cpp",
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
         "symbol": "reportSafetyRuleEvent"
       },
       "recovery": {
-        "file": "tasks/system_state/RopeInitController.cpp",
-        "symbol": "ROPE_INIT_REASON_NONE"
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
+        "symbol": "PULL_JOINT_INTO_WORKSPACE_REASON_NONE"
       },
-      "registry_function": "ruleForRopeInitReason"
+      "registry_function": "ruleForPullJointIntoWorkspaceReason"
     },
     {
-      "name": "RopeInitManualRequired",
+      "name": "PullJointIntoWorkspaceManualRequired",
       "rule_id": 3405,
       "code": "ROP-3405",
       "active": true,
       "retired": false,
       "policy": {
-        "file": "safety/policies/RopeInitSafetyPolicy.cpp",
-        "symbol": "evaluateRopeInitSession"
+        "file": "safety/policies/PullJointIntoWorkspaceSafetyPolicy.cpp",
+        "symbol": "evaluatePullJointIntoWorkspaceSession"
       },
       "caller": {
-        "file": "tasks/system_state/RopeInitController.cpp",
-        "symbol": "evaluateRopeInitSession"
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
+        "symbol": "evaluatePullJointIntoWorkspaceSession"
       },
       "event": {
-        "file": "tasks/system_state/RopeInitController.cpp",
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
         "symbol": "reportSafetyRuleEvent"
       },
       "recovery": {
-        "file": "tasks/system_state/RopeInitController.cpp",
-        "symbol": "ROPE_INIT_REASON_NONE"
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
+        "symbol": "PULL_JOINT_INTO_WORKSPACE_REASON_NONE"
       },
-      "registry_function": "ruleForRopeInitReason"
+      "registry_function": "ruleForPullJointIntoWorkspaceReason"
     },
     {
-      "name": "RopeInitAutoRequired",
+      "name": "PullJointIntoWorkspaceAutoRequired",
       "rule_id": 3406,
       "code": "ROP-3406",
       "active": true,
       "retired": false,
       "policy": {
-        "file": "safety/policies/RopeInitSafetyPolicy.cpp",
-        "symbol": "evaluateRopeInitSession"
+        "file": "safety/policies/PullJointIntoWorkspaceSafetyPolicy.cpp",
+        "symbol": "evaluatePullJointIntoWorkspaceSession"
       },
       "caller": {
-        "file": "tasks/system_state/RopeInitController.cpp",
-        "symbol": "evaluateRopeInitSession"
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
+        "symbol": "evaluatePullJointIntoWorkspaceSession"
       },
       "event": {
-        "file": "tasks/system_state/RopeInitController.cpp",
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
         "symbol": "reportSafetyRuleEvent"
       },
       "recovery": {
-        "file": "tasks/system_state/RopeInitController.cpp",
-        "symbol": "ROPE_INIT_REASON_NONE"
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
+        "symbol": "PULL_JOINT_INTO_WORKSPACE_REASON_NONE"
       },
-      "registry_function": "ruleForRopeInitReason"
+      "registry_function": "ruleForPullJointIntoWorkspaceReason"
     },
     {
-      "name": "RopeInitTargetPublishFailed",
+      "name": "PullJointIntoWorkspaceTargetPublishFailed",
       "rule_id": 3407,
       "code": "ROP-3407",
       "active": true,
       "retired": false,
       "policy": {
-        "file": "safety/policies/RopeInitSafetyPolicy.cpp",
-        "symbol": "evaluateRopeInitSession"
+        "file": "safety/policies/PullJointIntoWorkspaceSafetyPolicy.cpp",
+        "symbol": "evaluatePullJointIntoWorkspaceSession"
       },
       "caller": {
-        "file": "tasks/system_state/RopeInitController.cpp",
-        "symbol": "evaluateRopeInitSession"
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
+        "symbol": "evaluatePullJointIntoWorkspaceSession"
       },
       "event": {
-        "file": "tasks/system_state/RopeInitController.cpp",
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
         "symbol": "reportSafetyRuleEvent"
       },
       "recovery": {
-        "file": "tasks/system_state/RopeInitController.cpp",
-        "symbol": "ROPE_INIT_REASON_NONE"
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
+        "symbol": "PULL_JOINT_INTO_WORKSPACE_REASON_NONE"
       },
-      "registry_function": "ruleForRopeInitReason"
+      "registry_function": "ruleForPullJointIntoWorkspaceReason"
     },
     {
-      "name": "RopeInitSystemFault",
+      "name": "PullJointIntoWorkspaceSystemFault",
       "rule_id": 3408,
       "code": "ROP-3408",
       "active": true,
       "retired": false,
       "policy": {
-        "file": "safety/policies/RopeInitSafetyPolicy.cpp",
-        "symbol": "evaluateRopeInitSession"
+        "file": "safety/policies/PullJointIntoWorkspaceSafetyPolicy.cpp",
+        "symbol": "evaluatePullJointIntoWorkspaceSession"
       },
       "caller": {
-        "file": "tasks/system_state/RopeInitController.cpp",
-        "symbol": "evaluateRopeInitSession"
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
+        "symbol": "evaluatePullJointIntoWorkspaceSession"
       },
       "event": {
-        "file": "tasks/system_state/RopeInitController.cpp",
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
         "symbol": "reportSafetyRuleEvent"
       },
       "recovery": {
-        "file": "tasks/system_state/RopeInitController.cpp",
-        "symbol": "ROPE_INIT_REASON_NONE"
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
+        "symbol": "PULL_JOINT_INTO_WORKSPACE_REASON_NONE"
       },
-      "registry_function": "ruleForRopeInitReason"
+      "registry_function": "ruleForPullJointIntoWorkspaceReason"
     },
     {
-      "name": "RopeInitCancelled",
+      "name": "PullJointIntoWorkspaceCancelled",
       "rule_id": 3409,
       "code": "ROP-3409",
       "active": true,
       "retired": false,
       "policy": {
-        "file": "safety/policies/RopeInitSafetyPolicy.cpp",
-        "symbol": "evaluateRopeInitSession"
+        "file": "safety/policies/PullJointIntoWorkspaceSafetyPolicy.cpp",
+        "symbol": "evaluatePullJointIntoWorkspaceSession"
       },
       "caller": {
-        "file": "tasks/system_state/RopeInitController.cpp",
-        "symbol": "evaluateRopeInitSession"
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
+        "symbol": "evaluatePullJointIntoWorkspaceSession"
       },
       "event": {
-        "file": "tasks/system_state/RopeInitController.cpp",
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
         "symbol": "reportSafetyRuleEvent"
       },
       "recovery": {
-        "file": "tasks/system_state/RopeInitController.cpp",
-        "symbol": "ROPE_INIT_REASON_NONE"
+        "file": "tasks/system_state/PullJointIntoWorkspaceController.cpp",
+        "symbol": "PULL_JOINT_INTO_WORKSPACE_REASON_NONE"
       },
-      "registry_function": "ruleForRopeInitReason"
+      "registry_function": "ruleForPullJointIntoWorkspaceReason"
     },
     {
       "name": "FaultCanOffline",

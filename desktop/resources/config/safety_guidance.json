@@ -44,8 +44,7 @@
       "impact": "Motion requests are blocked while Stop remains active.",
       "steps": [
         "Check that the hand is clear of obstacles.",
-        "Click Clear Faults.",
-        "Retry the original action."
+        "Retry the action."
       ]
     },
     "1006": {
@@ -54,7 +53,7 @@
       "impact": "The controller did not accept this request in its current state.",
       "steps": [
         "Wait for the current action or mode change to finish.",
-        "If the app remains busy, click Stop, then Clear Faults before enabling again."
+        "If the app remains busy, click Stop, then retry Enable."
       ]
     },
     "1007": {
@@ -63,7 +62,7 @@
       "impact": "The controller did not accept this request in its current state.",
       "steps": [
         "Wait for the current action or mode change to finish.",
-        "If the app remains busy, click Stop, then Clear Faults before enabling again."
+        "If the app remains busy, click Stop, then retry Enable."
       ]
     },
     "1008": {
@@ -90,7 +89,7 @@
       "impact": "The controller did not accept this request in its current state.",
       "steps": [
         "Wait for the current action or mode change to finish.",
-        "If the app remains busy, click Stop, then Clear Faults before enabling again."
+        "If the app remains busy, click Stop, then retry Enable."
       ]
     },
     "1012": {
@@ -108,7 +107,7 @@
       "impact": "A motor position safety limit is blocking further control.",
       "steps": [
         "Check that the affected joint and tendons can move freely.",
-        "If Stop is active, click Clear Faults after checking the hand.",
+        "If Stop is active, check the hand and retry the action.",
         "Open Motor Calibration, select the affected joints, and calibrate them again."
       ]
     },
@@ -209,7 +208,7 @@
       "impact": "The controller did not accept this request in its current state.",
       "steps": [
         "Wait for the current action or mode change to finish.",
-        "If the app remains busy, click Stop, then Clear Faults before enabling again."
+        "If the app remains busy, click Stop, then retry Enable."
       ]
     },
     "3101": {
@@ -218,7 +217,7 @@
       "impact": "The controller did not accept this request in its current state.",
       "steps": [
         "Wait for the current action or mode change to finish.",
-        "If the app remains busy, click Stop, then Clear Faults before enabling again."
+        "If the app remains busy, click Stop, then retry Enable."
       ]
     },
     "3102": {
@@ -245,7 +244,7 @@
       "impact": "The controller did not accept this request in its current state.",
       "steps": [
         "Wait for the current action or mode change to finish.",
-        "If the app remains busy, click Stop, then Clear Faults before enabling again."
+        "If the app remains busy, click Stop, then retry Enable."
       ]
     },
     "3105": {
@@ -254,7 +253,7 @@
       "impact": "The controller did not accept this request in its current state.",
       "steps": [
         "Wait for the current action or mode change to finish.",
-        "If the app remains busy, click Stop, then Clear Faults before enabling again."
+        "If the app remains busy, click Stop, then retry Enable."
       ]
     },
     "3106": {
@@ -263,7 +262,7 @@
       "impact": "A device fault is blocking this action.",
       "steps": [
         "Open Diagnostics and resolve the current fault shown for the affected device.",
-        "After correcting the cause, click Clear Faults before enabling control again."
+        "After correcting the cause, retry Enable."
       ]
     },
     "3201": {
@@ -281,7 +280,7 @@
       "impact": "The controller did not accept this request in its current state.",
       "steps": [
         "Wait for the current action or mode change to finish.",
-        "If the app remains busy, click Stop, then Clear Faults before enabling again."
+        "If the app remains busy, click Stop, then retry Enable."
       ]
     },
     "3203": {
@@ -308,7 +307,7 @@
       "impact": "The controller did not accept this request in its current state.",
       "steps": [
         "Wait for the current action or mode change to finish.",
-        "If the app remains busy, click Stop, then Clear Faults before enabling again."
+        "If the app remains busy, click Stop, then retry Enable."
       ]
     },
     "3207": {
@@ -317,7 +316,7 @@
       "impact": "The controller did not accept this request in its current state.",
       "steps": [
         "Wait for the current action or mode change to finish.",
-        "If the app remains busy, click Stop, then Clear Faults before enabling again."
+        "If the app remains busy, click Stop, then retry Enable."
       ]
     },
     "3301": {
@@ -405,7 +404,7 @@
       "impact": "A device fault is blocking this action.",
       "steps": [
         "Open Diagnostics and resolve the current fault shown for the affected device.",
-        "After correcting the cause, click Clear Faults before enabling control again."
+        "After correcting the cause, retry Enable."
       ]
     },
     "3311": {
@@ -414,7 +413,7 @@
       "impact": "A motor position safety limit is blocking further control.",
       "steps": [
         "Check that the affected joint and tendons can move freely.",
-        "If Stop is active, click Clear Faults after checking the hand.",
+        "If Stop is active, check the hand and retry the action.",
         "Open Motor Calibration, select the affected joints, and calibrate them again."
       ]
     },
@@ -489,7 +488,7 @@
       "impact": "A device fault is blocking this action.",
       "steps": [
         "Open Diagnostics and resolve the current fault shown for the affected device.",
-        "After correcting the cause, click Clear Faults before enabling control again."
+        "After correcting the cause, retry Enable."
       ]
     },
     "3409": {
@@ -515,7 +514,7 @@
       "impact": "A load protection was triggered.",
       "steps": [
         "Check for an obstruction, a tight tendon, or a joint that cannot move freely.",
-        "After correcting the cause, click Clear Faults and retry the original action."
+        "After correcting the cause, retry the original action."
       ]
     },
     "3503": {
@@ -832,7 +831,7 @@
       "impact": "A load protection was triggered.",
       "steps": [
         "Check for an obstruction, a tight tendon, or a joint that cannot move freely.",
-        "After correcting the cause, click Clear Faults and retry the original action."
+        "After correcting the cause, retry the original action."
       ]
     },
     "HOST_CALIB_13": {
@@ -868,7 +867,7 @@
       "impact": "A calibration motor target was not accepted.",
       "steps": [
         "Open Details to check the target rejection or control ownership.",
-        "Wait for the current mode change to finish; if Stop is active, check the hand and click Clear Faults before calibrating again."
+        "Wait for the current mode change to finish; if Stop is active, check the hand and retry calibration."
       ]
     },
     "HOST_CALIB_17": {
@@ -897,7 +896,7 @@
       "impact": "The controller did not accept this request in its current state.",
       "steps": [
         "Wait for the current action or mode change to finish.",
-        "If the app remains busy, click Stop, then Clear Faults before enabling again."
+        "If the app remains busy, click Stop, then retry Enable."
       ]
     },
     "HOST_CALIB_21": {

@@ -181,10 +181,10 @@ static void cancelInternalMotionForHostLeaseLoss(
     if (!sharedData) {
         return;
     }
-    if (interruptedState == SYSTEM_STATE_ROPE_INIT_RUNNING) {
-        sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
-        sharedData->rope_init_reason = ROPE_INIT_REASON_CANCELLED;
-        sharedData->rope_init_timestamp = monotonicMillis();
+    if (interruptedState == SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING) {
+        sharedData->pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED;
+        sharedData->pull_joint_into_workspace_reason = PULL_JOINT_INTO_WORKSPACE_REASON_CANCELLED;
+        sharedData->pull_joint_into_workspace_timestamp = monotonicMillis();
         sharedAtomicStore(&sharedData->feedback_recovery_pending,
                           (uint8_t)0);
         sharedAtomicStore(&sharedData->feedback_recovery_request_sequence,
@@ -194,7 +194,7 @@ static void cancelInternalMotionForHostLeaseLoss(
 
 /**
  * 监视所有运动状态的上位机租约并完成 Hold 确认闭环。
- * 控制与 Rope Init 均使用当前 ABS Hold；ROS2 不设置独立消息超时，
+ * 控制与 Pull Joint into Workspace 均使用当前 ABS Hold；ROS2 不设置独立消息超时，
  * 仍由桌面端公共串口心跳续租。
  */
 void updateHostControlLease(SystemRuntimeContext* sharedData,

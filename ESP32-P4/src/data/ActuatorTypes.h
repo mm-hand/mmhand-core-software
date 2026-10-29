@@ -11,10 +11,10 @@
 
 inline constexpr uint8_t SERVO_TARGET_OWNER_NONE = 0;        ///< 当前没有任务拥有舵机输出权。
 inline constexpr uint8_t SERVO_TARGET_OWNER_CONTROL = 1;     ///< 负反馈与直控任务的执行 owner。
-inline constexpr uint8_t SERVO_TARGET_OWNER_CALIBRATION = 2; ///< Rope Init 的执行 owner；保留既有协议数值。
+inline constexpr uint8_t SERVO_TARGET_OWNER_CALIBRATION = 2; ///< Pull Joint into Workspace 的执行 owner；保留既有协议数值。
 inline constexpr uint8_t SERVO_TARGET_BATCH_MAX = SERVO_TOTAL_NUM; ///< 单批最多覆盖全手 27 台舵机。
 
-/** 批次用途用于执行层确认安全事务；普通控制与 Rope Init 批次保持为 NORMAL。 */
+/** 批次用途用于执行层确认安全事务；普通控制与 Pull Joint into Workspace 批次保持为 NORMAL。 */
 inline constexpr uint8_t SERVO_TARGET_PURPOSE_NORMAL = 0;
 inline constexpr uint8_t SERVO_TARGET_PURPOSE_HOST_LEASE_HOLD = 1;
 
@@ -24,7 +24,7 @@ inline constexpr uint8_t DIRECT_TARGET_APPLY_PENDING = 1;
 inline constexpr uint8_t DIRECT_TARGET_APPLY_APPLIED = 2;
 inline constexpr uint8_t DIRECT_TARGET_APPLY_REJECTED = 3;
 
-/** 上位机租约丢失后的“保持当前 ABS”事务状态，覆盖控制和 Rope Init。 */
+/** 上位机租约丢失后的“保持当前 ABS”事务状态，覆盖控制和 Pull Joint into Workspace。 */
 inline constexpr uint8_t HOST_CONTROL_HOLD_IDLE = 0;
 inline constexpr uint8_t HOST_CONTROL_HOLD_PENDING = 1;
 inline constexpr uint8_t HOST_CONTROL_HOLD_APPLIED = 2;

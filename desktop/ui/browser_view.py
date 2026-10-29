@@ -13,28 +13,29 @@ from nicegui import core, ui
 from desktop.core.user_issues import issue_text, operation_issue
 from . import refresh_policy as policy
 from .web import renumber_motors, renumber_tactile, joint_calibration, motor_calibration, feedback_control, direct_control
-from .web import replay, plots, tactile, diagnostics, control_parameters
+from .web import replay, plots, tactile, diagnostics, control_parameters, hand as hand_view
 from .web.common import show
 
 TABS = ['Calibration', 'Control', 'Replay', 'Plot', 'Settings']
 SUBTABS = {
     'Calibration': ['Joint Calibration', 'Motor Calibration'],
     'Control': ['Feedback Control', 'Direct Control'],
-    'Plot': ['Curves & Recordings', 'Tactile'],
+    'Plot': ['Hand', 'Tactile', 'Curves'],
     'Settings': ['Renumber Motor', 'Renumber Tactile', 'Control Parameters', 'Diagnostics'],
 }
 def status_background(value):
     """状态色卡：红=必须人工处理，黄=机器要自救/警告，蓝=正在动作，绿=可操作。"""
     status = str(value).upper()
-    # 标签可能带 P4 编号后缀，如 'Recovery (9)'，比对前去掉。
+    # 标签可能带 P4 编号后缀，如 'Joint Beyond Workspace (9)'，比对前去掉。
     base = status.split(' (')[0].strip()
     if base.startswith('NEED CALIBRATION') or base in ('PENDING', 'WARN', 'WARNING',
-                                                       'SYNCING', 'RECOVERY'):
+                                                       'SYNCING', 'JOINT BEYOND WORKSPACE',
+                                                       'BEYOND'):
         return '#fde68a'
     if base == 'READY' or base.startswith('READY'):
         return '#bbf7d0'
     if base in ('FEEDBACK', 'DIRECT', 'CALIBRATING', 'RUNNING', 'CONTROLLING',
-                'ROPE INIT'):
+                'PULL JOINT INTO WORKSPACE'):
         return '#bfdbfe'
     if base in ('FAILED', 'FAULT', 'ERROR', 'ACTIVE', 'HOLD', 'MISSING',
                 'STOPPED', 'LOCKED'):
@@ -368,13 +369,8 @@ def build_page(hand):
             ui.space()
             save = ui.button('Save Data: ON', on_click=lambda: act(lambda: hand.request_recording(not hand.application_snapshot(include_curves=False)['recording']['enabled']))).props('dense outline')
             top_stop = ui.button('■ STOP', on_click=lambda: act(hand.stop_motion), color='negative').props('dense').classes('font-bold px-5')
-            top_clear = ui.button('Clear Faults', on_click=lambda: act(hand.request_clear_faults), color='grey-6').props('dense').classes('font-bold px-4')
-            top_clear.set_enabled(False)
-            with top_clear:
-                ui.tooltip('Usable only while a STOP is latched, P4 reports a fault, '
-                           'or P4 is stopped and needs an explicit reset.')
         with ui.row().classes('status-bar items-center w-full'):
-            badges = {name: ui.label().classes('status-chip text-xs cursor-pointer') for name in ['System', 'P4', 'Calibration', 'Mode', 'Overload', 'Collision', 'Multi-turn']}
+            badges = {name: ui.label().classes('status-chip text-xs cursor-pointer') for name in ['System', 'P4', 'Calibration', 'Mode', 'Overload', 'Collision', 'Joint workspace', 'Motor workspace', 'Multi-turn']}
         with ui.tabs(value=TABS[0]).classes('console-tabs w-full').props('dense no-caps active-color=primary outside-arrows mobile-arrows') as tabs:
             for name in TABS: ui.tab(name)
         def leave_direct_control():
@@ -402,7 +398,8 @@ def build_page(hand):
                                         elif name == 'Motor Calibration': refreshers[name] = motor_calibration.build(hand, act, open_import)
                                         elif name == 'Feedback Control': refreshers[name] = feedback_control.build(hand, act)
                                         elif name == 'Direct Control': refreshers[name] = direct_control.build(hand, act, confirm, leave_direct_control)
-                                        elif name == 'Curves & Recordings': refreshers[name] = plots.build(hand, act)
+                                        elif name == 'Hand': refreshers[name] = hand_view.build(hand)
+                                        elif name == 'Curves': refreshers[name] = plots.build(hand, act)
                                         elif name == 'Tactile': refreshers[name] = tactile.build(hand)
                                         elif name == 'Renumber Motor': refreshers[name] = renumber_motors.build(hand, act)
                                         elif name == 'Renumber Tactile': refreshers[name] = renumber_tactile.build(hand, act)
@@ -436,7 +433,6 @@ def build_page(hand):
 
     # Display caches: NiceGUI values are only written when they actually changed.
     text_cache, enabled_cache, style_cache = {}, {}, {}
-    top_clear_color = [None]
     running = {'fast': False, 'heavy': False, 'plots': False}
     slow_ticks = {'fast': 0, 'heavy': 0, 'plots': 0}
     heartbeat_at = [0.0]
@@ -499,13 +495,6 @@ def build_page(hand):
         online = snapshot['communication'] == 'Online' and not snapshot['busy']
         set_text('top-stop', top_stop, '■ STOP')
         set_enabled('top-stop', top_stop, online)
-        # Clear Faults 独立按钮：只有真有事可清时才是黄色可点，其余灰着。
-        clear_ready = bool(snapshot.get('clear_faults_applicable')) and online
-        set_enabled('top-clear', top_clear, clear_ready)
-        clear_color = 'warning' if clear_ready else 'grey-6'
-        if top_clear_color[0] != clear_color:
-            top_clear_color[0] = clear_color
-            top_clear.props(f'color={clear_color}')
         set_text('save', save, 'Save Data: ON' if snapshot['recording']['enabled'] else 'Save Data: OFF')
         preview = snapshot['import_preview']
         if preview and importer.value and preview['token'] != preview_token[0]:
@@ -568,7 +557,7 @@ def build_page(hand):
     refresh()
     refresh_heavy()
     refresh_plots()
-    fast_interval, heavy_interval, plots_interval = policy.select_intervals('Curves & Recordings')
+    fast_interval, heavy_interval, plots_interval = policy.select_intervals('Curves')
     ui.timer(fast_interval, refresh)
     ui.timer(heavy_interval, refresh_heavy)
     ui.timer(plots_interval, refresh_plots)

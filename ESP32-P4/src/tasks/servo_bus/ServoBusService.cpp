@@ -172,10 +172,10 @@ static ServoBatchApplyResult applyServoTargetBatch(
         sharedAtomicLoad(&sharedData->servo_turn_overflow_bitmap);
     safetyContext.requireOnline = true;
     // 直控承担人工恢复用途，允许由上位机重建基准。
-    // 负反馈和 Rope Init 则必须依赖可信 logical ABS。
+    // 负反馈和 Pull Joint into Workspace 则必须依赖可信 logical ABS。
     safetyContext.requireMultiTurnKnown =
         sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
-        sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING;
+        sharedData->system_state == SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING;
 
     // 第一遍只解析和裁决，不改驱动缓存。这样第二台失败时第一台不会提前留下目标。
     for (uint8_t i = 0; i < batch.count && i < SERVO_TARGET_BATCH_MAX; i++) {
@@ -359,7 +359,7 @@ static bool servoCoordinateMaintenanceSafe(SystemRuntimeContext* sharedData)
     return state == SYSTEM_STATE_UNCONTROLLABLE ||
            state == SYSTEM_STATE_IDLE ||
            state == SYSTEM_STATE_READY ||
-           state == SYSTEM_STATE_RECOVERY_REQUIRED;
+           state == SYSTEM_STATE_JOINT_BEYOND_WORKSPACE;
 }
 
 /** 上位机对账后认账：把当前原生 ABS 认作标定坐标系，不写电机。 */
@@ -618,7 +618,7 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
         const bool motionActive =
             currentSystemState == SYSTEM_STATE_RUN_DIRECT ||
             currentSystemState == SYSTEM_STATE_RUN_FEEDBACK ||
-            currentSystemState == SYSTEM_STATE_ROPE_INIT_RUNNING;
+            currentSystemState == SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING;
         const uint32_t emergencyStopToken =
             sharedAtomicLoad(&sharedData->servo_emergency_stop_token);
         if (emergencyStopToken != lastEmergencyStopToken) {

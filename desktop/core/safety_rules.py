@@ -76,7 +76,7 @@ _FEEDBACK_REASON_TO_RULE = {
     6: 3206,
     7: 3207,
 }
-_ROPE_INIT_REASON_TO_RULE = {reason: 3400 + reason for reason in range(1, 10)}
+_PULL_JOINT_INTO_WORKSPACE_REASON_TO_RULE = {reason: 3400 + reason for reason in range(1, 10)}
 
 
 def explain_direct_reject(reason: int) -> str:
@@ -97,12 +97,12 @@ def explain_feedback_reject(reason: int) -> str:
     return f"Unknown feedback-control rejection reason {reason}"
 
 
-def explain_rope_init_reason(reason: int) -> str:
-    """Explain SYSTEM_STATUS.rope_init_reason using the same rule catalog."""
+def explain_pull_joint_into_workspace_reason(reason: int) -> str:
+    """Explain SYSTEM_STATUS.pull_joint_into_workspace_reason using the same rule catalog."""
     reason = int(reason)
     if reason == 0:
-        return "Rope Init completed without an error"
-    rule_id = _ROPE_INIT_REASON_TO_RULE.get(reason)
+        return "Pull Joint into Workspace completed without an error"
+    rule_id = _PULL_JOINT_INTO_WORKSPACE_REASON_TO_RULE.get(reason)
     if rule_id is not None:
         return explain_safety_rule(rule_id)
-    return f"Unknown Rope Init reason {reason}"
+    return f"Unknown Pull Joint into Workspace reason {reason}"

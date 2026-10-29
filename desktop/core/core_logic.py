@@ -57,7 +57,7 @@ from .protocol import (
     CMD_MANUAL_ENCODER_REFERENCE,
     CMD_MANUAL_ENCODER_SINGLE,
     CMD_STATE_SYNC_REQUEST,
-    CMD_ROPE_INIT,
+    CMD_PULL_JOINT_INTO_WORKSPACE,
     CMD_RESET,
     CMD_MOTOR_ABS_ZERO,
     ENCODER_COUNT,
@@ -70,13 +70,13 @@ from .protocol import (
     MOTOR_ABS_CMD_MIN,
     SYSTEM_STATE_IDLE,
     SYSTEM_STATE_CALIBRATION_RUNNING,
-    SYSTEM_STATE_RECOVERY_REQUIRED,
+    SYSTEM_STATE_JOINT_BEYOND_WORKSPACE,
     SYSTEM_STATE_RUN_FEEDBACK,
     SYSTEM_STATE_READY,
     SYSTEM_STATE_RUN_DIRECT,
     SERVO_TARGET_OWNER_CONTROL,
 
-    SYSTEM_STATE_ROPE_INIT_RUNNING,
+    SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING,
     SYSTEM_STATE_UNCONTROLLABLE,
     STATE_SYNC_ALL,
     STATE_SYNC_MANUAL_REFERENCE,
@@ -781,7 +781,7 @@ class HandController:
             SYSTEM_STATE_RUN_DIRECT,
             SYSTEM_STATE_RUN_FEEDBACK,
             SYSTEM_STATE_CALIBRATION_RUNNING,
-            SYSTEM_STATE_ROPE_INIT_RUNNING,
+            SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING,
         )
         period = (
             HOST_MULTITURN_MOVING_SAVE_PERIOD_S
@@ -1215,7 +1215,7 @@ class HandController:
                     if getattr(new_model, "has_system_status_data", False):
                         self._started = int(new_model.system_state) in (
                             SYSTEM_STATE_IDLE,
-                            SYSTEM_STATE_RECOVERY_REQUIRED,
+                            SYSTEM_STATE_JOINT_BEYOND_WORKSPACE,
                             SYSTEM_STATE_RUN_FEEDBACK,
                             SYSTEM_STATE_READY,
                             SYSTEM_STATE_RUN_DIRECT,
@@ -1565,13 +1565,13 @@ class HandController:
             self.last_manual_write_phase = 'SAVED'
         return verified and not cancelled()
 
-    def rope_init(self, active_joint_mask: int) -> bool:
+    def pull_joint_into_workspace(self, active_joint_mask: int) -> bool:
         if not self.comm:
             return False
         sent_at = time.monotonic()
-        self.comm.send_command(("rope_init", int(active_joint_mask)))
+        self.comm.send_command(("pull_joint_into_workspace", int(active_joint_mask)))
         ack = self.comm.wait_for_ack(
-            CMD_ROPE_INIT,
+            CMD_PULL_JOINT_INTO_WORKSPACE,
             MANUAL_REFERENCE_ACK_TIMEOUT_S,
             received_after_monotonic=sent_at,
         )
@@ -1771,7 +1771,7 @@ class HandController:
                 and 0 <= time.monotonic() - state.received_at('system_status_last_rx_ts') <= LOWER_STATUS_STALE_AFTER_S
                 and not state.control_enabled and state.servo_target_owner == 0
                 and state.system_state in (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE,
-                                           SYSTEM_STATE_READY, SYSTEM_STATE_RECOVERY_REQUIRED)
+                                           SYSTEM_STATE_READY, SYSTEM_STATE_JOINT_BEYOND_WORKSPACE)
                 and state.has_servo_route_status and state.servo_route_scan_state != 1
                 and not mask & ~state.servo_online_bitmap
                 and not mask & ~state.servo_route_controllable_bitmap
@@ -2168,7 +2168,7 @@ class HandController:
             SYSTEM_STATE_UNCONTROLLABLE,
             SYSTEM_STATE_IDLE,
             SYSTEM_STATE_READY,
-            SYSTEM_STATE_RECOVERY_REQUIRED,
+            SYSTEM_STATE_JOINT_BEYOND_WORKSPACE,
         )
         if system_state not in allowed_states:
             return 0, empty._replace(

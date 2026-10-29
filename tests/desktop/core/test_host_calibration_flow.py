@@ -68,7 +68,7 @@ class _IO:
 
     def finish_session(self, success, completed, failed):
         self.calls.append(("finish", success, completed, failed))
-        return self.finish_ok, "rope ready" if self.finish_ok else "rope init failed"
+        return self.finish_ok, "rope ready" if self.finish_ok else "pull joint into workspace failed"
 
     def diag(self, *args):
         self.calls.append(("diag", args))
@@ -324,12 +324,12 @@ def test_cancel_during_preflight_is_reported_as_cancelled_without_joint_failure(
     assert not any(call[0] in ("prepare", "commit", "diag_if_empty") for call in io.calls)
 
 
-def test_rope_init_failure_is_warn_with_valid_calibration_kept(machines):
+def test_pull_joint_into_workspace_failure_is_warn_with_valid_calibration_kept(machines):
     io = _IO()
     io.finish_ok = False
     session = flow.run(io, 1 << 1, _mask((1,)), lambda *_: None)
     assert session.success and session.terminal_status == "WARN"
-    assert "rope init failed" in session.message
+    assert "pull joint into workspace failed" in session.message
     assert session.completed_joint_mask == 1 << 1
 
 

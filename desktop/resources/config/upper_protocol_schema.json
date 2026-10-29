@@ -282,11 +282,11 @@
       "description": "写入单个 Jxx 的 Manual Min/Max"
     },
     {
-      "name": "CMD_ROPE_INIT",
+      "name": "CMD_PULL_JOINT_INTO_WORKSPACE",
       "requires_handshake": true,
       "value": 233,
       "payload_bytes": 4,
-      "description": "按 21 位关节掩码启动 P4 Rope Init"
+      "description": "按 21 位关节掩码启动 P4 Pull Joint into Workspace"
     },
     {
       "name": "CMD_CLEAR_CALIBRATION_SCOPE",

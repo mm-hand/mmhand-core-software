@@ -110,7 +110,7 @@ def test_warning_contract_matches_firmware():
 
 @pytest.mark.parametrize('code,expected', [
     (0, 'Stopped (0)'), (1, 'Idle (1)'), (2, 'Running (2)'), (4, 'Retired Calib (4)'),
-    (5, 'Ready (5)'), (6, 'Direct (6)'), (8, 'Rope Init (8)'), (9, 'Recovery (9)')])
+    (5, 'Ready (5)'), (6, 'Direct (6)'), (8, 'Pull Joint into Workspace (8)'), (9, 'Joint Beyond Workspace (9)')])
 def test_p4_badge_speaks_plain_words(code, expected):
     """P4 的 7 种状态各自一个人话标签；四个状态不能再糊成同一个 'Disabled'。"""
     from desktop.core.console_snapshot import p4_state_badge

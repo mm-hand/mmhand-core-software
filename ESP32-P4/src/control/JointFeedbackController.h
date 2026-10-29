@@ -52,10 +52,11 @@ private:
         bool takeupFrozen = false;
         float integral[MAX_JOINT_ACTUATORS] = {};
         float motorAnchor[MAX_JOINT_ACTUATORS] = {};
-        // D-term measurement history: filtered joint velocity, never target kick.
+        // D-term history: filtered derivative of target minus measured angle.
         bool lastFastValid = false;
         uint32_t lastFastMs = 0;
         float lastFast = 0;
+        float lastDerivativeTarget = 0;
         float derivativeFiltered = 0;
         // Adaptive Kp: slow closed-loop evidence, never a fast control loop.
         float lagScore = 0, overScore = 0;

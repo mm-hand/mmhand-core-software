@@ -75,7 +75,7 @@ inline constexpr uint8_t CMD_CALIB_LOAD_LIMITS = 0xE0; ///< 批量恢复 27 路 
 inline constexpr uint8_t CMD_CLEAR_CALIBRATION = 0xE5; ///< 清除全部 Auto/LUT 标定结果，保留 Manual
 inline constexpr uint8_t CMD_MANUAL_ENCODER_REFERENCE = 0xE6; ///< 写入或清除 21 组 Manual Min/Max 原始磁编值
 inline constexpr uint8_t CMD_MANUAL_ENCODER_SINGLE = 0xE8; ///< 写入单个 Jxx 的 Manual Min/Max
-inline constexpr uint8_t CMD_ROPE_INIT = 0xE9; ///< 按 21 位关节掩码启动 P4 Rope Init
+inline constexpr uint8_t CMD_PULL_JOINT_INTO_WORKSPACE = 0xE9; ///< 按 21 位关节掩码启动 P4 Pull Joint into Workspace
 inline constexpr uint8_t CMD_CLEAR_CALIBRATION_SCOPE = 0xEB; ///< 按电机位图清除关联关节 Auto/LUT
 inline constexpr uint8_t CMD_STATE_SYNC_REQUEST = 0xED; ///< 按位请求静态状态、标定快照、路由和产品指纹
 inline constexpr uint8_t CMD_DIAGNOSTICS_SUBSCRIBE = 0xEE; ///< 诊断订阅：bit0 任务诊断、bit1 控制 trace；1 字节分频
@@ -118,7 +118,7 @@ inline constexpr size_t kCalibLoadJointPayloadBytes = 188;
 inline constexpr size_t kCalibLoadLimitsPayloadBytes = 224;
 inline constexpr size_t kManualEncoderReferencePayloadBytes = 85;
 inline constexpr size_t kManualEncoderSinglePayloadBytes = 5;
-inline constexpr size_t kRopeInitPayloadBytes = 4;
+inline constexpr size_t kPullJointIntoWorkspacePayloadBytes = 4;
 inline constexpr size_t kClearCalibrationScopePayloadBytes = 4;
 inline constexpr size_t kMotorAbsZeroPayloadBytes = 4;
 inline constexpr size_t kMotorDirectReleasePayloadBytes = 4;
@@ -145,7 +145,7 @@ inline constexpr size_t generatedCommandPayloadLength(uint8_t command)
         case CMD_CLEAR_CALIBRATION: return 0;
         case CMD_MANUAL_ENCODER_REFERENCE: return kManualEncoderReferencePayloadBytes;
         case CMD_MANUAL_ENCODER_SINGLE: return kManualEncoderSinglePayloadBytes;
-        case CMD_ROPE_INIT: return kRopeInitPayloadBytes;
+        case CMD_PULL_JOINT_INTO_WORKSPACE: return kPullJointIntoWorkspacePayloadBytes;
         case CMD_CLEAR_CALIBRATION_SCOPE: return kClearCalibrationScopePayloadBytes;
         case CMD_STATE_SYNC_REQUEST: return kStateSyncRequestPayloadBytes;
         case CMD_DIAGNOSTICS_SUBSCRIBE: return kDiagnosticsSubscribePayloadBytes;
@@ -174,7 +174,7 @@ inline constexpr bool generatedCommandRequiresHandshake(uint8_t command)
         case CMD_CALIB_LOAD_LIMITS: return true;
         case CMD_MANUAL_ENCODER_REFERENCE: return true;
         case CMD_MANUAL_ENCODER_SINGLE: return true;
-        case CMD_ROPE_INIT: return true;
+        case CMD_PULL_JOINT_INTO_WORKSPACE: return true;
         case CMD_MOTOR_ABS_ZERO: return true;
         case CMD_CONTROL_RELEASE: return true;
         case CMD_CONTROL_PARAMETERS_SET: return true;

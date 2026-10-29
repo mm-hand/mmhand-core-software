@@ -63,7 +63,7 @@ bool manualUpdateMotionActive(SystemRuntimeContext* sharedData)
            sharedData->servo_target_owner != SERVO_TARGET_OWNER_NONE ||
            sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
            sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
-           sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING;
+           sharedData->system_state == SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING;
 }
 
 static uint32_t changedManualReferenceMask(

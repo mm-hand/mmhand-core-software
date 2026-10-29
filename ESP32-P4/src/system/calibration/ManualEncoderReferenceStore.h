@@ -4,7 +4,7 @@
  * @details
  * - 数据来源：桌面端 V6 JSON 通过上位机协议写入 P4 RAM。
  * - 生命周期：P4 重启后为空，必须由桌面端重新同步；本模块不访问任何持久化介质。
- * - 调用方：标定、READY 门禁、Rope Init 与上位机维护命令。
+ * - 调用方：标定、READY 门禁、Pull Joint into Workspace 与上位机维护命令。
  */
 #ifndef P4_MODULES_CALIBRATION_MANUAL_ENCODER_REFERENCE_STORE_H
 #define P4_MODULES_CALIBRATION_MANUAL_ENCODER_REFERENCE_STORE_H

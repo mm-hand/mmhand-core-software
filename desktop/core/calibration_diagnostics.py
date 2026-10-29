@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, Tuple
 
 from . import protocol
-from .safety_rules import explain_rope_init_reason
+from .safety_rules import explain_pull_joint_into_workspace_reason
 
 
 Formatter = Callable[[Tuple[int, int, int], int], str]
@@ -349,11 +349,11 @@ def format_calibration_batch_summary(records: list[dict]) -> dict:
         summary = record.get("warning_summary")
         if isinstance(summary, dict) and summary.get("ready"):
             details.append(str(summary.get("message", "")))
-        rope_reason = int(record.get("rope_init_reason", 0) or 0)
+        rope_reason = int(record.get("pull_joint_into_workspace_reason", 0) or 0)
         if str(record.get("status", "")) == "WARN" and rope_reason:
             details.append(
-                "Automatic Rope Init warning:\n- "
-                + explain_rope_init_reason(rope_reason)
+                "Automatic Pull Joint into Workspace warning:\n- "
+                + explain_pull_joint_into_workspace_reason(rope_reason)
             )
         key = "\n".join(details)
         if not details or key in seen:

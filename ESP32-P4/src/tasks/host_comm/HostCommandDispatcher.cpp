@@ -77,7 +77,7 @@ bool commandConflictsWithServoRebaseZero(uint8_t command)
     switch (command) {
         case CMD_START:
         case CMD_RUN_FEEDBACK:
-        case CMD_ROPE_INIT:
+        case CMD_PULL_JOINT_INTO_WORKSPACE:
         case CMD_MOTOR_POS_ABS:
         case CMD_ANGLE_CTRL:
         case CMD_CALIB_LOAD_JOINT:
@@ -203,7 +203,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
             (sharedData->system_state == SYSTEM_STATE_UNCONTROLLABLE ||
              sharedData->system_state == SYSTEM_STATE_IDLE ||
              sharedData->system_state == SYSTEM_STATE_READY ||
-             sharedData->system_state == SYSTEM_STATE_RECOVERY_REQUIRED);
+             sharedData->system_state == SYSTEM_STATE_JOINT_BEYOND_WORKSPACE);
         const uint8_t result = !idle || servoMaintenanceBlocksCommands() ? 2 :
             mmhand::control::applyParameterPayload(frame + 1, frameLen - 1) ? 0 : 1;
         if (result == 0) refreshLoadedLutLimits(sharedData, validMotorChannelMask());
@@ -218,7 +218,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
             (sharedData->system_state == SYSTEM_STATE_UNCONTROLLABLE ||
              sharedData->system_state == SYSTEM_STATE_IDLE ||
              sharedData->system_state == SYSTEM_STATE_READY ||
-             sharedData->system_state == SYSTEM_STATE_RECOVERY_REQUIRED);
+             sharedData->system_state == SYSTEM_STATE_JOINT_BEYOND_WORKSPACE);
         const uint8_t result = !idle || servoMaintenanceBlocksCommands() ? 2 :
             mmhand::control::applyRampParameterPayload(frame + 1, frameLen - 1) ? 0 : 1;
         sendControlParameterResult(1, result);
@@ -297,7 +297,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         return;
     }
 
-    if (cmd == CMD_ROPE_INIT)
+    if (cmd == CMD_PULL_JOINT_INTO_WORKSPACE)
     {
         const uint32_t requestedMask =
             readU32BigEndian(frame + 1) & kManualEncoderReferenceFullMask;
@@ -314,12 +314,12 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
             status = PROTO_ACK_STATUS_CALIBRATION_REQUIRED;
         } else if (sharedData->system_state != SYSTEM_STATE_IDLE &&
                    sharedData->system_state != SYSTEM_STATE_READY &&
-                   sharedData->system_state != SYSTEM_STATE_RECOVERY_REQUIRED) {
+                   sharedData->system_state != SYSTEM_STATE_JOINT_BEYOND_WORKSPACE) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-        } else if (!postSystemEvent(sharedData, SYSTEM_EVENT_ROPE_INIT)) {
+        } else if (!postSystemEvent(sharedData, SYSTEM_EVENT_PULL_JOINT_INTO_WORKSPACE)) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         }
-        sendProtoAckPacket(CMD_ROPE_INIT, sharedData->system_state, status);
+        sendProtoAckPacket(CMD_PULL_JOINT_INTO_WORKSPACE, sharedData->system_state, status);
         return;
     }
 
@@ -336,7 +336,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         const uint8_t state = sharedData->system_state;
         const bool ordinary = state == SYSTEM_STATE_RUN_DIRECT || state == SYSTEM_STATE_RUN_FEEDBACK;
         const bool idle = state == SYSTEM_STATE_UNCONTROLLABLE || state == SYSTEM_STATE_IDLE ||
-                          state == SYSTEM_STATE_READY || state == SYSTEM_STATE_RECOVERY_REQUIRED;
+                          state == SYSTEM_STATE_READY || state == SYSTEM_STATE_JOINT_BEYOND_WORKSPACE;
         const bool accepted = (ordinary || idle) &&
             (sharedData->servo_target_owner == SERVO_TARGET_OWNER_NONE ||
              sharedData->servo_target_owner == SERVO_TARGET_OWNER_CONTROL) &&
@@ -501,7 +501,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         const bool idle = state == SYSTEM_STATE_UNCONTROLLABLE ||
                           state == SYSTEM_STATE_IDLE ||
                           state == SYSTEM_STATE_READY ||
-                          state == SYSTEM_STATE_RECOVERY_REQUIRED;
+                          state == SYSTEM_STATE_JOINT_BEYOND_WORKSPACE;
         const uint32_t motorMask =
             frameLen >= 1 + kTrustMultiTurnPayloadBytes
                 ? (readU32BigEndian(frame + 1) & validMotorChannelMask())
@@ -540,7 +540,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else if (sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
                    sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
-                   sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING) {
+                   sharedData->system_state == SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else {
             const uint32_t updateMask =
@@ -597,7 +597,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
             status = PROTO_ACK_STATUS_INVALID_DATA;
         } else if (sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
                    sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
-                   sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING) {
+                   sharedData->system_state == SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else {
             const uint8_t* p = frame + 1;
@@ -802,7 +802,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
             sharedData->servo_target_owner != SERVO_TARGET_OWNER_NONE ||
             sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
             sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
-            sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING;
+            sharedData->system_state == SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING;
 
         if (motionActive) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
@@ -864,7 +864,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         uint8_t status = PROTO_ACK_STATUS_OK;
         if (sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
             sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
-            sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING) {
+            sharedData->system_state == SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else {
             {
@@ -896,7 +896,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         const uint32_t jointMask = jointMaskForMotorMask(motorMask);
         if (sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
             sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
-            sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING) {
+            sharedData->system_state == SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else if (motorMask == 0 || jointMask == 0 ||
                    (motorMask & ~restoredMask) != 0) {
@@ -950,7 +950,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                 state == SYSTEM_STATE_UNCONTROLLABLE ||
                 state == SYSTEM_STATE_IDLE ||
                 state == SYSTEM_STATE_READY ||
-                state == SYSTEM_STATE_RECOVERY_REQUIRED;
+                state == SYSTEM_STATE_JOINT_BEYOND_WORKSPACE;
             const uint32_t onlineMask =
                 sharedAtomicLoad(&sharedData->servo_online_bitmap);
             const uint32_t controllableMask =

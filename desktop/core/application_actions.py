@@ -39,19 +39,19 @@ from .protocol import (
     ControlMode, ENCODER_COUNT, MOTOR_COUNT, DUAL_TENDON_JOINT_INDICES, SYSTEM_STATE_UNCONTROLLABLE,
     VALID_MOTOR_MASK,
     SYSTEM_STATE_IDLE, SYSTEM_STATE_READY, SYSTEM_STATE_RUN_DIRECT,
-    SYSTEM_STATE_RUN_FEEDBACK, SYSTEM_STATE_ROPE_INIT_RUNNING,
-    SYSTEM_STATE_RECOVERY_REQUIRED,
+    SYSTEM_STATE_RUN_FEEDBACK, SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING,
+    SYSTEM_STATE_JOINT_BEYOND_WORKSPACE,
     STATE_SYNC_ALL,
     CMD_RESET, CMD_CONTROL_RELEASE, PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED,
-    SERVO_TARGET_OWNER_CONTROL,
+    SERVO_TARGET_OWNER_CONTROL, READY_WORKSPACE_TOLERANCE_DEG,
 )
 
 # 串口枚举在 Windows 上每次约 20-100ms；0.2s 轮询会持续占用 ~12% 单核。
 # 设备列表 1s 刷新一次即可满足人工连接操作，连接失败时随后快速重试。
 DEVICE_DISCOVERY_INTERVAL_S = 1.0
 
-# P4 收绳上限 20 s（RopeInitSafetyPolicy）；主机多留 5 s 等结果回写。
-ROPE_INIT_HOST_TIMEOUT_S = 25
+# P4 收绳上限 20 s（PullJointIntoWorkspaceSafetyPolicy）；主机多留 5 s 等结果回写。
+PULL_JOINT_INTO_WORKSPACE_HOST_TIMEOUT_S = 15
 
 # System 状态标签直接对应 P4 的 7 种状态；'Unknown' 只用于未列出的编号。
 _P4_STATE_DEVICE_LABELS = {
@@ -60,8 +60,8 @@ _P4_STATE_DEVICE_LABELS = {
     SYSTEM_STATE_READY: 'Ready',
     SYSTEM_STATE_RUN_DIRECT: 'Direct',
     SYSTEM_STATE_RUN_FEEDBACK: 'Running',
-    SYSTEM_STATE_ROPE_INIT_RUNNING: 'Rope Init',
-    SYSTEM_STATE_RECOVERY_REQUIRED: 'Recovery',
+    SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING: 'Pull Joint into Workspace',
+    SYSTEM_STATE_JOINT_BEYOND_WORKSPACE: 'Joint Beyond Workspace',
 }
 
 
@@ -244,7 +244,7 @@ class ApplicationActions(IdResetActions):
         if (self._application_busy or self._calibration_workflow.is_host_calibration_active() or
                 not self._fresh_application_state() or
                 state.control_enabled or state.servo_target_owner or
-                state.system_state not in (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE, SYSTEM_STATE_READY, SYSTEM_STATE_RECOVERY_REQUIRED)):
+                state.system_state not in (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE, SYSTEM_STATE_READY, SYSTEM_STATE_JOINT_BEYOND_WORKSPACE)):
             return
         self._control_parameter_sync = 'SYNCING'
         result = self.submit_operation('Apply Control Parameters', self._synchronize_control_parameters)
@@ -606,7 +606,7 @@ class ApplicationActions(IdResetActions):
         if self._estop_requested_at:
             return False, 'Device is stopped (E-STOP latched); use the top-right Clear Faults button first'
         allowed = (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE, SYSTEM_STATE_READY,
-                   SYSTEM_STATE_RECOVERY_REQUIRED)
+                   SYSTEM_STATE_JOINT_BEYOND_WORKSPACE)
         if not state.control_enabled and not state.servo_target_owner:
             return True, ''
         with self._application_lock:
@@ -637,14 +637,17 @@ class ApplicationActions(IdResetActions):
     def _prepare_maintenance_switch(self, epoch):
         """Automatically leave Feedback/Direct control before a maintenance action."""
         state = self.get_state_snapshot()
-        if self._estop_requested_at:
-            return False, 'Device is stopped (E-STOP latched); use the top-right Clear Faults button first'
+        if self._estop_requested_at or (not state.control_enabled and not state.servo_target_owner and (state.system_fault_bitmap or state.system_state == SYSTEM_STATE_UNCONTROLLABLE)):
+            ok, message = self._reset_for_operation(epoch)
+            if not ok:
+                return False, message
+            state = self.get_state_snapshot()
         if state.control_enabled or state.servo_target_owner:
             released, message = self._release_control_owner(epoch, purpose='maintenance switch')
             if not released:
                 return False, message
         allowed = (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE, SYSTEM_STATE_READY,
-                   SYSTEM_STATE_RECOVERY_REQUIRED)
+                   SYSTEM_STATE_JOINT_BEYOND_WORKSPACE)
         confirmed = self._wait_application(
             lambda s: self._fresh_application_state()
             and not s.control_enabled and not s.servo_target_owner
@@ -656,10 +659,13 @@ class ApplicationActions(IdResetActions):
 
     def _prepare_control_switch(self, epoch):
         state = self.get_state_snapshot()
-        if self._estop_requested_at:
-            return False, 'Clear Faults explicitly before enabling after STOP'
+        if self._estop_requested_at or (not state.control_enabled and not state.servo_target_owner and (state.system_fault_bitmap or state.system_state == SYSTEM_STATE_UNCONTROLLABLE)):
+            ok, message = self._reset_for_operation(epoch)
+            if not ok:
+                return False, message
+            state = self.get_state_snapshot()
         allowed = (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE, SYSTEM_STATE_READY,
-                   SYSTEM_STATE_RECOVERY_REQUIRED, SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK)
+                   SYSTEM_STATE_JOINT_BEYOND_WORKSPACE, SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK)
         if state.system_state not in allowed or state.servo_target_owner not in (0, SERVO_TARGET_OWNER_CONTROL):
             return False, 'A maintenance or recovery operation owns the device'
         if not state.control_enabled and not state.servo_target_owner:
@@ -736,7 +742,7 @@ class ApplicationActions(IdResetActions):
             ws_blocked, ws_clamped, ws_message = self._enable_holding_workspace(state, joints, mask)
             if (ws_blocked or ws_clamped) and ws_message:
                 details.append(ws_message)
-            return False, 'Enable preparation was not confirmed. ' + ('; '.join(details) if details else 'Check the P4 rejection reason; clear a latched STOP explicitly with Clear Faults.')
+            return False, 'Enable preparation was not confirmed. ' + ('; '.join(details) if details else 'Check the P4 rejection reason and retry after resolving it.')
         state = self.get_state_snapshot()
         if not self._mapped_feedback_fresh(state):
             return False, 'Enable blocked: current joint-angle feedback is stale or unavailable'
@@ -749,7 +755,8 @@ class ApplicationActions(IdResetActions):
                 return False, f'Enable blocked: J{joint:02d} current angle is invalid'
             values[joint] = value
         guarded, blocked, clamped, message = self._apply_joint_workspace_guard(
-            state, values, source='Enable', command_joint_mask=mask)
+            state, values, source='Enable', command_joint_mask=mask,
+            tolerance_deg=READY_WORKSPACE_TOLERANCE_DEG)
         if blocked or clamped:
             return False, 'Enable blocked: holding the current pose would require clamping. ' + (message or '')
         with self._application_lock:
@@ -769,7 +776,8 @@ class ApplicationActions(IdResetActions):
                     return False, f'Enable blocked: J{joint:02d} current angle is invalid'
                 values[joint] = encoder.current_angle_deg
             guarded, blocked, clamped, message = self._apply_joint_workspace_guard(
-                state, values, source='Enable', command_joint_mask=mask)
+                state, values, source='Enable', command_joint_mask=mask,
+                tolerance_deg=READY_WORKSPACE_TOLERANCE_DEG)
             if blocked or clamped:
 
                 return False, 'Enable blocked: current pose is outside the permitted workspace. ' + (message or '')
@@ -797,35 +805,36 @@ class ApplicationActions(IdResetActions):
                 continue
             values[joint] = encoder.current_angle_deg
         _, blocked, clamped, message = self._apply_joint_workspace_guard(
-            state, values, source='Enable', command_joint_mask=mask)
+            state, values, source='Enable', command_joint_mask=mask,
+            tolerance_deg=READY_WORKSPACE_TOLERANCE_DEG)
         return blocked, clamped, message
 
     def _recover_enable_workspace(self, joints, mask, epoch):
         """Enable 前把低于下界的关节拉回工作区；返回 (ok, failure_message)。
 
-        P4 的 Rope Init（0xE9）就是为此设计的动作：只收绳、20 秒超时、连续 3 帧
+        P4 的 Pull Joint into Workspace（0xE9）就是为此设计的动作：只收绳、20 秒超时、连续 3 帧
         进入工作区才算成功。这里不暴露给操作员，Enable 自动执行一次。
         """
         state = self.get_state_snapshot()
         blocked, clamped, message = self._enable_holding_workspace(state, joints, mask)
         if blocked or not clamped:
-            # 缺标定/映射问题 Rope Init 修不了；不越界则无需回正。
+            # 缺标定/映射问题 Pull Joint into Workspace 修不了；不越界则无需回正。
             return True, ''
         self._wait_application(
             lambda s: s.system_state in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY,
-                                        SYSTEM_STATE_RECOVERY_REQUIRED),
+                                        SYSTEM_STATE_JOINT_BEYOND_WORKSPACE),
             epoch, 1)
-        baseline = int(self.get_state_snapshot().rope_init_sequence)
-        if not self.rope_init(mask):
+        baseline = int(self.get_state_snapshot().pull_joint_into_workspace_sequence)
+        if not self.pull_joint_into_workspace(mask):
             return False, f'Enable blocked: {message}. Automatic recovery was not accepted by the P4.'
         if not self._wait_application(
-                lambda s: s.rope_init_sequence != baseline and s.rope_init_status in (2, 3),
-                epoch, ROPE_INIT_HOST_TIMEOUT_S):
+                lambda s: s.pull_joint_into_workspace_sequence != baseline and s.pull_joint_into_workspace_status in (2, 3),
+                epoch, PULL_JOINT_INTO_WORKSPACE_HOST_TIMEOUT_S):
             return False, (f'Enable blocked: {message}. Automatic recovery did not finish '
-                           f'within {ROPE_INIT_HOST_TIMEOUT_S:.0f} s.')
+                           f'within {PULL_JOINT_INTO_WORKSPACE_HOST_TIMEOUT_S:.0f} s.')
         state = self.get_state_snapshot()
-        if int(state.rope_init_status) != 2:
-            reason = int(state.rope_init_reason)
+        if int(state.pull_joint_into_workspace_status) != 2:
+            reason = int(state.pull_joint_into_workspace_reason)
             return False, IssueMessage(f'Enable blocked: {message}. Automatic recovery failed '
                 f'(P4 reason={reason}).', f'ROP-{3400 + reason}' if 1 <= reason <= 9 else 'HOST_ACTION_FAILED')
         blocked, clamped, message = self._enable_holding_workspace(state, joints, mask)
@@ -851,34 +860,48 @@ class ApplicationActions(IdResetActions):
         return OperationResult(True, None, self._last_operation_message)
 
     def request_clear_faults(self):
-        def reset(epoch):
-            sent_at = time.monotonic()
-            with self._application_lock:
-                if epoch != self._application_epoch:
-                    return False, 'Fault clear cancelled'
-                self.reset()
-            ack = self.comm.wait_for_ack(CMD_RESET, timeout_s=1, received_after_monotonic=sent_at)
-            if not ack or ack[2] not in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED):
-                return False, 'P4 did not acknowledge RESET. STOP remains pending; check the connection and Diagnostics.'
-            # Live offline/unknown-position faults can immediately recur after
-            # RESET. They do not mean the explicit STOP request is still latched.
-            ok = self._wait_application(lambda s: self.is_comm_connected()
-                                        and s.has_system_status_data
-                                        and s.received_at('system_status_last_rx_ts') >= sent_at
-                                        and 0 <= time.monotonic() - s.received_at('system_status_last_rx_ts') <= 0.6
-                                        and not s.control_enabled and not s.servo_target_owner, epoch)
-            if not ok:
-                return False, 'RESET acknowledged, but a fresh stationary P4 status was not confirmed. Check Diagnostics.'
-            with self._application_lock:
-                if epoch != self._application_epoch:
-                    return False, 'Fault clear cancelled by a new STOP'
-                self._estop_requested_at = 0
-            state = self.get_state_snapshot()
-            if state.system_fault_bitmap:
-                return True, (f'RESET acknowledged; live hardware faults remain (0x{state.system_fault_bitmap:08X}). '
-                              'Check Diagnostics and the selected scope. Motion remains disabled.')
-            return True, 'RESET acknowledged; motion remains disabled. Enable explicitly after checking device readiness.'
-        return self.submit_operation('Clear Faults', reset)
+        return self.submit_operation('Clear Faults', self._reset_for_operation)
+
+    def _reset_for_operation(self, epoch):
+        sent_at = time.monotonic()
+        log_session('RESET_DIAG', f'start epoch={epoch} monotonic={sent_at:.6f}')
+        with self._application_lock:
+            if epoch != self._application_epoch:
+                log_session('RESET_DIAG', f'cancelled before send epoch={epoch} current_epoch={self._application_epoch}')
+                return False, 'Fault clear cancelled'
+            self.reset()
+        ack = self.comm.wait_for_ack(CMD_RESET, timeout_s=1, received_after_monotonic=sent_at)
+        log_session('RESET_DIAG', f'ack={ack!r} elapsed_ms={(time.monotonic() - sent_at) * 1000:.0f} epoch={epoch} current_epoch={self._application_epoch}')
+        if not ack or ack[2] not in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED):
+            return False, 'P4 did not acknowledge RESET. STOP remains pending; check the connection and Diagnostics.'
+        # Live offline/unknown-position faults can immediately recur after
+        # RESET. They do not mean the explicit STOP request is still latched.
+        ok = self._wait_application(lambda s: self.is_comm_connected()
+                                    and s.has_system_status_data
+                                    and s.received_at('system_status_last_rx_ts') >= sent_at
+                                    and 0 <= time.monotonic() - s.received_at('system_status_last_rx_ts') <= 0.6
+                                    and not s.control_enabled and not s.servo_target_owner, epoch)
+        state = self.get_state_snapshot()
+        received = state.received_at('system_status_last_rx_ts')
+        now = time.monotonic()
+        log_session('RESET_DIAG',
+                    f'confirmed={ok} elapsed_ms={(now - sent_at) * 1000:.0f} '
+                    f'epoch={epoch} current_epoch={self._application_epoch} connected={self.is_comm_connected()} '
+                    f'has_status={state.has_system_status_data} status_rx={received:.6f} '
+                    f'status_after_send={received >= sent_at} status_age_ms={(now - received) * 1000:.0f} '
+                    f'state={state.system_state} enabled={state.control_enabled} owner={state.servo_target_owner} '
+                    f'fault=0x{int(state.system_fault_bitmap):08X}')
+        if not ok:
+            return False, 'RESET acknowledged, but a fresh stationary P4 status was not confirmed. Check Diagnostics.'
+        with self._application_lock:
+            if epoch != self._application_epoch:
+                return False, 'Fault clear cancelled by a new STOP'
+            self._estop_requested_at = 0
+        state = self.get_state_snapshot()
+        if state.system_fault_bitmap:
+            return True, (f'RESET acknowledged; live hardware faults remain (0x{state.system_fault_bitmap:08X}). '
+                          'Check Diagnostics and the selected scope. Motion remains disabled.')
+        return True, 'RESET acknowledged; motion remains disabled. Enable explicitly after checking device readiness.'
 
     def request_pose(self, targets, *, joint_mask=None):
         values = list(targets)
@@ -968,8 +991,8 @@ class ApplicationActions(IdResetActions):
                     or p4_age > 300 or not 0 <= encoder.raw_sensor < 16384):
                 return False, f'J{joint:02d} raw feedback is invalid or stale. Check the encoder before capturing.'
             current = self.get_state_snapshot()
-            if (state.control_enabled or state.servo_target_owner or state.system_state == SYSTEM_STATE_ROPE_INIT_RUNNING
-                    or current.control_enabled or current.servo_target_owner or current.system_state == SYSTEM_STATE_ROPE_INIT_RUNNING):
+            if (state.control_enabled or state.servo_target_owner or state.system_state == SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING
+                    or current.control_enabled or current.servo_target_owner or current.system_state == SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING):
                 return False, 'Press STOP and wait until P4 is stationary before capturing Manual endpoints.'
             with self._application_lock:
                 if epoch != self._application_epoch:
@@ -1050,9 +1073,6 @@ class ApplicationActions(IdResetActions):
             if self._application_busy or self._calibration_workflow.is_host_calibration_active():
                 return OperationResult(False, None, 'The current operation is still finishing')
             state = self.get_state_snapshot()
-            if self._estop_requested_at:
-                return OperationResult(False, None,
-                    'Device is stopped (E-STOP latched); use the top-right Clear Faults button first')
             joints = self._selected_joints
             mask = sum(1 << j for j in joints)
             if not mask or not self._fresh_application_state():
@@ -1100,12 +1120,9 @@ class ApplicationActions(IdResetActions):
                     with self._application_lock:
                         self._calibration_operation_id = None
 
-            if state.control_enabled or state.servo_target_owner:
-                threading.Thread(
-                    target=start_calibration, name='mmhand-calibration-prepare',
-                    daemon=True).start()
-            else:
-                start_calibration()
+            threading.Thread(
+                target=start_calibration, name='mmhand-calibration-prepare',
+                daemon=True).start()
             return OperationResult(True, operation_id, 'Selected-joint calibration accepted')
 
     def _application_calibration_event(self, event):
@@ -1279,7 +1296,7 @@ class ApplicationActions(IdResetActions):
                     return False, 'ABS zero requires fresh status and online, unambiguous selected motors'
 
                 stopped_states = (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE,
-                                  SYSTEM_STATE_READY, SYSTEM_STATE_RECOVERY_REQUIRED)
+                                  SYSTEM_STATE_READY, SYSTEM_STATE_JOINT_BEYOND_WORKSPACE)
 
                 def stop_outputs():
                     self._controller.invalidate_direct_commands()
@@ -1301,7 +1318,7 @@ class ApplicationActions(IdResetActions):
                     and s.received_at('system_status_last_rx_ts') >= stopped_at
                     and not s.control_enabled and not s.servo_target_owner
                     and s.system_state in (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE,
-                                           SYSTEM_STATE_READY, SYSTEM_STATE_RECOVERY_REQUIRED),
+                                           SYSTEM_STATE_READY, SYSTEM_STATE_JOINT_BEYOND_WORKSPACE),
                     epoch,
                 )
                 if not stopped or cancelled():
@@ -1442,9 +1459,6 @@ class ApplicationActions(IdResetActions):
             state = self.get_state_snapshot()
             if not preview or self._application_busy or not self._fresh_application_state():
                 return OperationResult(False, None, 'Import requires a validated file and fresh, idle P4 connection')
-            if self._estop_requested_at:
-                return OperationResult(False, None,
-                    'Device is stopped (E-STOP latched); use the top-right Clear Faults button first')
             if self._controller._applied_output_margins is None:
                 return OperationResult(False, None, IssueMessage('Control parameters are not applied. Wait for parameter synchronization before loading calibration.', 'HOST_PARAMETERS_PENDING'))
             operation_id = uuid4().hex[:12]
@@ -1478,10 +1492,7 @@ class ApplicationActions(IdResetActions):
                     with self._application_lock:
                         self._import_operation_id = None
 
-            if state.control_enabled or state.servo_target_owner:
-                threading.Thread(target=start_import, name='mmhand-import-prepare', daemon=True).start()
-            else:
-                start_import()
+            threading.Thread(target=start_import, name='mmhand-import-prepare', daemon=True).start()
             return OperationResult(True, operation_id, 'Calibration import started')
 
     def _application_direct(self, targets, epoch):
@@ -1650,7 +1661,7 @@ class ApplicationActions(IdResetActions):
         elif state.control_enabled and state.servo_target_owner and state.system_state in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK):
             device = 'Controlling'
         else:
-            # P4 的状态直说，不再把 Stopped/Idle/Rope Init/Recovery 压成同一个
+            # P4 的状态直说，不再把 Stopped/Idle/Pull Joint into Workspace/Recovery 压成同一个
             # 'Disabled'——那会让"急停锁死"看起来像正常待机。
             device = _P4_STATE_DEVICE_LABELS.get(int(state.system_state), 'Unknown')
         problems = []

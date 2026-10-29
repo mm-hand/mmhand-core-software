@@ -74,19 +74,19 @@ SafetyRuleId ruleForFeedbackReadyRejectReason(uint8_t reason)
     }
 }
 
-SafetyRuleId ruleForRopeInitReason(uint8_t reason)
+SafetyRuleId ruleForPullJointIntoWorkspaceReason(uint8_t reason)
 {
     switch (reason) {
-        case ROPE_INIT_REASON_NONE: return SafetyRuleId::None;
-        case ROPE_INIT_REASON_TIMEOUT: return SafetyRuleId::RopeInitTimeout;
-        case ROPE_INIT_REASON_FEEDBACK_STALE: return SafetyRuleId::RopeInitFeedbackStale;
-        case ROPE_INIT_REASON_SERVO_OFFLINE: return SafetyRuleId::RopeInitServoOffline;
-        case ROPE_INIT_REASON_MULTITURN_UNKNOWN: return SafetyRuleId::RopeInitMultiTurnUnknown;
-        case ROPE_INIT_REASON_MANUAL_REQUIRED: return SafetyRuleId::RopeInitManualRequired;
-        case ROPE_INIT_REASON_AUTO_REQUIRED: return SafetyRuleId::RopeInitAutoRequired;
-        case ROPE_INIT_REASON_TARGET_PUBLISH_FAILED: return SafetyRuleId::RopeInitTargetPublishFailed;
-        case ROPE_INIT_REASON_SYSTEM_FAULT: return SafetyRuleId::RopeInitSystemFault;
-        case ROPE_INIT_REASON_CANCELLED: return SafetyRuleId::RopeInitCancelled;
+        case PULL_JOINT_INTO_WORKSPACE_REASON_NONE: return SafetyRuleId::None;
+        case PULL_JOINT_INTO_WORKSPACE_REASON_TIMEOUT: return SafetyRuleId::PullJointIntoWorkspaceTimeout;
+        case PULL_JOINT_INTO_WORKSPACE_REASON_FEEDBACK_STALE: return SafetyRuleId::PullJointIntoWorkspaceFeedbackStale;
+        case PULL_JOINT_INTO_WORKSPACE_REASON_SERVO_OFFLINE: return SafetyRuleId::PullJointIntoWorkspaceServoOffline;
+        case PULL_JOINT_INTO_WORKSPACE_REASON_MULTITURN_UNKNOWN: return SafetyRuleId::PullJointIntoWorkspaceMultiTurnUnknown;
+        case PULL_JOINT_INTO_WORKSPACE_REASON_MANUAL_REQUIRED: return SafetyRuleId::PullJointIntoWorkspaceManualRequired;
+        case PULL_JOINT_INTO_WORKSPACE_REASON_AUTO_REQUIRED: return SafetyRuleId::PullJointIntoWorkspaceAutoRequired;
+        case PULL_JOINT_INTO_WORKSPACE_REASON_TARGET_PUBLISH_FAILED: return SafetyRuleId::PullJointIntoWorkspaceTargetPublishFailed;
+        case PULL_JOINT_INTO_WORKSPACE_REASON_SYSTEM_FAULT: return SafetyRuleId::PullJointIntoWorkspaceSystemFault;
+        case PULL_JOINT_INTO_WORKSPACE_REASON_CANCELLED: return SafetyRuleId::PullJointIntoWorkspaceCancelled;
         default: return SafetyRuleId::None;
     }
 }

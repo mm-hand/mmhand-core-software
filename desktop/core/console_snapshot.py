@@ -24,11 +24,12 @@ from .protocol import (
     ServoOnlineCheck,
     DUAL_TENDON_JOINT_INDICES, ControlMode, SERVO_TARGET_OWNER_CONTROL,
     SYSTEM_STATE_RUN_FEEDBACK, SYSTEM_STATE_RUN_DIRECT,
+    SYSTEM_STATE_JOINT_BEYOND_WORKSPACE,
 )
 
 _SYSTEM_STATE_LABELS = {
     0: 'Stopped', 1: 'Idle', 2: 'Running', 4: 'Retired Calib',
-    5: 'Ready', 6: 'Direct', 8: 'Rope Init', 9: 'Recovery',
+    5: 'Ready', 6: 'Direct', 8: 'Pull Joint into Workspace', 9: 'Joint Beyond Workspace',
 }
 
 
@@ -151,6 +152,8 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
         row['feedback_control_status'] = ('UNKNOWN' if not control_known else
             'ENABLED' if feedback_active and state.active_joint_mask & (1 << j) else 'DISABLED')
         row['collision_detected'] = bool(fresh and state.feedback_collision_hold_bitmap & (1 << j))
+        row['angle_out_of_workspace'] = bool(
+            fresh and getattr(state.encoders[j], 'angle_out_of_workspace', False))
         result = state.joint_calib_results[j] or {}
         minimum, maximum = draft.get('min', row['manual_min']), draft.get('max', row['manual_max'])
         span = forward_encoder_delta(minimum, maximum) if row['manual_valid'] or {'min', 'max'} <= draft.keys() else None
@@ -196,6 +199,9 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
             if lo <= hi:
                 limits = [lo, hi]
         row.update(joint=MOTOR_TO_JOINT_INDEX[m], limits=limits,
+                   motor_beyond_workspace=bool(
+                       fresh and limits is not None and row.get('abs') is not None
+                       and not (limits[0] <= row['abs'] <= limits[1])),
                    bus=state.servo_route_bus[m] if fresh and state.has_servo_route_status else None,
                    route=state.servo_route_state[m] if fresh and state.has_servo_route_status else None)
     snapshot['selected_motors'] = list(hand._selected_motors)
@@ -232,6 +238,13 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
         'P4': p4_state_badge(state, hand, fresh),
         'Overload': 'ACTIVE' if fault_fresh and any(state.servo_overload_fault) or fresh and state.has_servo_route_status and state.servo_bus_overload_mask else 'CLEAR' if fault_fresh and state.has_servo_route_status else 'UNKNOWN',
         'Collision': 'HOLD' if fresh and state.feedback_collision_hold_bitmap else 'ARMED' if fresh and state.feedback_collision_armed_bitmap else 'OFF' if fresh and state.has_feedback_collision_status else 'UNKNOWN',
+        'Joint workspace': 'BEYOND' if fresh and (
+            int(getattr(state, 'system_state', -1)) == SYSTEM_STATE_JOINT_BEYOND_WORKSPACE or
+            any(getattr(encoder, 'angle_out_of_workspace', False)
+                for encoder in getattr(state, 'encoders', []))) else 'CLEAR' if fresh else 'UNKNOWN',
+        'Motor workspace': 'BEYOND' if fresh and any(
+            row.get('motor_beyond_workspace') for row in snapshot['motors']
+        ) else 'CLEAR' if fresh else 'UNKNOWN',
         'Multi-turn': 'UNKNOWN' if not fresh or not state.has_connectivity_status or not state.servo_online_bitmap else 'MISSING' if state.multi_turn_unknown_bitmap & state.servo_online_bitmap else 'KNOWN'}
     snapshot['direct_zero_required'] = direct_zero_required(state, fresh)
     snapshot['motor_firmware_device'] = state.product_fingerprint.get('device_id', '')

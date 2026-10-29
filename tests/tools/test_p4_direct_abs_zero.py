@@ -225,7 +225,7 @@ static void run(const std::string& name) {
     }
     if (name == "pending_blocks_motion") {
         ++f.runtime.servo_rebase_zero_request_token;
-        for (uint8_t command : {CMD_START, CMD_RUN_FEEDBACK, CMD_ROPE_INIT,
+        for (uint8_t command : {CMD_START, CMD_RUN_FEEDBACK, CMD_PULL_JOINT_INTO_WORKSPACE,
                                CMD_MOTOR_POS_ABS, CMD_ANGLE_CTRL,
                                CMD_CALIB_LOAD_JOINT, CMD_CALIB_LOAD_LIMITS}) {
             acks.clear();

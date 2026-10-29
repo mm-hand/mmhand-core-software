@@ -34,20 +34,18 @@ static_assert(MAX_SERVOS_PER_BUS * (15U + 6U) <= 256U,
               "12-servo sync-read response exceeds protocol buffer");
 
 inline constexpr uint32_t kMultiTurnConfigDelayMs = 5; ///< EEPROM 写入和 Reset 后等待时间。
-inline constexpr uint8_t kOfflineInvalidateMisses = 3; ///< 连续读失败达到此值才判离线。
+inline constexpr uint8_t kOfflineInvalidateMisses = 10; ///< 连续读失败达到此值才判离线。
 /** 同一 BUS/ID 的反馈失败文本最多每5秒一条，避免离线重扫刷屏。 */
 inline constexpr uint32_t kFeedbackFailureLogIntervalMs = 5000;
 /**
  * 即使扫描或恢复流程没有累计同步读失败，反馈超过该时间未刷新也必须判离线。
- * 正常情况下四条 BUS 都在每个10 ms轮次更新；80 ms覆盖八个反馈周期，既允许
+ * 正常情况下四条 BUS 都在每个10 ms轮次更新；100 ms覆盖十个反馈周期，既允许
  * 短暂调度抖动，又能避免快速掉电重启长期沿用旧 hardware ABS 会话。
  */
-inline constexpr uint32_t kFeedbackStaleTimeoutMs = 80;
-// 坐标维护可能占用UART；正常反馈恢复前保留一个stale周期的宽限。
-// 事务结束后预留一个 stale 周期，使四条 BUS 先各完成一次正常同步读，避免
+inline constexpr uint32_t kFeedbackStaleTimeoutMs = 100;
+// 坐标维护可能占用UART；事务结束后预留 80 ms，使四条 BUS 先各完成一次正常同步读，避免
 // 把维护操作自身造成的轮询间隔误判为舵机掉电。
-inline constexpr uint32_t kFeedbackMaintenanceGraceMs =
-    kFeedbackStaleTimeoutMs;
+inline constexpr uint32_t kFeedbackMaintenanceGraceMs = 80;
 /** 重新发现舵机后必须连续成功三帧，正常约30 ms，才重新发布online。 */
 inline constexpr uint8_t kOnlineConfirmReads = 3;
 inline constexpr uint16_t kDiscoveryProbeTimeoutMs = 2; ///< 动态 BUS 探测单次最长阻塞时间。

@@ -59,7 +59,7 @@ FeedbackReadinessDecision evaluateFeedbackReadiness(
     SystemRuntimeContext* runtime,
     uint32_t nowMs);
 
-/** Rope Init 成功后，将 active joints 登记为已进入当前标定工作空间。 */
+/** Pull Joint into Workspace 成功后，将 active joints 登记为已进入当前标定工作空间。 */
 void markActiveJointsWorkspaceReady(SystemRuntimeContext* runtime);
 
 } // namespace p4::state

@@ -199,16 +199,16 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
     const float velocityAlpha = 1.0f - expf(-(float)(targetDtMs > 100 ? 100 : targetDtMs) * 0.001f / 0.1f);
     state.targetVelocity += velocityAlpha * (rawTargetVelocity - state.targetVelocity);
     state.lastTargetMs = now;
-    // D term uses the measured joint velocity only; a target step must not create
-    // a derivative kick. The 20 ms fast mean already rejects most encoder jitter;
-    // this first-order low-pass plus hard rate limit rejects the rest.
+    // Differentiate tracking error at fresh feedback samples. Limit and filter the
+    // resulting rate, including target steps, before applying the D gain.
     float derivativeRate = 0.0f;
     const bool derivativeFresh = fb.fresh && fb.sampleDt > 0.0f;
     if (derivativeFresh) {
         if (state.lastFastValid) {
             const uint32_t elapsed = now - state.lastFastMs;
             if (elapsed >= 1 && elapsed <= 100) {
-                float rate = (fb.fast - state.lastFast) * 1000.0f / (float)elapsed;
+                float rate = ((target - state.lastDerivativeTarget) -
+                              (fb.fast - state.lastFast)) * 1000.0f / (float)elapsed;
                 rate = clip(rate, -kFeedbackDerivativeLimitDegPerS, kFeedbackDerivativeLimitDegPerS);
                 const float alpha = (float)elapsed / (kFeedbackDerivativeFilterMs + (float)elapsed);
                 state.derivativeFiltered += alpha * (rate - state.derivativeFiltered);
@@ -218,6 +218,7 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
             }
         }
         state.lastFast = fb.fast;
+        state.lastDerivativeTarget = target;
         state.lastFastMs = now;
         state.lastFastValid = true;
     } else {
@@ -304,7 +305,7 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
         // D acts only during plain tracking; take-up and pending reversal must not
         // be biased by a stale or target-induced velocity.
         out.derivative[i] = (state.phase == Tracking && derivativeRate != 0.0f)
-            ? -kd * slope[i] * derivativeRate : 0.0f;
+            ? kd * slope[i] * derivativeRate : 0.0f;
         raw[i] = measured[i] + out.proportional[i] + state.integral[i] + out.derivative[i];
         if (state.phase == Takeup && takeupB > 0.0f) {
             // PDF Eq.(7): b_i is an additive winding bias on top of PI, growing

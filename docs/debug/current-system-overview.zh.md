@@ -81,7 +81,7 @@ C:/Users/73547/mmhand/
 │     └─ tasks/
 │        ├─ host_comm/              解帧、命令分发、ACK和遥测
 │        ├─ s3_can_rx/              CAN重组、CRC、编码器健康
-│        ├─ system_state/           状态机、Direct准入、Rope Init、故障仲裁
+│        ├─ system_state/           状态机、Direct准入、Pull Joint into Workspace、故障仲裁
 │        ├─ motion_control/         控制调度、LUT/反馈读取、批次输出
 │        ├─ servo_bus/              四路UART唯一执行者、反馈、维护改号
 │        └─ runtime_monitor/        任务耗时、周期、栈与负载统计
@@ -274,7 +274,7 @@ selector=`finger_bus×3+pageID`，共0–14；手指顺序Little/Ring/Middle/Ind
 | 任务 | 名义周期 | 优先级 | 栈传入值，字节 | 主要职责 |
 |---|---|---:|---:|---|
 | hostCommTask | RX事件唤醒，5ms兜底；常规遥测最多100Hz | 2 | 8192 | 串口解码、派发、ACK与上行 |
-| systemStateTask | 10ms并可事件提前唤醒 | 5 | 4096 | 安全状态机、owner、STOP、Direct/Feedback准入、Rope Init |
+| systemStateTask | 10ms并可事件提前唤醒 | 5 | 4096 | 安全状态机、owner、STOP、Direct/Feedback准入、Pull Joint into Workspace |
 | s3CanRxTask | 1ms循环 | 3 | 4096 | CAN读包、CRC重组、健康、最新快照 |
 | servoBusTask | 10ms服务，加约3ms反馈收集点和通知唤醒 | 3 | 6144 | 四总线唯一I/O拥有者、目标执行、反馈、维护会话 |
 | motionControlTask | 约10ms；目标/授权变化可提前唤醒 | 4 | 8192 | 快慢均值、PI/换向/配对恢复、输出约束和批次发布 |
@@ -328,7 +328,7 @@ S3维护等待者→独立USB发送      S3 RX→触觉解析/维护token匹配
 - 用户操作、校准导入和主机自动标定通过工作线程/串行执行器推进；标定执行器max_workers=1。
 - ROS2 executor、Replay调度和录制/写盘是独立后台工作，均经同一个后端授权边界；STOP撤销旧输入授权和待执行目标，不自动恢复。
 - q_fast/q_slow在P4按有效样本时间戳做20ms/500ms滑动窗口均值。ROS2的One Euro+静止锚点只在上位机输入链执行，GUI/Replay不重复套该滤波。
-- 当前默认五组 Kp（按关节类型）：AA=1.3、MCP=1.3、PIP=1.0、DIP=1.3、CMC=1.0；Kd AA=0.08、MCP=0.02，其余 0；Ki 按 AA/MCP/PIP/DIP/CMC 五组，默认全 0。积分限幅/噪声/确认时间统一放在 Ki 组，单双腱共用一个限幅。目标基底为实测电机位置，不是LUT名义目标位置。双绳额外使用k_pair×正交偏差；D 项使用测量速度（20 ms 快窗差分，25 ms 一阶低通、±400°/s 限幅，仅在 Tracking 相位生效），没有目标速度前馈、旧误差分段Kp或积分泄露。
+- 当前默认五组 Kp（按关节类型）：AA=1.3、MCP=1.3、PIP=1.0、DIP=1.3、CMC=1.0；Kd AA=0.08、MCP=0.02，其余 0；Ki 按 AA/MCP/PIP/DIP/CMC 五组，默认全 0。积分限幅/噪声/确认时间统一放在 Ki 组，单双腱共用一个限幅。目标基底为实测电机位置，不是LUT名义目标位置。双绳额外使用k_pair×正交偏差；D 项为 Kd×LUT中段斜率×误差变化率，误差使用目标角减快窗实测角，在新鲜反馈时差分后限幅 ±400°/s、经 25 ms 一阶低通，仅在 Tracking 相位生效。目标阶跃会产生 D 项；既有 Kd 需要重新验证。没有旧误差分段Kp或积分泄露。
 
 ## 7. 当前GUI：5主页面，11个叶子视图
 
@@ -356,7 +356,7 @@ S3维护等待者→独立USB发送      S3 RX→触觉解析/维护token匹配
 
 ## 8. 保留的内部机制和当前限制
 
-- 没有Pause、resume或Exit Control按钮；F6普通owner释放、F2特定Direct事务释放、CC就绪、E9 Rope Init仍是当前流程的内部原语，不是旧Pause功能改名。
+- 没有Pause、resume或Exit Control按钮；F6普通owner释放、F2特定Direct事务释放、CC就绪、E9 Pull Joint into Workspace仍是当前流程的内部原语，不是旧Pause功能改名。
 - CAN全量触觉调试代码仍在，默认关；不是已删除的历史触觉USB分片格式兼容。
 - `.debug`保留过往恢复/试验脚本和日志，不属于运行入口或源代码规模；这些旧脚本不应当作最新固件的规范用法。
 - 当前P4 USB可靠性还依赖所用SDK的FIFO直接写修补。`tools/debug/build_debug.ps1`自动校验/应用；通过Arduino IDE编译也需先执行相同前置步骤。原始SDK头文件已有旁路备份。此依赖已写入`docs/debug/esp32-jtag-debugging.md`。
@@ -387,7 +387,7 @@ S3维护等待者→独立USB发送      S3 RX→触觉解析/维护token匹配
 | 0xE6 | CMD_MANUAL_ENCODER_REFERENCE | 85 | 写入或清除 21 组 Manual Min/Max 原始磁编值 |
 | 0xE7 | CMD_MANUAL_ENCODER_QUERY | 0 | 请求 P4 立即回传 Manual 标定表 |
 | 0xE8 | CMD_MANUAL_ENCODER_SINGLE | 5 | 写入单个 Jxx 的 Manual Min/Max |
-| 0xE9 | CMD_ROPE_INIT | 4 | 按 21 位关节掩码启动 P4 Rope Init |
+| 0xE9 | CMD_PULL_JOINT_INTO_WORKSPACE | 4 | 按 21 位关节掩码启动 P4 Pull Joint into Workspace |
 | 0xEA | CMD_ANGLE_CTRL_MASKED | 88 | 按关节掩码下发稀疏关节目标角 |
 | 0xEB | CMD_CLEAR_CALIBRATION_SCOPE | 4 | 按电机位图清除关联关节 Auto/LUT |
 | 0xED | CMD_STATE_SYNC_REQUEST | 4 | 按位请求静态状态、标定快照、路由和产品指纹 |

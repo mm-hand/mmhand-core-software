@@ -12,7 +12,7 @@
 #include "HostLeaseSupervisor.h"
 #include "../../safety/policies/SystemReadinessPolicy.h"
 #include "../../safety/policies/SystemFaultPolicy.h"
-#include "RopeInitController.h"
+#include "PullJointIntoWorkspaceController.h"
 #include "../../system/ActuatorCommandGateway.h"
 #include "../../system/calibration/CalibrationMath.h"
 #include "../../system/calibration/CalibrationRuntimeStore.h"
@@ -235,10 +235,10 @@ void enterFaultHold(SystemRuntimeContext* sharedData, uint32_t faultBits)
     }
     sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
     sharedData->control_enabled = 0;
-    if (interruptedState == SYSTEM_STATE_ROPE_INIT_RUNNING) {
-        sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
-        sharedData->rope_init_reason = ROPE_INIT_REASON_SYSTEM_FAULT;
-        sharedData->rope_init_timestamp = p4::platform::time::monotonicMillis();
+    if (interruptedState == SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING) {
+        sharedData->pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED;
+        sharedData->pull_joint_into_workspace_reason = PULL_JOINT_INTO_WORKSPACE_REASON_SYSTEM_FAULT;
+        sharedData->pull_joint_into_workspace_timestamp = p4::platform::time::monotonicMillis();
     }
     requestServoEmergencyTorqueOff(sharedData);
     setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
@@ -264,7 +264,7 @@ static void resetControlProtectionFaults(SystemRuntimeContext* sharedData)
 // 反馈 READY 的总门禁：
 // 1) 当前 active joints 必须有 Manual、Auto v3、有效磁编映射和舵机 ABS 限位；
 // 2) 磁编/CAN/舵机反馈必须在线且新鲜，多圈状态必须可信；
-// 3) READY 只由工作空间下边界决定：低于 Auto Min 时进入 RECOVERY_REQUIRED，
+// 3) READY 只由工作空间下边界决定：低于 Auto Min 时进入 JOINT_BEYOND_WORKSPACE，
 //    上边界越界只由控制层限制目标并记录警告，不在这里强制退出 READY；
 // 4) 24/48 counts 迟滞和连续三帧确认用于消除边界抖动。
 static bool activeJointsInControlWorkspace(SystemRuntimeContext* sharedData,
@@ -337,7 +337,7 @@ static bool feedbackTargetsPointIntoWorkspace(SystemRuntimeContext* sharedData)
     return safe;
 }
 
-static bool beginRopeInitMotion(SystemRuntimeContext* sharedData,
+static bool beginPullJointIntoWorkspaceMotion(SystemRuntimeContext* sharedData,
                                 bool feedbackRecovery,
                                 uint32_t feedbackRequestSequence,
                                 uint32_t servoMaintenanceToken)
@@ -345,31 +345,31 @@ static bool beginRopeInitMotion(SystemRuntimeContext* sharedData,
     if (!sharedData) {
         return false;
     }
-    // 保留 Rope Init 的既有输出所有权编号，运行态由独立状态表示。
-    p4::platform::rtos::atomicAddFetch(&sharedData->rope_init_sequence,
+    // 保留 Pull Joint into Workspace 的既有输出所有权编号，运行态由独立状态表示。
+    p4::platform::rtos::atomicAddFetch(&sharedData->pull_joint_into_workspace_sequence,
                                  (uint32_t)1);
-    sharedData->rope_init_joint_mask =
+    sharedData->pull_joint_into_workspace_joint_mask =
         sharedAtomicLoad(&sharedData->active_joint_mask) &
         kManualEncoderReferenceFullMask;
-    sharedData->rope_init_timestamp = p4::platform::time::monotonicMillis();
+    sharedData->pull_joint_into_workspace_timestamp = p4::platform::time::monotonicMillis();
     resetServoTargetQueue(sharedData);
     if (!grantMotionOwnerUnlessServoRebaseZeroPending(
             sharedData, SERVO_TARGET_OWNER_CALIBRATION, 0,
-            SYSTEM_STATE_ROPE_INIT_RUNNING, servoMaintenanceToken)) {
+            SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING, servoMaintenanceToken)) {
         return false;
     }
-    sharedData->rope_init_status = ROPE_INIT_STATUS_RUNNING;
-    sharedData->rope_init_reason = ROPE_INIT_REASON_NONE;
+    sharedData->pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_RUNNING;
+    sharedData->pull_joint_into_workspace_reason = PULL_JOINT_INTO_WORKSPACE_REASON_NONE;
     sharedAtomicStore(&sharedData->feedback_recovery_pending,
                       (uint8_t)(feedbackRecovery ? 1U : 0U));
     sharedAtomicStore(&sharedData->feedback_recovery_request_sequence,
                       feedbackRecovery ? feedbackRequestSequence : 0U);
     setCommandModeDirect(sharedData);
-    setSystemState(sharedData, SYSTEM_STATE_ROPE_INIT_RUNNING);
-    // Rope Init 与状态机同线程推进，不再创建临时 FreeRTOS Task。
+    setSystemState(sharedData, SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING);
+    // Pull Joint into Workspace 与状态机同线程推进，不再创建临时 FreeRTOS Task。
     // 每次启动先清理上一会话残留，随后建立新的非阻塞运行上下文。
-    p4::recovery::cancelRopeInitController(sharedData);
-    return p4::recovery::startRopeInitController(
+    p4::recovery::cancelPullJointIntoWorkspaceController(sharedData);
+    return p4::recovery::startPullJointIntoWorkspaceController(
         sharedData, p4::platform::time::monotonicMillis());
 }
 
@@ -387,7 +387,7 @@ uint8_t idleOrReadyState(SystemRuntimeContext* sharedData)
         return SYSTEM_STATE_READY;
     }
     return recoverableBelowMask != 0
-        ? SYSTEM_STATE_RECOVERY_REQUIRED
+        ? SYSTEM_STATE_JOINT_BEYOND_WORKSPACE
         : SYSTEM_STATE_IDLE;
 }
 
@@ -403,7 +403,7 @@ void updateReadyStateIfIdle(SystemRuntimeContext* sharedData)
     const uint8_t state = sharedData->system_state;
     if (state == SYSTEM_STATE_IDLE ||
         state == SYSTEM_STATE_READY ||
-        state == SYSTEM_STATE_RECOVERY_REQUIRED) {
+        state == SYSTEM_STATE_JOINT_BEYOND_WORKSPACE) {
         setSystemState(sharedData, idleOrReadyState(sharedData));
     }
 }
@@ -439,7 +439,7 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
         (event.event == SYSTEM_EVENT_START ||
          event.event == SYSTEM_EVENT_RUN_DIRECT ||
          event.event == SYSTEM_EVENT_RUN_FEEDBACK ||
-         event.event == SYSTEM_EVENT_ROPE_INIT)) {
+         event.event == SYSTEM_EVENT_PULL_JOINT_INTO_WORKSPACE)) {
         if (event.event == SYSTEM_EVENT_RUN_DIRECT) {
             rejectPendingDirectCommand(sharedData, event.token,
                                        staleMaintenanceGeneration
@@ -449,10 +449,10 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
             setFeedbackAdmissionResult(sharedData, event.token,
                                        FEEDBACK_ADMISSION_REJECTED,
                                        FEEDBACK_REJECT_STATE);
-        } else if (event.event == SYSTEM_EVENT_ROPE_INIT) {
-            sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
-            sharedData->rope_init_reason = ROPE_INIT_REASON_CANCELLED;
-            sharedData->rope_init_timestamp =
+        } else if (event.event == SYSTEM_EVENT_PULL_JOINT_INTO_WORKSPACE) {
+            sharedData->pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED;
+            sharedData->pull_joint_into_workspace_reason = PULL_JOINT_INTO_WORKSPACE_REASON_CANCELLED;
+            sharedData->pull_joint_into_workspace_timestamp =
                 p4::platform::time::monotonicMillis();
         }
         FW_LOG_INFO_PRINTF("[STATE] reject motion event=%u: ABS zero pending or old coordinate generation\r\n",
@@ -496,10 +496,10 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
             sharedData->control_enabled = 0;
             p4::state::resetHostControlLeaseRuntime(sharedData);
-            if (sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING) {
-                sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
-                sharedData->rope_init_reason = ROPE_INIT_REASON_CANCELLED;
-                sharedData->rope_init_timestamp = p4::platform::time::monotonicMillis();
+            if (sharedData->system_state == SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING) {
+                sharedData->pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED;
+                sharedData->pull_joint_into_workspace_reason = PULL_JOINT_INTO_WORKSPACE_REASON_CANCELLED;
+                sharedData->pull_joint_into_workspace_timestamp = p4::platform::time::monotonicMillis();
             }
             setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
             break;
@@ -610,8 +610,8 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
             break;
 
         case SYSTEM_EVENT_RUN_FEEDBACK:
-            // 反馈准入结果通过 sequence 回写给上位机；RECOVERY_REQUIRED
-            // 会自动启动 Rope Init，完成后再恢复本次反馈请求。
+            // 反馈准入结果通过 sequence 回写给上位机；JOINT_BEYOND_WORKSPACE
+            // 会自动启动 Pull Joint into Workspace，完成后再恢复本次反馈请求。
             if (rejectMotionWhenEmergencyStopLatched(sharedData,
                                                      "RUN_FEEDBACK")) {
                 setFeedbackAdmissionResult(sharedData, event.token,
@@ -634,7 +634,7 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                                            FEEDBACK_REJECT_MANUAL_REFERENCE);
                 break;
             }
-            if (sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING &&
+            if (sharedData->system_state == SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING &&
                 sharedAtomicLoad(&sharedData->feedback_recovery_pending) != 0) {
                 if (!feedbackTargetsPointIntoWorkspace(sharedData)) {
                     sharedAtomicStore(&sharedData->feedback_recovery_pending,
@@ -666,7 +666,7 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                                            FEEDBACK_REJECT_NONE);
                 break;
             }
-            if (sharedData->system_state == SYSTEM_STATE_RECOVERY_REQUIRED) {
+            if (sharedData->system_state == SYSTEM_STATE_JOINT_BEYOND_WORKSPACE) {
                 uint32_t recoverableBelowMask = 0;
                 const bool workspaceReady = activeJointsInControlWorkspace(
                     sharedData, &recoverableBelowMask);
@@ -683,10 +683,10 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                     break;
                 } else {
                     const uint8_t preflightReason =
-                        p4::recovery::ropeInitActiveScopeRejectReason(sharedData);
+                        p4::recovery::pullJointIntoWorkspaceActiveScopeRejectReason(sharedData);
                     const bool multiTurnKnown =
                         activeMotorsMultiTurnKnown(sharedData);
-                    if (preflightReason != ROPE_INIT_REASON_NONE ||
+                    if (preflightReason != PULL_JOINT_INTO_WORKSPACE_REASON_NONE ||
                         !multiTurnKnown) {
                         FW_LOG_INFO_PRINTF(
                             "[STATE] reject automatic recovery preflight=%u multiturn=%u\r\n",
@@ -700,7 +700,7 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                                 : FEEDBACK_REJECT_WORKSPACE);
                         break;
                     }
-                    if (!beginRopeInitMotion(sharedData, true, event.token,
+                    if (!beginPullJointIntoWorkspaceMotion(sharedData, true, event.token,
                                              event.servoMaintenanceToken)) {
                         setFeedbackAdmissionResult(sharedData, event.token,
                                                    FEEDBACK_ADMISSION_REJECTED,
@@ -782,7 +782,7 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
         case SYSTEM_EVENT_CONTROL_RELEASE:
             if ((sharedData->servo_target_owner != SERVO_TARGET_OWNER_NONE &&
                  sharedData->servo_target_owner != SERVO_TARGET_OWNER_CONTROL) ||
-                sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING) break;
+                sharedData->system_state == SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING) break;
             clearPendingDirectCommand(sharedData, DIRECT_REJECT_STATE);
             resetServoTargetQueue(sharedData);
 
@@ -794,74 +794,74 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
             setSystemState(sharedData, idleOrReadyState(sharedData));
             break;
 
-        case SYSTEM_EVENT_ROPE_INIT:
+        case SYSTEM_EVENT_PULL_JOINT_INTO_WORKSPACE:
         {
-            // 手动 Rope Init 只处理 active scope，并且要求其 Manual/Auto/多圈已可信。
+            // 手动 Pull Joint into Workspace 只处理 active scope，并且要求其 Manual/Auto/多圈已可信。
             if (rejectMotionWhenEmergencyStopLatched(sharedData,
-                                                     "ROPE_INIT")) {
-                sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
-                sharedData->rope_init_reason = ROPE_INIT_REASON_CANCELLED;
-                sharedData->rope_init_timestamp = p4::platform::time::monotonicMillis();
+                                                     "PULL_JOINT_INTO_WORKSPACE")) {
+                sharedData->pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED;
+                sharedData->pull_joint_into_workspace_reason = PULL_JOINT_INTO_WORKSPACE_REASON_CANCELLED;
+                sharedData->pull_joint_into_workspace_timestamp = p4::platform::time::monotonicMillis();
                 break;
             }
             if (!p4::state::prepareHostControlCommandAdmission(sharedData)) {
                 FW_LOG_INFO_PRINTLN(
-                    "[STATE] reject ROPE_INIT: host lease stale or Hold pending");
-                sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
-                sharedData->rope_init_reason = ROPE_INIT_REASON_CANCELLED;
-                sharedData->rope_init_timestamp = p4::platform::time::monotonicMillis();
+                    "[STATE] reject PULL_JOINT_INTO_WORKSPACE: host lease stale or Hold pending");
+                sharedData->pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED;
+                sharedData->pull_joint_into_workspace_reason = PULL_JOINT_INTO_WORKSPACE_REASON_CANCELLED;
+                sharedData->pull_joint_into_workspace_timestamp = p4::platform::time::monotonicMillis();
                 break;
             }
             const uint8_t preflightReason =
-                p4::recovery::ropeInitActiveScopeRejectReason(sharedData);
-            if (preflightReason != ROPE_INIT_REASON_NONE) {
-                sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
-                sharedData->rope_init_reason = preflightReason;
-                sharedData->rope_init_timestamp = p4::platform::time::monotonicMillis();
-                if (preflightReason == ROPE_INIT_REASON_MANUAL_REQUIRED) {
-                    logManualReferenceReject(sharedData, "ROPE_INIT");
+                p4::recovery::pullJointIntoWorkspaceActiveScopeRejectReason(sharedData);
+            if (preflightReason != PULL_JOINT_INTO_WORKSPACE_REASON_NONE) {
+                sharedData->pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED;
+                sharedData->pull_joint_into_workspace_reason = preflightReason;
+                sharedData->pull_joint_into_workspace_timestamp = p4::platform::time::monotonicMillis();
+                if (preflightReason == PULL_JOINT_INTO_WORKSPACE_REASON_MANUAL_REQUIRED) {
+                    logManualReferenceReject(sharedData, "PULL_JOINT_INTO_WORKSPACE");
                 } else {
-                    FW_LOG_INFO_PRINTF("[STATE] reject ROPE_INIT preflight reason=%u\r\n",
+                    FW_LOG_INFO_PRINTF("[STATE] reject PULL_JOINT_INTO_WORKSPACE preflight reason=%u\r\n",
                                        (unsigned)preflightReason);
                 }
                 break;
             }
             if (sharedData->system_state != SYSTEM_STATE_IDLE &&
                 sharedData->system_state != SYSTEM_STATE_READY &&
-                sharedData->system_state != SYSTEM_STATE_RECOVERY_REQUIRED) {
-                FW_LOG_INFO_PRINTF("[STATE] reject ROPE_INIT in state=%u\r\n",
+                sharedData->system_state != SYSTEM_STATE_JOINT_BEYOND_WORKSPACE) {
+                FW_LOG_INFO_PRINTF("[STATE] reject PULL_JOINT_INTO_WORKSPACE in state=%u\r\n",
                                    (unsigned)sharedData->system_state);
-                sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
-                sharedData->rope_init_reason = ROPE_INIT_REASON_CANCELLED;
-                sharedData->rope_init_timestamp = p4::platform::time::monotonicMillis();
+                sharedData->pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED;
+                sharedData->pull_joint_into_workspace_reason = PULL_JOINT_INTO_WORKSPACE_REASON_CANCELLED;
+                sharedData->pull_joint_into_workspace_timestamp = p4::platform::time::monotonicMillis();
                 break;
             }
             if (!activeMotorsMultiTurnKnown(sharedData)) {
-                logMultiTurnUnknownReject(sharedData, "ROPE_INIT");
-                sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
-                sharedData->rope_init_reason = ROPE_INIT_REASON_MULTITURN_UNKNOWN;
-                sharedData->rope_init_timestamp = p4::platform::time::monotonicMillis();
+                logMultiTurnUnknownReject(sharedData, "PULL_JOINT_INTO_WORKSPACE");
+                sharedData->pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED;
+                sharedData->pull_joint_into_workspace_reason = PULL_JOINT_INTO_WORKSPACE_REASON_MULTITURN_UNKNOWN;
+                sharedData->pull_joint_into_workspace_timestamp = p4::platform::time::monotonicMillis();
                 break;
             }
-            if (!beginRopeInitMotion(sharedData, false, 0,
+            if (!beginPullJointIntoWorkspaceMotion(sharedData, false, 0,
                                      event.servoMaintenanceToken)) {
-                sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
-                sharedData->rope_init_reason = ROPE_INIT_REASON_CANCELLED;
-                sharedData->rope_init_timestamp = p4::platform::time::monotonicMillis();
+                sharedData->pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED;
+                sharedData->pull_joint_into_workspace_reason = PULL_JOINT_INTO_WORKSPACE_REASON_CANCELLED;
+                sharedData->pull_joint_into_workspace_timestamp = p4::platform::time::monotonicMillis();
             }
             break;
         }
 
-        case SYSTEM_EVENT_ROPE_INIT_DONE:
-            // 租约 Hold 已取得唯一收口权时，Rope Init 控制器的迟到结果不能提前
+        case SYSTEM_EVENT_PULL_JOINT_INTO_WORKSPACE_DONE:
+            // 租约 Hold 已取得唯一收口权时，Pull Joint into Workspace 控制器的迟到结果不能提前
             // 撤销 CALIBRATION owner，否则执行层会因 owner/state 不匹配拒绝 Hold。
             if (sharedAtomicLoad(&sharedData->host_control_hold_status) ==
                 HOST_CONTROL_HOLD_PENDING) {
                 FW_LOG_INFO_PRINTLN(
-                    "[STATE] ignore ROPE_INIT_DONE while host Hold pending");
+                    "[STATE] ignore PULL_JOINT_INTO_WORKSPACE_DONE while host Hold pending");
                 break;
             }
-            if (sharedData->system_state != SYSTEM_STATE_ROPE_INIT_RUNNING) {
+            if (sharedData->system_state != SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING) {
                 break;
             }
             {
@@ -874,16 +874,16 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                 sharedData->control_enabled = 0;
                 sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
                 const bool commandModeJoint = setCommandModeJoint(sharedData);
-                sharedData->rope_init_status = ROPE_INIT_STATUS_SUCCESS;
-                sharedData->rope_init_reason = ROPE_INIT_REASON_NONE;
-                sharedData->rope_init_timestamp = p4::platform::time::monotonicMillis();
+                sharedData->pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_SUCCESS;
+                sharedData->pull_joint_into_workspace_reason = PULL_JOINT_INTO_WORKSPACE_REASON_NONE;
+                sharedData->pull_joint_into_workspace_timestamp = p4::platform::time::monotonicMillis();
                 markActiveJointsWorkspaceReady(sharedData);
                 sharedAtomicStore(&sharedData->feedback_recovery_pending,
                                   (uint8_t)0);
                 sharedAtomicStore(
                     &sharedData->feedback_recovery_request_sequence,
                     (uint32_t)0);
-                // 自动恢复场景下，Rope Init 完成后再次核验最新目标，再交还反馈所有权。
+                // 自动恢复场景下，Pull Joint into Workspace 完成后再次核验最新目标，再交还反馈所有权。
                 if (resumeFeedback && commandModeJoint &&
                     feedbackTargetsPointIntoWorkspace(sharedData) &&
                     activeJointsInControlWorkspace(sharedData)) {
@@ -911,24 +911,24 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                 break;
             }
 
-        case SYSTEM_EVENT_ROPE_INIT_FAILED:
+        case SYSTEM_EVENT_PULL_JOINT_INTO_WORKSPACE_FAILED:
             if (sharedAtomicLoad(&sharedData->host_control_hold_status) ==
                 HOST_CONTROL_HOLD_PENDING) {
                 FW_LOG_INFO_PRINTLN(
-                    "[STATE] ignore ROPE_INIT_FAILED while host Hold pending");
+                    "[STATE] ignore PULL_JOINT_INTO_WORKSPACE_FAILED while host Hold pending");
                 break;
             }
-            if (sharedData->system_state != SYSTEM_STATE_ROPE_INIT_RUNNING) {
+            if (sharedData->system_state != SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING) {
                 break;
             }
             resetServoTargetQueue(sharedData);
             sharedData->control_enabled = 0;
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
             setCommandModeJoint(sharedData);
-            if (sharedData->rope_init_status != ROPE_INIT_STATUS_FAILED) {
-                sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
-                sharedData->rope_init_reason = ROPE_INIT_REASON_CANCELLED;
-                sharedData->rope_init_timestamp = p4::platform::time::monotonicMillis();
+            if (sharedData->pull_joint_into_workspace_status != PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED) {
+                sharedData->pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED;
+                sharedData->pull_joint_into_workspace_reason = PULL_JOINT_INTO_WORKSPACE_REASON_CANCELLED;
+                sharedData->pull_joint_into_workspace_timestamp = p4::platform::time::monotonicMillis();
             }
             {
                 const uint32_t recoveryRequestSequence =
@@ -956,7 +956,7 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                 (sharedData->system_state == SYSTEM_STATE_UNCONTROLLABLE ||
                  sharedData->system_state == SYSTEM_STATE_IDLE ||
                  sharedData->system_state == SYSTEM_STATE_READY ||
-                 sharedData->system_state == SYSTEM_STATE_RECOVERY_REQUIRED)) {
+                 sharedData->system_state == SYSTEM_STATE_JOINT_BEYOND_WORKSPACE)) {
                 const uint8_t previousState = sharedData->system_state;
                 const uint8_t nextState = idleOrReadyState(sharedData);
                 setSystemState(sharedData, nextState);
@@ -982,5 +982,5 @@ bool stateOwnsMotionResources(SystemRuntimeContext* sharedData)
            sharedData->servo_target_owner != SERVO_TARGET_OWNER_NONE ||
            sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
            sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
-           sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING;
+           sharedData->system_state == SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING;
 }

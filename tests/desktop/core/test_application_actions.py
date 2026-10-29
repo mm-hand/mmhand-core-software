@@ -727,8 +727,8 @@ def test_port_discovery_failure_clears_stale_choices(hand):
 
 
 
-def test_enable_recovery_runs_rope_init_when_pose_below_workspace(hand, monkeypatch):
-    """Enable 前发现低于工作区时，自动用 P4 Rope Init 回正，成功后再继续。"""
+def test_enable_recovery_runs_pull_joint_into_workspace_when_pose_below_workspace(hand, monkeypatch):
+    """Enable 前发现低于工作区时，自动用 P4 Pull Joint into Workspace 回正，成功后再继续。"""
     seen = []
     def guard(state, joints, mask):
         seen.append(1)
@@ -742,11 +742,11 @@ def test_enable_recovery_runs_rope_init_when_pose_below_workspace(hand, monkeypa
 
     def rope(mask):
         calls.append(mask)
-        state.rope_init_sequence += 1
-        state.rope_init_status = 2
+        state.pull_joint_into_workspace_sequence += 1
+        state.pull_joint_into_workspace_status = 2
         return True
 
-    monkeypatch.setattr(hand, 'rope_init', rope)
+    monkeypatch.setattr(hand, 'pull_joint_into_workspace', rope)
 
     ok, message = hand._recover_enable_workspace([0], 1, 0)
 
@@ -756,16 +756,16 @@ def test_enable_recovery_runs_rope_init_when_pose_below_workspace(hand, monkeypa
 def test_enable_recovery_reports_p4_reason_when_it_fails(hand, monkeypatch):
     monkeypatch.setattr(hand, '_enable_holding_workspace',
                         lambda *a: (False, [0], 'J00 -0.62° below min 0.00° by 0.62°'))
-    monkeypatch.setattr(hand, 'rope_init', lambda mask: True)
+    monkeypatch.setattr(hand, 'pull_joint_into_workspace', lambda mask: True)
     state = hand._controller.current_state
     waits = []
 
     def wait(predicate, epoch, timeout=3.0):
         waits.append(1)
         if len(waits) >= 2:
-            state.rope_init_sequence += 1
-            state.rope_init_status = 3
-            state.rope_init_reason = 4
+            state.pull_joint_into_workspace_sequence += 1
+            state.pull_joint_into_workspace_status = 3
+            state.pull_joint_into_workspace_reason = 4
         return True
 
     monkeypatch.setattr(hand, '_wait_application', wait)
@@ -778,7 +778,7 @@ def test_enable_recovery_reports_p4_reason_when_it_fails(hand, monkeypatch):
 def test_enable_recovery_is_skipped_when_pose_is_inside(hand, monkeypatch):
     monkeypatch.setattr(hand, '_enable_holding_workspace', lambda *a: (False, [], ''))
     calls = []
-    monkeypatch.setattr(hand, 'rope_init', lambda mask: calls.append(mask) or True)
+    monkeypatch.setattr(hand, 'pull_joint_into_workspace', lambda mask: calls.append(mask) or True)
 
     ok, message = hand._recover_enable_workspace([0], 1, 0)
 

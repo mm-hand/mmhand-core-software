@@ -48,7 +48,7 @@ def test_unknown_failure_does_not_claim_a_physical_cause_or_encourage_blind_retr
 def test_explicit_stop_rejection_uses_the_rule_guidance():
     issue = operation_issue(IssueMessage('F1 rejected status=9', 'ACT-1005'))
     assert issue.code == 'ACT-1005'
-    assert 'Clear Faults' in issue.text()
+    assert 'clear of obstacles' in issue.text() and 'Retry the action' in issue.text()
     assert issue.details['original_message'] == 'F1 rejected status=9'
     assert operation_issue(IssueMessage('reason=3', 'ROP-3403')).code == 'ROP-3403'
 

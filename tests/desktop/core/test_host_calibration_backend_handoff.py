@@ -242,7 +242,7 @@ _USER_OUTPUT_CASES = [
     ("set_manual_encoder_references", ([1000] * ENCODER_COUNT, [5000] * ENCODER_COUNT), False),
     ("set_manual_encoder_reference", (0, 1000, 5000), False),
     ("clear_manual_encoder_references", (), False),
-    ("rope_init", (1,), False),
+    ("pull_joint_into_workspace", (1,), False),
     ("start", (), None),
 ]
 
@@ -328,5 +328,5 @@ def test_user_output_proxy_remains_available_after_host_cleanup(backend, method,
     if method in {"hold_current_motor_positions", "enable_direct_hold", "invalidate_joint_commands",
                   "request_run_feedback", "set_active_scope",
                   "set_manual_encoder_references", "set_manual_encoder_reference",
-                  "clear_manual_encoder_references", "rope_init"}:
+                  "clear_manual_encoder_references", "pull_joint_into_workspace"}:
         assert returned is controller_result

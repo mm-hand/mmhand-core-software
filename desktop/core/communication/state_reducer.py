@@ -45,7 +45,7 @@ from ..protocol import (
     SYSTEM_STATE_IDLE,
 
     SYSTEM_STATE_READY,
-    SYSTEM_STATE_RECOVERY_REQUIRED,
+    SYSTEM_STATE_JOINT_BEYOND_WORKSPACE,
     SYSTEM_STATE_RUN_FEEDBACK,
     SYSTEM_STATE_UNCONTROLLABLE,
     TASK_RUNTIME_NAMES,
@@ -521,11 +521,11 @@ class StateReducer:
                 auto_calibration_valid_bitmap,
                 manual_reference_commit_status,
                 has_manual_commit_status,
-                rope_init_status,
-                rope_init_reason,
-                rope_init_sequence,
-                rope_init_joint_mask,
-                rope_init_timestamp_ms,
+                pull_joint_into_workspace_status,
+                pull_joint_into_workspace_reason,
+                pull_joint_into_workspace_sequence,
+                pull_joint_into_workspace_joint_mask,
+                pull_joint_into_workspace_timestamp_ms,
                 pending_direct_generation,
                 applied_direct_generation,
                 direct_reject_reason,
@@ -563,11 +563,11 @@ class StateReducer:
                     manual_reference_commit_status
                 )
             if has_motion_result_status:
-                model.rope_init_status = int(rope_init_status)
-                model.rope_init_reason = int(rope_init_reason)
-                model.rope_init_sequence = int(rope_init_sequence)
-                model.rope_init_joint_mask = int(rope_init_joint_mask)
-                model.rope_init_timestamp_ms = int(rope_init_timestamp_ms)
+                model.pull_joint_into_workspace_status = int(pull_joint_into_workspace_status)
+                model.pull_joint_into_workspace_reason = int(pull_joint_into_workspace_reason)
+                model.pull_joint_into_workspace_sequence = int(pull_joint_into_workspace_sequence)
+                model.pull_joint_into_workspace_joint_mask = int(pull_joint_into_workspace_joint_mask)
+                model.pull_joint_into_workspace_timestamp_ms = int(pull_joint_into_workspace_timestamp_ms)
                 model.pending_direct_generation = int(pending_direct_generation)
                 model.applied_direct_generation = int(applied_direct_generation)
                 model.direct_reject_reason = int(direct_reject_reason)
@@ -634,7 +634,7 @@ class StateReducer:
                     elif model.system_state in (
                         SYSTEM_STATE_IDLE,
                         SYSTEM_STATE_READY,
-                        SYSTEM_STATE_RECOVERY_REQUIRED,
+                        SYSTEM_STATE_JOINT_BEYOND_WORKSPACE,
                     ):
                         model.calib_status = "SUCCESS"
                     else:

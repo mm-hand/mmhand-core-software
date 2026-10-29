@@ -1,6 +1,6 @@
 """flow.py - 与 P4 对应的自动标定会话和串行关节调度。
 
-职责：复制反馈预检、机械顺序、单/双关节失败策略及 Rope Init 收尾。
+职责：复制反馈预检、机械顺序、单/双关节失败策略及 Pull Joint into Workspace 收尾。
 线程：由 calibration_workflow 的单工作线程调用；不创建线程。
 输入：不依赖串口/UI 的校准 IO、active scope 和原固件参数。
 输出：逐关节提交结果、部分成功位图和会话终态。

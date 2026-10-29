@@ -20,7 +20,7 @@ inline constexpr uint32_t HOST_TELEMETRY_PERIOD_MS = 10; ///< 常规遥测最多
 
 inline constexpr uint32_t HOST_COMM_TASK_STACK_SIZE = 8192;    ///< FreeRTOS 栈深度，单位 word。
 inline constexpr uint32_t S3_CAN_RX_TASK_STACK_SIZE = 4096;      ///< FreeRTOS 栈深度，单位 word。
-inline constexpr uint32_t SYSTEM_STATE_TASK_STACK_SIZE = 4096; ///< FreeRTOS 栈深度，单位 word。
+inline constexpr uint32_t SYSTEM_STATE_TASK_STACK_SIZE = 8192; ///< FreeRTOS 栈深度，单位 word；Pull Joint into Workspace 的标定快照需要余量。
 inline constexpr uint32_t SERVO_BUS_TASK_STACK_SIZE = 6144;    ///< FreeRTOS 栈深度，单位 word。
 inline constexpr uint32_t MOTION_CONTROL_TASK_STACK_SIZE = 8192;       ///< FreeRTOS 栈深度，单位 word。
 inline constexpr uint32_t TASK_MONITOR_STACK_SIZE = 4096;       ///< FreeRTOS 栈深度，单位 word。

@@ -16,6 +16,12 @@ from typing import List, Optional, Sequence, Tuple
 # 本文件只保留字段编解码和业务数据模型，禁止重新定义同名协议常量。
 from .generated_upper_protocol import *  # noqa: F403
 
+# P4 READY 入口允许低于 Manual Min 24 counts（见 SystemReadinessPolicy）。
+# 主机 Enable/恢复的“当前姿态”判定必须使用同一容差，否则 0.1° 的回差会被
+# 当成越界并反复触发无意义的 Pull Joint into Workspace。
+READY_WORKSPACE_TOLERANCE_COUNTS = 24
+READY_WORKSPACE_TOLERANCE_DEG = READY_WORKSPACE_TOLERANCE_COUNTS * 360.0 / 16384.0
+
 
 class ServoOnlineCheck(IntEnum):
     PENDING = 0
@@ -58,24 +64,24 @@ SYSTEM_STATE_RUN_FEEDBACK = 2
 SYSTEM_STATE_CALIBRATION_RUNNING = 4
 SYSTEM_STATE_READY = 5
 SYSTEM_STATE_RUN_DIRECT = 6
-SYSTEM_STATE_ROPE_INIT_RUNNING = 8
-SYSTEM_STATE_RECOVERY_REQUIRED = 9
+SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING = 8
+SYSTEM_STATE_JOINT_BEYOND_WORKSPACE = 9
 
-ROPE_INIT_STATUS_IDLE = 0
-ROPE_INIT_STATUS_RUNNING = 1
-ROPE_INIT_STATUS_SUCCESS = 2
-ROPE_INIT_STATUS_FAILED = 3
+PULL_JOINT_INTO_WORKSPACE_STATUS_IDLE = 0
+PULL_JOINT_INTO_WORKSPACE_STATUS_RUNNING = 1
+PULL_JOINT_INTO_WORKSPACE_STATUS_SUCCESS = 2
+PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED = 3
 
-ROPE_INIT_REASON_NONE = 0
-ROPE_INIT_REASON_TIMEOUT = 1
-ROPE_INIT_REASON_FEEDBACK_STALE = 2
-ROPE_INIT_REASON_SERVO_OFFLINE = 3
-ROPE_INIT_REASON_MULTITURN_UNKNOWN = 4
-ROPE_INIT_REASON_MANUAL_REQUIRED = 5
-ROPE_INIT_REASON_AUTO_REQUIRED = 6
-ROPE_INIT_REASON_TARGET_PUBLISH_FAILED = 7
-ROPE_INIT_REASON_SYSTEM_FAULT = 8
-ROPE_INIT_REASON_CANCELLED = 9
+PULL_JOINT_INTO_WORKSPACE_REASON_NONE = 0
+PULL_JOINT_INTO_WORKSPACE_REASON_TIMEOUT = 1
+PULL_JOINT_INTO_WORKSPACE_REASON_FEEDBACK_STALE = 2
+PULL_JOINT_INTO_WORKSPACE_REASON_SERVO_OFFLINE = 3
+PULL_JOINT_INTO_WORKSPACE_REASON_MULTITURN_UNKNOWN = 4
+PULL_JOINT_INTO_WORKSPACE_REASON_MANUAL_REQUIRED = 5
+PULL_JOINT_INTO_WORKSPACE_REASON_AUTO_REQUIRED = 6
+PULL_JOINT_INTO_WORKSPACE_REASON_TARGET_PUBLISH_FAILED = 7
+PULL_JOINT_INTO_WORKSPACE_REASON_SYSTEM_FAULT = 8
+PULL_JOINT_INTO_WORKSPACE_REASON_CANCELLED = 9
 
 # RUN_DIRECT 结果由 SYSTEM_STATUS 中的 generation/reject_reason 异步确认。
 # 数值与 P4 domain/SystemTypes.h 保持一致，不能重新编号。
@@ -280,11 +286,11 @@ def parse_system_status_packet(payload: bytes) -> Optional[tuple]:
     manual_reference_committed = payload[55]
     auto_calibration_valid_bitmap = struct.unpack('>I', payload[56:60])[0]
     manual_reference_commit_status = payload[60]
-    rope_init_status = payload[61]
-    rope_init_reason = payload[62]
-    rope_init_sequence = struct.unpack('>I', payload[63:67])[0]
-    rope_init_joint_mask = struct.unpack('>I', payload[67:71])[0]
-    rope_init_timestamp_ms = struct.unpack('>I', payload[71:75])[0]
+    pull_joint_into_workspace_status = payload[61]
+    pull_joint_into_workspace_reason = payload[62]
+    pull_joint_into_workspace_sequence = struct.unpack('>I', payload[63:67])[0]
+    pull_joint_into_workspace_joint_mask = struct.unpack('>I', payload[67:71])[0]
+    pull_joint_into_workspace_timestamp_ms = struct.unpack('>I', payload[71:75])[0]
     pending_direct_generation = struct.unpack('>I', payload[75:79])[0]
     applied_direct_generation = struct.unpack('>I', payload[79:83])[0]
     direct_reject_reason = payload[83]
@@ -325,11 +331,11 @@ def parse_system_status_packet(payload: bytes) -> Optional[tuple]:
         auto_calibration_valid_bitmap,
         manual_reference_commit_status,
         True,
-        rope_init_status,
-        rope_init_reason,
-        rope_init_sequence,
-        rope_init_joint_mask,
-        rope_init_timestamp_ms,
+        pull_joint_into_workspace_status,
+        pull_joint_into_workspace_reason,
+        pull_joint_into_workspace_sequence,
+        pull_joint_into_workspace_joint_mask,
+        pull_joint_into_workspace_timestamp_ms,
         pending_direct_generation,
         applied_direct_generation,
         direct_reject_reason,
@@ -1143,11 +1149,11 @@ def build_manual_encoder_single_cmd(joint: int, min_raw: int, max_raw: int) -> b
     )
 
 
-def build_rope_init_cmd(active_joint_mask: int) -> bytes:
+def build_pull_joint_into_workspace_cmd(active_joint_mask: int) -> bytes:
     mask = int(active_joint_mask) & ((1 << ENCODER_COUNT) - 1)
     if mask == 0:
-        raise ValueError("Rope Init requires a non-zero active joint mask")
-    return _build_command_frame(CMD_ROPE_INIT, struct.pack(">I", mask))
+        raise ValueError("Pull Joint into Workspace requires a non-zero active joint mask")
+    return _build_command_frame(CMD_PULL_JOINT_INTO_WORKSPACE, struct.pack(">I", mask))
 
 
 def manual_encoder_reference_crc(

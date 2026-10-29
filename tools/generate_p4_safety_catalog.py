@@ -146,11 +146,11 @@ GROUP_BINDINGS: dict[str, RuleBinding] = {
         "tasks/system_state/SystemEventDispatcher.cpp", "SYSTEM_EVENT_REEVALUATE_READY",
         "ruleForFeedbackReadyRejectReason"),
     "ROP": binding(
-        "safety/policies/RopeInitSafetyPolicy.cpp", "evaluateRopeInitSession",
-        "tasks/system_state/RopeInitController.cpp", "evaluateRopeInitSession",
-        "tasks/system_state/RopeInitController.cpp", "reportSafetyRuleEvent",
-        "tasks/system_state/RopeInitController.cpp", "ROPE_INIT_REASON_NONE",
-        "ruleForRopeInitReason"),
+        "safety/policies/PullJointIntoWorkspaceSafetyPolicy.cpp", "evaluatePullJointIntoWorkspaceSession",
+        "tasks/system_state/PullJointIntoWorkspaceController.cpp", "evaluatePullJointIntoWorkspaceSession",
+        "tasks/system_state/PullJointIntoWorkspaceController.cpp", "reportSafetyRuleEvent",
+        "tasks/system_state/PullJointIntoWorkspaceController.cpp", "PULL_JOINT_INTO_WORKSPACE_REASON_NONE",
+        "ruleForPullJointIntoWorkspaceReason"),
     "FLT": binding(
         "safety/policies/SystemFaultPolicy.cpp", "collectSystemFaults",
         "tasks/system_state/SystemStateCoordinator.cpp", "collectSystemFaults",
@@ -415,7 +415,7 @@ def render_firmware_index_json() -> str:
                 "CTL": "PID、碰撞、过载和闭环控制规则。",
                 "SYS": "系统状态机、E-STOP、运动所有权和租约规则。",
                 "CAL": "自动标定流程及标定结果规则。",
-                "RCV": "Rope Init、多圈、热插拔和恢复规则。",
+                "RCV": "Pull Joint into Workspace、多圈、热插拔和恢复规则。",
                 "COM": "CAN、串口、协议和数据完整性规则。",
                 "RUN": "任务、队列、周期、栈和运行时资源规则。",
                 "WRN": "不阻断控制的诊断警告。"

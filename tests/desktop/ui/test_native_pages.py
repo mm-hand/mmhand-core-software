@@ -5,7 +5,7 @@ from nicegui import ui, Client
 from nicegui.events import GenericEventArguments
 from desktop.core.hand_backend import HandBackend
 from desktop.ui.web import renumber_motors, renumber_tactile, joint_calibration, motor_calibration, feedback_control, direct_control
-from desktop.ui.web import replay, plots, tactile, diagnostics, control_parameters
+from desktop.ui.web import replay, plots, tactile, diagnostics, control_parameters, hand as hand_view
 from desktop.ui.web.common import FINGERS, selection
 from desktop.ui.browser_view import build_page, TABS, SUBTABS
 
@@ -40,8 +40,8 @@ def test_every_native_page_builds_and_refreshes_unknown_feedback(page, name):
         'Motor Calibration': lambda: motor_calibration.build(hand, act, load),
         'Feedback Control': lambda: feedback_control.build(hand, act),
         'Direct Control': lambda: direct_control.build(hand, act, confirm),
-        'Replay': lambda: replay.build(hand, act), 'Curves & Recordings': lambda: plots.build(hand, act),
-        'Tactile': lambda: tactile.build(hand),
+        'Replay': lambda: replay.build(hand, act), 'Curves': lambda: plots.build(hand, act),
+        'Tactile': lambda: tactile.build(hand), 'Hand': lambda: hand_view.build(hand),
         'Diagnostics': lambda: diagnostics.build(hand, act),
         'Control Parameters': lambda: control_parameters.build(hand, act)}
     refresh = builders[name]()
@@ -257,7 +257,7 @@ def test_shell_has_one_stop_default_recording_and_exact_navigation(page):
     assert navigation.value == 'Calibration'
     panels = next(e for e in client.elements.values() if isinstance(e, ui.tab_panels))
     toolbars = [e for e in client.elements.values() if 'page-toolbar' in e.classes]
-    assert len(toolbars) == 11
+    assert len(toolbars) == 12
     workspace = next(e for e in client.elements.values() if isinstance(e, ui.splitter))
     assert panels.parent_slot is workspace.before
     assert all(isinstance(toolbar.parent_slot.parent, ui.tab_panel) for toolbar in toolbars)
@@ -438,7 +438,7 @@ def test_joint_page_detail_is_manual_urdf_json_only_in_order(page):
     assert len(maintenance) == 45 and all(element.enabled for element in maintenance)
 
 
-def test_joint_page_maintenance_disabled_while_controlling_or_stop_latched(page):
+def test_joint_page_maintenance_disabled_while_controlling_and_enabled_after_stop(page):
     hand, client = page
     refresh = joint_calibration.build(hand, Mock(), Mock(), Mock())
     snapshot = idle_snapshot(hand)
@@ -451,8 +451,9 @@ def test_joint_page_maintenance_disabled_while_controlling_or_stop_latched(page)
     snapshot['control_mode'] = 'IDLE'
     snapshot['stop_latched'] = True
     refresh(snapshot)
-    assert not button(client, 'Set Min').enabled
-    assert not button(client, 'Release Selected Tendons').enabled
+    # STOP no longer disables maintenance: the operation runs RESET itself.
+    assert button(client, 'Set Min').enabled
+    assert button(client, 'Release Selected Tendons').enabled
 
 
 def test_pending_quality_badges_read_need_calibration(page):
@@ -507,6 +508,33 @@ def test_motor_calibrate_selected_passes_page_origin_and_disables_while_controll
     assert not calibrate.enabled
 
 
+def test_control_pages_show_both_workspace_warnings_only_when_present(page):
+    hand, client = page
+    feedback_refresh = feedback_control.build(hand, Mock())
+    direct_refresh = direct_control.build(hand, Mock(), Mock())
+    snapshot = idle_snapshot(hand)
+    snapshot['direct_zero_required'] = False
+    for row in snapshot['joints']:
+        row['angle_out_of_workspace'] = False
+    for row in snapshot['motors']:
+        row['motor_beyond_workspace'] = False
+    feedback_refresh(snapshot)
+    direct_refresh(snapshot)
+    badges = [element.text for element in client.elements.values() if isinstance(element, ui.badge)]
+    assert 'JOINT BEYOND WORKSPACE' not in badges
+    assert 'MOTOR BEYOND WORKSPACE' not in badges
+
+    # J04 drives M05/M06: both warnings must appear only on that joint/motor.
+    snapshot['joints'][4]['angle_out_of_workspace'] = True
+    for motor in snapshot['joints'][4]['motors']:
+        snapshot['motors'][motor]['motor_beyond_workspace'] = True
+    feedback_refresh(snapshot)
+    direct_refresh(snapshot)
+    badges = [element.text for element in client.elements.values() if isinstance(element, ui.badge)]
+    assert 'JOINT BEYOND WORKSPACE' in badges
+    assert 'MOTOR BEYOND WORKSPACE' in badges
+
+
 def test_control_pages_drop_duplicate_clear_faults_and_explain_handover(page):
     hand, client = page
     feedback_control.build(hand, Mock())
@@ -515,7 +543,7 @@ def test_control_pages_drop_duplicate_clear_faults_and_explain_handover(page):
     assert 'Clear Faults' not in labels
     notes = [text for text in label_texts(client) if 'Tabs only change the view' in text]
     assert len(notes) == 2
-    assert all('Clear Faults must be pressed before enabling again' in text for text in notes)
+    assert all('ENABLE prepares the device after STOP.' in text for text in notes)
 
 
 

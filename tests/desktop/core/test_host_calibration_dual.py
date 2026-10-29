@@ -703,7 +703,7 @@ def test_outside_ready_result_is_retained_but_only_in_window_pose_is_cached(monk
                                        "urdf_deg": -0.5, "feedback_ready": False})
     result = worker.calibrate()
     assert result is not None
-    assert result["requires_rope_init"] is (not cache_valid)
+    assert result["requires_pull_joint_into_workspace"] is (not cache_valid)
     entry = dual._cache(io)[0]
     assert entry.valid is cache_valid
     if cache_valid:

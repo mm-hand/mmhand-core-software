@@ -45,7 +45,11 @@ def build(hand, act):
                         statuses = [row['feedback_control_status']]
                         if row.get('collision_detected'):
                             statuses.append('COLLISION DETECTED')
-                        control(statuses, 'P4-confirmed feedback control and per-joint collision state.')
+                        if row.get('angle_out_of_workspace'):
+                            statuses.append('JOINT BEYOND WORKSPACE')
+                        if any(snapshot['motors'][m].get('motor_beyond_workspace') for m in row['motors']):
+                            statuses.append('MOTOR BEYOND WORKSPACE')
+                        control(statuses, 'P4-confirmed feedback control, per-joint collision, joint-angle and motor workspace state.')
                         control_abs = ' / '.join(show(snapshot['motors'][m]['abs']) for m in row['motors'])
                         feedback.set_text(f"Enc: {row['encoder']}   Current: {show(row['angle'], '°')}   ROS2 Target: {show(row['ros_target'], '°')}\nRaw: {show(row['raw'])}   Control ABS: {control_abs}")
                         limits.set_text(f"Min: {show(row['min'], '°')}   Max: {show(row['max'], '°')}")

@@ -9,12 +9,12 @@ def test_interval_split_keeps_fast_ui_and_slow_charts_apart():
     assert policy.PLOTS_INTERVAL_S == 1.0
     assert policy.select_intervals('Joint Calibration') == (0.1, 0.5, None)
     assert policy.select_intervals('Replay') == (0.1, 0.5, None)
-    assert policy.select_intervals('Curves & Recordings') == (0.1, 0.5, 1.0)
+    assert policy.select_intervals('Curves') == (0.1, 0.5, 1.0)
     assert policy.select_intervals('Tactile') == (0.1, 0.5, 1.0)
 
 
 def test_only_curve_page_fetches_curve_history():
-    assert policy.needs_curves('Curves & Recordings')
+    assert policy.needs_curves('Curves')
     assert not policy.needs_curves('Tactile')
     assert not policy.needs_curves('Joint Calibration')
 
@@ -35,13 +35,13 @@ def test_leaf_resolution_follows_main_and_sub_tabs():
 def test_plots_refresh_only_on_chart_leaves_and_at_most_once_per_second():
     assert not policy.should_refresh_plots('Joint Calibration', 'Joint Calibration', 10.0, 100.0)
     assert not policy.should_refresh_plots('Replay', 'Replay', None, 100.0)
-    assert policy.should_refresh_plots('Curves & Recordings', None, None, 100.0)
-    assert not policy.should_refresh_plots('Curves & Recordings', 'Curves & Recordings', 10.0, 10.99)
-    assert policy.should_refresh_plots('Curves & Recordings', 'Curves & Recordings', 10.0, 11.0)
+    assert policy.should_refresh_plots('Curves', None, None, 100.0)
+    assert not policy.should_refresh_plots('Curves', 'Curves', 10.0, 10.99)
+    assert policy.should_refresh_plots('Curves', 'Curves', 10.0, 11.0)
     assert not policy.should_refresh_plots('Tactile', 'Tactile', 10.0, 10.5)
     assert policy.should_refresh_plots('Tactile', 'Tactile', 10.0, 11.0)
     # Switching into a chart leaf refreshes immediately even inside the interval.
-    assert policy.should_refresh_plots('Curves & Recordings', 'Tactile', 10.0, 10.2)
+    assert policy.should_refresh_plots('Curves', 'Tactile', 10.0, 10.2)
 
 
 def test_change_cache_only_reports_real_changes():
@@ -164,7 +164,7 @@ def test_control_activity_and_maintenance_gate_follow_snapshot_fields():
     assert not common.maintenance_allowed(dict(idle, control_mode='FEEDBACK'))
     assert not common.maintenance_allowed(dict(idle, control_mode='DIRECT'))
     assert not common.maintenance_allowed(dict(idle, control_mode='UNKNOWN'))
-    assert not common.maintenance_allowed(dict(idle, stop_latched=True))
+    assert common.maintenance_allowed(dict(idle, stop_latched=True))
     assert not common.maintenance_allowed(dict(idle, communication='Stale data'))
     assert not common.maintenance_allowed(dict(idle, busy=True))
     # Legacy fallbacks used when the new snapshot keys are absent.
@@ -177,7 +177,7 @@ def test_control_activity_and_maintenance_gate_follow_snapshot_fields():
     assert not common.stop_latched({'device': 'Ready', 'stop_latched': False})
     assert common.maintenance_allowed({'communication': 'Online', 'busy': False})
     assert not common.maintenance_allowed({'communication': 'Online', 'busy': False, 'device': 'Controlling'})
-    assert not common.maintenance_allowed({'communication': 'Online', 'busy': False, 'device': 'Stopped'})
+    assert common.maintenance_allowed({'communication': 'Online', 'busy': False, 'device': 'Stopped'})
 
 
 def test_calibration_alert_visible_only_on_its_origin_page():

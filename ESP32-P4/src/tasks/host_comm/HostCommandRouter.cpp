@@ -183,7 +183,7 @@ bool upperReleaseMotorDirect(SystemRuntimeContext* sharedData, uint32_t token)
     const uint8_t currentState = sharedAtomicLoad(&sharedData->system_state);
     const bool alreadyCompleted = generation != 0 && tokenMatches &&
         (currentState == SYSTEM_STATE_IDLE || currentState == SYSTEM_STATE_READY ||
-         currentState == SYSTEM_STATE_RECOVERY_REQUIRED) &&
+         currentState == SYSTEM_STATE_JOINT_BEYOND_WORKSPACE) &&
         sharedAtomicLoad(&sharedData->servo_target_owner) == SERVO_TARGET_OWNER_NONE &&
         sharedAtomicLoad(&sharedData->control_enabled) == 0 &&
         sharedAtomicLoad(&sharedData->emergency_stop_latched) == 0 &&
@@ -230,7 +230,7 @@ bool upperApplyActiveScope(SystemRuntimeContext* sharedData,
         sharedData->control_enabled != 0 ||
         (state != SYSTEM_STATE_IDLE &&
          state != SYSTEM_STATE_READY &&
-         state != SYSTEM_STATE_RECOVERY_REQUIRED &&
+         state != SYSTEM_STATE_JOINT_BEYOND_WORKSPACE &&
          state != SYSTEM_STATE_UNCONTROLLABLE)) {
         FW_LOG_INFO_PRINTF("[UPPER] ACTIVE_SCOPE rejected state=%u owner=%u enabled=%u\r\n",
                       (unsigned)state,
@@ -253,7 +253,7 @@ bool upperApplyActiveScope(SystemRuntimeContext* sharedData,
         sharedData->control_enabled != 0 ||
         (lockedState != SYSTEM_STATE_IDLE &&
          lockedState != SYSTEM_STATE_READY &&
-         lockedState != SYSTEM_STATE_RECOVERY_REQUIRED &&
+         lockedState != SYSTEM_STATE_JOINT_BEYOND_WORKSPACE &&
          lockedState != SYSTEM_STATE_UNCONTROLLABLE)) {
         if (lock) {
             xSemaphoreGive(lock);

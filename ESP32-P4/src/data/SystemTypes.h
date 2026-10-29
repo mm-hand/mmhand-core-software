@@ -8,7 +8,7 @@
 #ifndef MMHAND_SYSTEM_TYPES_H
 #define MMHAND_SYSTEM_TYPES_H
 
-#include "RopeInitTypes.h"
+#include "PullJointIntoWorkspaceTypes.h"
 #include <stdint.h>
 
 inline constexpr uint8_t CONTROL_MODE_JOINT = 0;        ///< 磁编关节角反馈控制。
@@ -27,9 +27,9 @@ inline constexpr uint8_t SYSTEM_EVENT_RUN_DIRECT = 7;
 inline constexpr uint8_t SYSTEM_EVENT_MOTOR_DIRECT_RELEASE = 8;
 inline constexpr uint8_t SYSTEM_EVENT_RUN_FEEDBACK = 9;
 inline constexpr uint8_t SYSTEM_EVENT_REEVALUATE_READY = 14;
-inline constexpr uint8_t SYSTEM_EVENT_ROPE_INIT = 16;
-inline constexpr uint8_t SYSTEM_EVENT_ROPE_INIT_DONE = 17;
-inline constexpr uint8_t SYSTEM_EVENT_ROPE_INIT_FAILED = 18;
+inline constexpr uint8_t SYSTEM_EVENT_PULL_JOINT_INTO_WORKSPACE = 16;
+inline constexpr uint8_t SYSTEM_EVENT_PULL_JOINT_INTO_WORKSPACE_DONE = 17;
+inline constexpr uint8_t SYSTEM_EVENT_PULL_JOINT_INTO_WORKSPACE_FAILED = 18;
 
 /** 顶层状态编号同步上报上位机，缺失编号不得被新状态占用。 */
 inline constexpr uint8_t SYSTEM_STATE_UNCONTROLLABLE = 0;
@@ -38,8 +38,8 @@ inline constexpr uint8_t SYSTEM_STATE_RUN_FEEDBACK = 2;
 // 4 是已删除的 P4 自动标定运行态，永久保留编号，不再进入。
 inline constexpr uint8_t SYSTEM_STATE_READY = 5;
 inline constexpr uint8_t SYSTEM_STATE_RUN_DIRECT = 6;
-inline constexpr uint8_t SYSTEM_STATE_ROPE_INIT_RUNNING = 8;
-inline constexpr uint8_t SYSTEM_STATE_RECOVERY_REQUIRED = 9;
+inline constexpr uint8_t SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING = 8;
+inline constexpr uint8_t SYSTEM_STATE_JOINT_BEYOND_WORKSPACE = 9;
 
 /** 直控命令在状态机准入阶段的拒绝原因。 */
 inline constexpr uint8_t DIRECT_REJECT_NONE = 0;

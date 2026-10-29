@@ -196,7 +196,7 @@ def test_joint_enable_never_clamps_the_current_pose(hand, monkeypatch):
     monkeypatch.setattr(hand, '_apply_joint_workspace_guard',
                         lambda state, values, **kwargs: (values, [], [3], 'J03 outside limits'))
     # 回正被 P4 拒绝时 Enable 仍然只能失败：绝不把夹回后的目标当成“保持当前姿态”。
-    monkeypatch.setattr(hand, 'rope_init', lambda mask: False)
+    monkeypatch.setattr(hand, 'pull_joint_into_workspace', lambda mask: False)
     item = wait_operation(hand, hand.request_enable())
     assert item['status'] == 'FAILED'
     assert 'J03 outside limits' in item['message']
@@ -205,7 +205,7 @@ def test_joint_enable_never_clamps_the_current_pose(hand, monkeypatch):
 
 
 def test_joint_enable_waits_for_ready_not_idle(hand, monkeypatch):
-    """P4 在 IDLE 与 RECOVERY_REQUIRED 之间抖动时，主机不得把 IDLE 当成“已就绪”。"""
+    """P4 在 IDLE 与 JOINT_BEYOND_WORKSPACE 之间抖动时，主机不得把 IDLE 当成“已就绪”。"""
     comm, _ = joint_preparation_device(hand, monkeypatch, ready_state=SYSTEM_STATE_IDLE)
     original = hand._wait_application
     monkeypatch.setattr(hand, '_wait_application',
@@ -405,6 +405,32 @@ def test_overload_uses_fresh_fault_packet_instead_of_inferred_load(hand):
     state.fault_status_last_rx_ts = time.time() - 1
     stamp(state, 'fault_status_last_rx_ts')
     assert hand.application_snapshot()['badges']['Overload'] == 'UNKNOWN'
+
+def test_workspace_badges_and_motor_row_expose_both_workspaces(hand):
+    state = hand._controller.current_state
+    state.encoders[4].angle_out_of_workspace = True
+    state.has_servo_angle_data = True
+    state.servo_abs_last_rx_ts = time.time()
+    stamp(state, 'servo_abs_last_rx_ts')
+    state.servo_online[25] = True
+    state.servo_angles[25] = 250
+    state.servo_logical_range_valid_bitmap |= 1 << 25
+    state.servo_logical_range_min[25] = 100
+    state.servo_logical_range_max[25] = 200
+    snapshot = hand.application_snapshot()
+    assert snapshot['badges']['Joint workspace'] == 'BEYOND'
+    assert snapshot['badges']['Motor workspace'] == 'BEYOND'
+    assert snapshot['joints'][4]['angle_out_of_workspace'] is True
+    assert snapshot['motors'][25]['motor_beyond_workspace'] is True
+    assert snapshot['motors'][24]['motor_beyond_workspace'] is False
+    state.encoders[4].angle_out_of_workspace = False
+    state.servo_angles[25] = 150
+    assert hand.application_snapshot()['badges']['Joint workspace'] == 'CLEAR'
+    assert hand.application_snapshot()['badges']['Motor workspace'] == 'CLEAR'
+    state.system_state = 9
+    assert hand.application_snapshot()['badges']['Joint workspace'] == 'BEYOND'
+    state.system_state = 1
+    assert hand.application_snapshot()['badges']['Joint workspace'] == 'CLEAR'
 
 def test_manual_transaction_blocks_other_motion_owners(hand):
     hand._manual_transaction_active = True
@@ -609,7 +635,7 @@ def test_motor_workflow_failure_overrides_cached_success(hand):
 
 
 @pytest.mark.parametrize('p4_state,expected', [
-    (0, 'Stopped'), (1, 'Idle'), (5, 'Ready'), (8, 'Rope Init'), (9, 'Recovery')])
+    (0, 'Stopped'), (1, 'Idle'), (5, 'Ready'), (8, 'Pull Joint into Workspace'), (9, 'Joint Beyond Workspace')])
 def test_system_label_reports_each_p4_state_instead_of_disabled(hand, monkeypatch, p4_state, expected):
     """四个不同 P4 状态过去全显示成 'Disabled'，让急停锁死看起来像待机。"""
     state = hand._controller.current_state

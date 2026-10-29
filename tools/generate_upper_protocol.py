@@ -144,7 +144,7 @@ def _render_cpp(schema: dict) -> str:
         "kCalibLoadLimitsPayloadBytes": "CMD_CALIB_LOAD_LIMITS",
         "kManualEncoderReferencePayloadBytes": "CMD_MANUAL_ENCODER_REFERENCE",
         "kManualEncoderSinglePayloadBytes": "CMD_MANUAL_ENCODER_SINGLE",
-        "kRopeInitPayloadBytes": "CMD_ROPE_INIT",
+        "kPullJointIntoWorkspacePayloadBytes": "CMD_PULL_JOINT_INTO_WORKSPACE",
         "kClearCalibrationScopePayloadBytes": "CMD_CLEAR_CALIBRATION_SCOPE",
         "kMotorAbsZeroPayloadBytes": "CMD_MOTOR_ABS_ZERO",
         "kMotorDirectReleasePayloadBytes": "CMD_MOTOR_DIRECT_RELEASE",

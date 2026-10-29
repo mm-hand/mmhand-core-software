@@ -23,7 +23,7 @@ from .calibration_workflow import CalibrationWorkflowService
 from .comm_layer import TactileSerialComm, list_ports as _list_ports
 from .core_logic import HandController, ManualPrepareResult
 from .data_models import HandModel, clone_hand_model, resolve_joint_workspace_range
-from .protocol import ControlMode, ENCODER_COUNT
+from .protocol import ControlMode, ENCODER_COUNT, READY_WORKSPACE_TOLERANCE_DEG
 from desktop.paths import CALIB_ACTIVE_SNAPSHOT_PATH
 from .calibration_snapshot import CalibrationSnapshotError, joint_calib_result_tendon_lut_abs_ranges
 from .session_log import log_session
@@ -358,6 +358,7 @@ class HandBackend(ApplicationActions):
         *,
         source: str,
         command_joint_mask: Optional[int] = None,
+        tolerance_deg: float = 0.0,
     ) -> Tuple[List[float], List[int], List[int], str]:
         values = list(targets)
         if len(values) != ENCODER_COUNT:
@@ -427,11 +428,16 @@ class HandBackend(ApplicationActions):
             bounded = workspace.clamp(requested)
             if abs(bounded - requested) > 1e-6:
                 lo, hi = spec.urdf_range_deg
+                distance = lo - requested if requested < lo else requested - hi
+                guarded[joint_idx] = bounded
+                # Enable/recovery uses the firmware READY entry tolerance so a
+                # few tenths of a degree of backlash does not fail the pose.
+                if distance <= tolerance_deg + 1e-9:
+                    continue
                 if requested < lo:
                     outside.append(f"J{joint_idx:02d} {requested:+.2f}° below min {lo:.2f}° by {lo - requested:.2f}°")
                 else:
                     outside.append(f"J{joint_idx:02d} {requested:+.2f}° above max {hi:.2f}° by {requested - hi:.2f}°")
-                guarded[joint_idx] = bounded
                 clamped.append(joint_idx)
 
         if blocked:
@@ -1006,8 +1012,8 @@ class HandBackend(ApplicationActions):
     def clear_manual_encoder_references(self) -> bool:
         return self._run_manual_transaction(lambda cancelled: False if cancelled() else self._controller.clear_manual_encoder_references(), False)
 
-    def rope_init(self, active_joint_mask: int) -> bool:
-        return self._run_user_output(lambda: self._controller.rope_init(active_joint_mask), False)
+    def pull_joint_into_workspace(self, active_joint_mask: int) -> bool:
+        return self._run_user_output(lambda: self._controller.pull_joint_into_workspace(active_joint_mask), False)
 
     def manual_prepare_all_motors(self, *, motor_mask=None, cancelled=None) -> ManualPrepareResult:
         """停止外部连续输入后执行指定电机的 turn0 与 1500-count 预松事务。

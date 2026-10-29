@@ -41,7 +41,7 @@ SystemHealthSnapshot readSystemHealth(SystemRuntimeContext* sharedData, uint32_t
     const bool motionRequiresCan =
         p4::state::requiresCan(sharedData) ||
         sharedAtomicLoad(&sharedData->system_state) ==
-            SYSTEM_STATE_ROPE_INIT_RUNNING;
+            SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING;
     health.activeJointMask = activeJointMask;
     health.encoderOnlineMask = encoderOnlineMask;
     health.encoderFaultMask = encoderFaultMask;
@@ -86,7 +86,7 @@ uint32_t blockingFaultsForState(SystemRuntimeContext*,
             return faults & ~SYSTEM_FAULT_CAN_OFFLINE;
 
         case SYSTEM_STATE_RUN_FEEDBACK:
-        case SYSTEM_STATE_ROPE_INIT_RUNNING:
+        case SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING:
             return faults;
 
         default:

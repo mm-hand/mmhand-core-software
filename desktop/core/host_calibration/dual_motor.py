@@ -742,7 +742,7 @@ class _DualMachine:
                       lut_built=lut_built, raw_samples=len(fit.samples))
         return {"result": result, "limits": limits,
                 "final_target_deg": ready_map["urdf_deg"],
-                "requires_rope_init": not inside_ready}
+                "requires_pull_joint_into_workspace": not inside_ready}
 
 
 def run_dual(io, joint, sequence_index, joint_count, selected_joint_mask, params):

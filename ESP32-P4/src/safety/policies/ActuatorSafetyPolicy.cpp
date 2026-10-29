@@ -59,7 +59,7 @@ bool ownerMatchesSystemState(uint8_t owner, uint8_t state)
                state == SYSTEM_STATE_RUN_FEEDBACK;
     }
     if (owner == SERVO_TARGET_OWNER_CALIBRATION) {
-        return state == SYSTEM_STATE_ROPE_INIT_RUNNING;
+        return state == SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING;
     }
     return false;
 }
@@ -220,7 +220,7 @@ ServoSafetyDecision evaluateCommand(const ServoTargetBatch_t& batch,
                       motorChannel,
                       commandIndex);
     }
-    // 人工直控可关闭此门禁来重建坐标，负反馈与 Rope Init 必须开启。
+    // 人工直控可关闭此门禁来重建坐标，负反馈与 Pull Joint into Workspace 必须开启。
     if (context.requireMultiTurnKnown &&
         (context.multiTurnUnknownMask & motorBit) != 0) {
         return reject(ServoRejectReason::MultiTurnUnknown,

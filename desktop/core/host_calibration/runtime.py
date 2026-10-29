@@ -34,10 +34,10 @@ from ..protocol import (
     CALIB_DIAG_REASON_SERVO_RECOVERY_TIMEOUT, CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT,
     CMD_CALIB_LOAD_JOINT, CMD_CALIB_LOAD_LIMITS, CMD_MANUAL_ENCODER_SINGLE,
     CMD_MOTOR_DIRECT_RELEASE, CMD_MOTOR_POS_ABS,
-    CMD_RESET, CMD_ROPE_INIT, CMD_START, ControlMode, ENCODER_COUNT, HAND_PROFILE,
+    CMD_RESET, CMD_PULL_JOINT_INTO_WORKSPACE, CMD_START, ControlMode, ENCODER_COUNT, HAND_PROFILE,
     MOTOR_COUNT, PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED,
     STATE_SYNC_ALL, SYSTEM_STATE_IDLE, SYSTEM_STATE_READY,
-    SYSTEM_STATE_RECOVERY_REQUIRED, SYSTEM_STATE_RUN_DIRECT,
+    SYSTEM_STATE_JOINT_BEYOND_WORKSPACE, SYSTEM_STATE_RUN_DIRECT,
     SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_FAULT_MULTITURN_UNKNOWN,
     SYSTEM_FAULT_SERVO_OFFLINE, SYSTEM_FAULT_CALIBRATION,
     STATE_SYNC_MULTITURN_STATE, VALID_MOTOR_MASK, build_calib_load_joint_cmd,
@@ -163,13 +163,13 @@ class HostCalibrationIO:
                       state.control_enabled and state.servo_target_owner == 1):
                     return True
                 elif not (state.system_state in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY,
-                        SYSTEM_STATE_RECOVERY_REQUIRED) and not state.control_enabled and
+                        SYSTEM_STATE_JOINT_BEYOND_WORKSPACE) and not state.control_enabled and
                         state.servo_target_owner == 0 and state.direct_target_token == self._target_token
                         and state.direct_target_status == 2):
                     reason = (f'state={state.system_state}, owner={state.servo_target_owner}, '
                               f'token={state.direct_target_token}/{self._target_token}, result={state.direct_target_status}')
             elif (state.system_state not in (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE,
-                    SYSTEM_STATE_READY, SYSTEM_STATE_RECOVERY_REQUIRED)
+                    SYSTEM_STATE_READY, SYSTEM_STATE_JOINT_BEYOND_WORKSPACE)
                     or state.control_enabled or state.servo_target_owner):
                 reason = f'not stopped: state={state.system_state}, owner={state.servo_target_owner}'
         if reason:
@@ -635,7 +635,7 @@ class HostCalibrationIO:
                 state.system_fault_bitmap != SYSTEM_FAULT_MULTITURN_UNKNOWN or
                 state.control_enabled or state.servo_target_owner != 0 or
                 state.system_state not in (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE,
-                    SYSTEM_STATE_READY, SYSTEM_STATE_RECOVERY_REQUIRED)):
+                    SYSTEM_STATE_READY, SYSTEM_STATE_JOINT_BEYOND_WORKSPACE)):
             return False
         unknown = int(state.multi_turn_unknown_bitmap)
         if not unknown:
@@ -969,7 +969,7 @@ class HostCalibrationIO:
         if not self._ack(CMD_START, 'start'):
             return False
         return self._wait(lambda: self._state().system_state in (
-            SYSTEM_STATE_IDLE, SYSTEM_STATE_READY, SYSTEM_STATE_RECOVERY_REQUIRED), 1000)
+            SYSTEM_STATE_IDLE, SYSTEM_STATE_READY, SYSTEM_STATE_JOINT_BEYOND_WORKSPACE), 1000)
 
     def _log_publish_targets(self, token, mask, values, actual):
         """把每批直控目标与同刻实测 ABS 落盘（P4 trace 不覆盖 direct 模式）。
@@ -1233,10 +1233,10 @@ class HostCalibrationIO:
 
     def finish_session(self, success, completed, failed):
         finished_ok = False
-        # Rope Init 失败是可预期结果：P4 已断扭矩并停在 RECOVERY_REQUIRED/IDLE，
+        # Pull Joint into Workspace 失败是可预期结果：P4 已断扭矩并停在 JOINT_BEYOND_WORKSPACE/IDLE，
         # 这两个状态都允许再次收绳。此时补发 STOP 会锁存 E-STOP，把状态打成
         # UNCONTROLLABLE，之后 Enable 的自动收绳永远被拒，必须先 Clear Faults。
-        rope_init_failed = False
+        pull_joint_into_workspace_failed = False
         try:
             if not success or self._cancel.is_set() or self.cancel_check():
                 if self.controller.comm and self.controller._host_calibration_io is self:
@@ -1264,22 +1264,22 @@ class HostCalibrationIO:
                 return False, 'calibration complete; active scope restore failed'
             if not self._ack(CMD_START, 'start'):
                 return False, 'calibration complete; P4 preparation failed'
-            baseline = self._state().rope_init_sequence
-            if not self._ack(CMD_ROPE_INIT, ('rope_init', self.selected_joint_mask)):
-                return False, 'calibration complete; Rope Init start failed'
-            if not self._wait(lambda: self._state().rope_init_sequence != baseline and
-                              self._state().rope_init_status in (2, 3), 30000):
-                return False, 'calibration complete; Rope Init result timeout'
-            if self._state().rope_init_status != 2:
-                rope_init_failed = True
-                return False, 'Rope Init failed'
+            baseline = self._state().pull_joint_into_workspace_sequence
+            if not self._ack(CMD_PULL_JOINT_INTO_WORKSPACE, ('pull_joint_into_workspace', self.selected_joint_mask)):
+                return False, 'calibration complete; Pull Joint into Workspace start failed'
+            if not self._wait(lambda: self._state().pull_joint_into_workspace_sequence != baseline and
+                              self._state().pull_joint_into_workspace_status in (2, 3), 30000):
+                return False, 'calibration complete; Pull Joint into Workspace result timeout'
+            if self._state().pull_joint_into_workspace_status != 2:
+                pull_joint_into_workspace_failed = True
+                return False, 'Pull Joint into Workspace failed'
             # 原 Auto 任务的双腱 LUT0 收尾由 host 执行，P4 仍是普通直控。
             from .finish import finish_dual_zero
             finished_ok, message = finish_dual_zero(self, completed)
             return finished_ok, message
         finally:
             self._lut_sampling_windows.clear()
-            if (success and not finished_ok and not rope_init_failed
+            if (success and not finished_ok and not pull_joint_into_workspace_failed
                     and self.controller.comm and
                     self.controller._host_calibration_io is self):
                 self.controller.invalidate_direct_commands()

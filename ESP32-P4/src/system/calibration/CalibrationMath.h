@@ -10,7 +10,7 @@
 // 14 位磁编码器一圈的计数和半圈阈值。
 static const int32_t kCalibrationEncoderModulo = 16384;
 static const int32_t kCalibrationEncoderHalfTurn = kCalibrationEncoderModulo / 2;
-// Rope Init/READY 允许落在 Manual Min 外侧的最大容差。
+// Pull Joint into Workspace/READY 允许落在 Manual Min 外侧的最大容差。
 static const int32_t kFeedbackReadyEnterOutsideToleranceCounts = 24;
 
 // S3 只发映射后的 raw（正方向递增）。P4 直接使用 raw，不做方向/取反。

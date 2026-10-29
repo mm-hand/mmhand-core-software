@@ -26,8 +26,8 @@ struct InterTaskChannels {
     MessageChannel<SystemEvent_t> stateEventQueue; ///< 顺序系统事件；急停另走 token。
     MessageChannel<RemoteSensorData_t> canRxQueue; ///< 最新 CAN 传感器快照。
     MessageChannel<ServoTargetBatch_t> servoTargetQueue; ///< 唯一舵机执行批次邮箱。
-    MessageChannel<ServoAngleData_t> servoFeedbackQueue; ///< 控制、Rope Init 和上行共读的 logical ABS 快照。
-    MessageChannel<ServoTelemetryData_t> servoTelemetryQueue; ///< 控制、Rope Init 和上行共读的最新遥测。
+    MessageChannel<ServoAngleData_t> servoFeedbackQueue; ///< 控制、Pull Joint into Workspace 和上行共读的 logical ABS 快照。
+    MessageChannel<ServoTelemetryData_t> servoTelemetryQueue; ///< 控制、Pull Joint into Workspace 和上行共读的最新遥测。
     MessageChannel<MappedAngleData_t> mappedAngleQueue; ///< 21 关节角快照。
     MessageChannel<ControlTraceData_t> controlTraceQueue; ///< 订阅期间逐周期 FIFO，不阻塞控制。
     uint8_t controlTraceRecordingEnabled = 0; ///< HostComm 写，控制任务原子读取。

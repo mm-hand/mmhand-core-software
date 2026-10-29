@@ -9,7 +9,7 @@
 #include "HostLeaseSupervisor.h"
 #include "../../safety/policies/SystemReadinessPolicy.h"
 #include "../../safety/policies/SystemFaultPolicy.h"
-#include "RopeInitController.h"
+#include "PullJointIntoWorkspaceController.h"
 #include "../../system/ServiceCyclePolicy.h"
 #include "../../safety/policies/HostLeaseSafetyPolicy.h"
 #include "../../safety/policies/StateAdmissionPolicy.h"
@@ -42,7 +42,7 @@ bool initSystemStateCoordinator(SystemStateCoordinatorContext* context,
 }
 
 /**
- * 推进一个顶层状态周期。事件顺序保持 E-STOP、普通事件、Rope Init、租约、
+ * 推进一个顶层状态周期。事件顺序保持 E-STOP、普通事件、Pull Joint into Workspace、租约、
  * 故障汇总和 READY 重评估，避免重构改变原有状态迁移优先级。
  */
 bool stepSystemStateCoordinator(SystemStateCoordinatorContext* context,
@@ -77,9 +77,9 @@ bool stepSystemStateCoordinator(SystemStateCoordinatorContext* context,
             handleSystemEvent(sharedData, event);
         }
 
-        // Rope Init 不再占用独立任务；状态机每 10 ms 调用一次，控制器内部
+        // Pull Joint into Workspace 不再占用独立任务；状态机每 10 ms 调用一次，控制器内部
         // 保持原 50 ms 运动节拍，并通过统一 actuator mailbox 发送目标。
-        p4::recovery::stepRopeInitController(sharedData, nowMs);
+        p4::recovery::stepPullJointIntoWorkspaceController(sharedData, nowMs);
 
         // 所有舵机运动态都必须由桌面端公共心跳续租；ROS2 不另设消息超时。
         // 租约服务只推进 Hold 事务；状态迁移和持久化仍由总状态机端口统一执行。

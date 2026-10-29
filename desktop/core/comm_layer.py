@@ -95,7 +95,7 @@ from .protocol import (
     build_manual_encoder_single_cmd,
     build_state_sync_request_cmd,
     build_diagnostics_subscribe_cmd,
-    build_rope_init_cmd,
+    build_pull_joint_into_workspace_cmd,
 
     build_trust_multiturn_cmd,
     build_run_feedback_cmd,
@@ -1862,8 +1862,8 @@ class LowerComputerComm:
             return build_diagnostics_subscribe_cmd(int(cmd[1]), int(cmd[2]))
         if isinstance(cmd, tuple) and len(cmd) == 4 and cmd[0] == "manual_encoder_single":
             return build_manual_encoder_single_cmd(cmd[1], cmd[2], cmd[3])
-        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "rope_init":
-            return build_rope_init_cmd(cmd[1])
+        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "pull_joint_into_workspace":
+            return build_pull_joint_into_workspace_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_pos_abs":
             return build_motor_pos_abs_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "motor_pos_abs_one":

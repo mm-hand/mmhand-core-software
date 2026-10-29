@@ -44,7 +44,7 @@ int main()
                                     SERVO_TARGET_OWNER_CONTROL));
     // Wire state 4 is retired. Neither old owner pairing may admit motion.
     assert(!requiresHostControlLease(4, SERVO_TARGET_OWNER_CALIBRATION));
-    assert(requiresHostControlLease(SYSTEM_STATE_ROPE_INIT_RUNNING,
+    assert(requiresHostControlLease(SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING,
                                     SERVO_TARGET_OWNER_CALIBRATION));
 
     assert(!requiresHostControlLease(SYSTEM_STATE_IDLE,
@@ -72,7 +72,7 @@ int main()
     assert(!p4::system::canAcceptRunFeedback(7));
     // Firmware calibration has no admission API; it runs exclusively in the host.
     assert(p4::system::canAcceptRunFeedback(SYSTEM_STATE_READY));
-    assert(!p4::system::canAcceptRunFeedback(SYSTEM_STATE_RECOVERY_REQUIRED));
+    assert(!p4::system::canAcceptRunFeedback(SYSTEM_STATE_JOINT_BEYOND_WORKSPACE));
     assert(p4::system::protocolContractMatches(2, 31, 58, 2, 31, 58));
     assert(!p4::system::protocolContractMatches(1, 31, 58, 2, 31, 58));
     assert(!p4::system::protocolContractMatches(2, 30, 58, 2, 31, 58));

@@ -62,7 +62,7 @@ bool stepServoMaintenance(SystemRuntimeContext* context, uint32_t nowMs) {
     uint8_t status = 0;
     const bool stopped = !sharedAtomicLoad(&context->control_enabled) &&
         !sharedAtomicLoad(&context->servo_target_owner) &&
-        sharedAtomicLoad(&context->system_state) != SYSTEM_STATE_ROPE_INIT_RUNNING &&
+        sharedAtomicLoad(&context->system_state) != SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING &&
         sharedAtomicLoad(&context->system_state) != SYSTEM_STATE_RUN_DIRECT &&
         sharedAtomicLoad(&context->system_state) != SYSTEM_STATE_RUN_FEEDBACK &&
         sharedAtomicLoad(&context->pending_direct_valid) == 0 &&

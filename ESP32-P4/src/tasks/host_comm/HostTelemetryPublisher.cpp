@@ -197,11 +197,11 @@ bool sendSystemStatusPacket(SystemRuntimeContext* sharedData)
     buffer[idx++] = sharedData->manual_reference_committed ? 1 : 0;
     appendU32BigEndian(buffer, &idx, autoCalibrationValidMask(sharedData));
     buffer[idx++] = sharedData->manual_reference_commit_status;
-    buffer[idx++] = sharedData->rope_init_status;
-    buffer[idx++] = sharedData->rope_init_reason;
-    appendU32BigEndian(buffer, &idx, sharedData->rope_init_sequence);
-    appendU32BigEndian(buffer, &idx, sharedData->rope_init_joint_mask);
-    appendU32BigEndian(buffer, &idx, sharedData->rope_init_timestamp);
+    buffer[idx++] = sharedData->pull_joint_into_workspace_status;
+    buffer[idx++] = sharedData->pull_joint_into_workspace_reason;
+    appendU32BigEndian(buffer, &idx, sharedData->pull_joint_into_workspace_sequence);
+    appendU32BigEndian(buffer, &idx, sharedData->pull_joint_into_workspace_joint_mask);
+    appendU32BigEndian(buffer, &idx, sharedData->pull_joint_into_workspace_timestamp);
     appendU32BigEndian(buffer, &idx, sharedData->pending_direct_generation);
     appendU32BigEndian(buffer, &idx, sharedData->applied_direct_generation);
     buffer[idx++] = sharedData->direct_reject_reason;

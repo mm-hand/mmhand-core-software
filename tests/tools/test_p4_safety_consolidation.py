@@ -46,7 +46,7 @@ constexpr int ENCODER_TOTAL_NUM=21;
 constexpr uint32_t SYSTEM_FAULT_CAN_OFFLINE=1, SYSTEM_FAULT_OVERLOAD=4,
     SYSTEM_FAULT_SERVO_OFFLINE=16, SYSTEM_FAULT_MULTITURN_UNKNOWN=64;
 constexpr int SYSTEM_STATE_RUN_DIRECT=3, SYSTEM_STATE_RUN_FEEDBACK=5,
-    SYSTEM_STATE_ROPE_INIT_RUNNING=9;
+    SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING=9;
 struct RemoteSensorData_t { bool isValid=true; uint32_t timestamp=1000; };
 struct ServoAngleData_t { uint32_t timestamp=1000; uint32_t onlineMask=3; };
 template<class T> struct Mailbox {

@@ -14,9 +14,9 @@ HEAVY_INTERVAL_S = 0.5
 PLOTS_INTERVAL_S = 1.0
 
 # Leaves whose refresher builds charts from curve/component history.
-PLOT_LEAVES = ('Curves & Recordings', 'Tactile')
+PLOT_LEAVES = ('Curves', 'Tactile')
 # Only this leaf consumes snapshot['curves'] / snapshot['control_components'].
-CURVE_LEAVES = ('Curves & Recordings',)
+CURVE_LEAVES = ('Curves',)
 
 # A tick blocking the event loop longer than this is logged to System Log.
 SLOW_TICK_LIMIT_MS = 50.0
@@ -51,7 +51,7 @@ def select_intervals(leaf):
 
 
 def needs_curves(leaf):
-    """Only the Curves & Recordings page reads curve and control-component history."""
+    """Only the Curves page reads curve and control-component history."""
     return leaf in CURVE_LEAVES
 
 

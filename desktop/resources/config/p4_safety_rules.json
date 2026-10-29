@@ -288,7 +288,7 @@
       "severity": "Blocking",
       "layer": "System",
       "action": "Reject command",
-      "recovery": "Run Rope Init to move the selected joints into READY."
+      "recovery": "Run Pull Joint into Workspace to move the selected joints into READY."
     },
     {
       "rule_id": 3204,
@@ -378,7 +378,7 @@
       "severity": "Warning",
       "layer": "System",
       "action": "Return to IDLE",
-      "recovery": "Run Rope Init."
+      "recovery": "Run Pull Joint into Workspace."
     },
     {
       "rule_id": 3308,
@@ -419,7 +419,7 @@
     {
       "rule_id": 3401,
       "code": "ROP-3401",
-      "title": "Rope Init timed out",
+      "title": "Pull Joint into Workspace timed out",
       "severity": "Blocking",
       "layer": "Calibration",
       "action": "Stop current motion",
@@ -428,7 +428,7 @@
     {
       "rule_id": 3402,
       "code": "ROP-3402",
-      "title": "Rope Init feedback is stale",
+      "title": "Pull Joint into Workspace feedback is stale",
       "severity": "Blocking",
       "layer": "Calibration",
       "action": "Stop current motion",
@@ -437,7 +437,7 @@
     {
       "rule_id": 3403,
       "code": "ROP-3403",
-      "title": "Servo went offline during Rope Init",
+      "title": "Servo went offline during Pull Joint into Workspace",
       "severity": "Blocking",
       "layer": "Calibration",
       "action": "Stop current motion",
@@ -446,7 +446,7 @@
     {
       "rule_id": 3404,
       "code": "ROP-3404",
-      "title": "Rope Init has unknown multi-turn state",
+      "title": "Pull Joint into Workspace has unknown multi-turn state",
       "severity": "Blocking",
       "layer": "Calibration",
       "action": "Stop current motion",
@@ -455,7 +455,7 @@
     {
       "rule_id": 3405,
       "code": "ROP-3405",
-      "title": "Rope Init is missing Manual data",
+      "title": "Pull Joint into Workspace is missing Manual data",
       "severity": "Blocking",
       "layer": "Calibration",
       "action": "Stop current motion",
@@ -464,7 +464,7 @@
     {
       "rule_id": 3406,
       "code": "ROP-3406",
-      "title": "Rope Init is missing Auto calibration",
+      "title": "Pull Joint into Workspace is missing Auto calibration",
       "severity": "Blocking",
       "layer": "Calibration",
       "action": "Stop current motion",
@@ -473,7 +473,7 @@
     {
       "rule_id": 3407,
       "code": "ROP-3407",
-      "title": "Rope Init target publish failed",
+      "title": "Pull Joint into Workspace target publish failed",
       "severity": "Emergency",
       "layer": "Calibration",
       "action": "Stop current motion",
@@ -482,7 +482,7 @@
     {
       "rule_id": 3408,
       "code": "ROP-3408",
-      "title": "System fault aborted Rope Init",
+      "title": "System fault aborted Pull Joint into Workspace",
       "severity": "Blocking",
       "layer": "Calibration",
       "action": "Stop current motion",
@@ -491,7 +491,7 @@
     {
       "rule_id": 3409,
       "code": "ROP-3409",
-      "title": "Mode switching cancelled Rope Init",
+      "title": "Mode switching cancelled Pull Joint into Workspace",
       "severity": "Info",
       "layer": "Calibration",
       "action": "Stop current motion",

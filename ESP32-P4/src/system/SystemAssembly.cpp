@@ -105,10 +105,10 @@ bool assembleAndStartSystem() {
     sharedData.feedback_reject_reason = FEEDBACK_REJECT_NONE;
     // E-STOP 使用单调 token 绕过普通事件队列，队列满时也不会丢急停请求。
     // 上位机控制租约与 Hold 确认从空闲代次开始；直控、负反馈、自动标定和
-    // Rope Init 共用这组事务字段，避免各运动任务维护彼此不一致的看门狗。
+    // Pull Joint into Workspace 共用这组事务字段，避免各运动任务维护彼此不一致的看门狗。
     sharedData.host_control_hold_status = HOST_CONTROL_HOLD_IDLE;
-    sharedData.rope_init_status = ROPE_INIT_STATUS_IDLE;
-    sharedData.rope_init_reason = ROPE_INIT_REASON_NONE;
+    sharedData.pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_IDLE;
+    sharedData.pull_joint_into_workspace_reason = PULL_JOINT_INTO_WORKSPACE_REASON_NONE;
 
     // 默认活动范围为 J08-J11；上位机连接后会按 UI 选择覆盖这两个 mask。
     const uint32_t validMotorMask = validMotorChannelMask();

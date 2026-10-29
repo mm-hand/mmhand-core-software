@@ -27,8 +27,8 @@ SafetyRuleId ruleForFeedbackRejectReason(uint8_t reason);
 /** @brief 将 READY 评估拒绝原因映射为 RDY-33xx 稳定规则。 */
 SafetyRuleId ruleForFeedbackReadyRejectReason(uint8_t reason);
 
-/** 将 Rope Init 失败原因映射到稳定规则 ID。 */
-SafetyRuleId ruleForRopeInitReason(uint8_t reason);
+/** 将 Pull Joint into Workspace 失败原因映射到稳定规则 ID。 */
+SafetyRuleId ruleForPullJointIntoWorkspaceReason(uint8_t reason);
 
 /** 将 CALIB_WARN_* 单一告警位映射到稳定规则 ID。 */
 SafetyRuleId ruleForCalibrationWarningBit(uint8_t warningBit);

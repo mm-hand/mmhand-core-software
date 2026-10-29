@@ -5,7 +5,7 @@ import re
 from desktop.core.safety_rules import (
     explain_direct_reject,
     explain_feedback_reject,
-    explain_rope_init_reason,
+    explain_pull_joint_into_workspace_reason,
     explain_safety_rule,
     safety_rule_table,
 )
@@ -29,5 +29,5 @@ def test_reject_reasons_use_central_explanations() -> None:
     for reason in (1, 2, 3, 4, 6, 7):
         assert f"FBK-{3200 + reason}" in explain_feedback_reject(reason)
     for reason in range(1, 10):
-        assert f"ROP-{3400 + reason}" in explain_rope_init_reason(reason)
-    assert "Unknown Rope Init reason 10" == explain_rope_init_reason(10)
+        assert f"ROP-{3400 + reason}" in explain_pull_joint_into_workspace_reason(reason)
+    assert "Unknown Pull Joint into Workspace reason 10" == explain_pull_joint_into_workspace_reason(10)

@@ -30,7 +30,7 @@
       "severity": "Warning",
       "layer": "System",
       "action": "Reject command",
-      "recovery": "Complete Rope Init and wait for READY.",
+      "recovery": "Complete Pull Joint into Workspace and wait for READY.",
       "replacement": 3202,
       "status": "merged"
     },

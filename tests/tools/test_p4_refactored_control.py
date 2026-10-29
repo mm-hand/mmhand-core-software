@@ -111,7 +111,19 @@ int main() {
     controller.compute(0,0,fb,3000,servo,telemetry,lut,3,p,ramp);
     fb.fast=1.0f;
     auto damped=controller.compute(0,0,fb,3010,servo,telemetry,lut,3,p,ramp);
-    assert(damped.derivative[0] < -20.0f && damped.targets[0] < 90); // measured damping, no target kick
+    assert(damped.derivative[0] < -20.0f && damped.targets[0] < 90); // measured velocity opposes D
+    controller.resetAll(); fb.fast=fb.slow=0;
+    controller.compute(0,0,fb,3100,servo,telemetry,lut,3,p,ramp);
+    auto targetStep=controller.compute(0,1,fb,3110,servo,telemetry,lut,3,p,ramp);
+    assert(targetStep.derivative[0] > 20.0f); // target velocity contributes positively
+    controller.resetAll(); p.values[JointKdMcp]=0.1f;
+    controller.compute(1,0,fb,3200,servo,telemetry,lut,3,p,ramp);
+    auto pairStep=controller.compute(1,1,fb,3210,servo,telemetry,lut,3,p,ramp);
+    assert(pairStep.derivative[0] > 20.0f && pairStep.derivative[1] < -40.0f);
+    fb.fresh=false;
+    auto staleD=controller.compute(1,2,fb,3220,servo,telemetry,lut,3,p,ramp);
+    assert(staleD.derivative[0]==0 && staleD.derivative[1]==0);
+    fb.fresh=true;
     p.values[JointKdAa]=0.0f; controller.resetAll(); fb.fast=fb.slow=0;
     p.values[JointKiAa]=0.2f; p.values[JointKiIntegralConfirmMs]=20;
     controller.compute(0,0,fb,990,servo,telemetry,lut,3,p,ramp);

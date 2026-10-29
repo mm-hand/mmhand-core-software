@@ -267,7 +267,7 @@ $requiredSplitModules = @(
     "safety\policies\SystemFaultPolicy.cpp",
     "tasks\system_state\HostLeaseSupervisor.cpp",
     "tasks\system_state\SystemEventDispatcher.cpp",
-    "tasks\system_state\RopeInitController.cpp"
+    "tasks\system_state\PullJointIntoWorkspaceController.cpp"
 )
 foreach ($relativePath in $requiredSplitModules) {
     if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot $relativePath))) {
@@ -275,9 +275,9 @@ foreach ($relativePath in $requiredSplitModules) {
     }
 }
 
-# Rope Init 已并入状态协调循环，不允许重新创建独立 Task/Runtime/Service。
+# Pull Joint into Workspace 已并入状态协调循环，不允许重新创建独立 Task/Runtime/Service。
 $removedArchitectureSymbols = $sourceFiles | Select-String -Encoding UTF8 -Pattern `
-    '\b(RopeInitTask|RopeInitService|RopeInitTaskRuntime|runRopeInitTask)\b'
+    '\b(PullJointIntoWorkspaceTask|PullJointIntoWorkspaceService|PullJointIntoWorkspaceTaskRuntime|runPullJointIntoWorkspaceTask)\b'
 foreach ($match in $removedArchitectureSymbols) {
     Add-Failure ("Removed architecture symbol returned: {0}:{1}" -f `
                  $match.Path, $match.LineNumber)

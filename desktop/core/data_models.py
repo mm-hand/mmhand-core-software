@@ -406,11 +406,11 @@ class HandModel:
     manual_reference_committed: bool = False
     manual_reference_commit_status: int = 0
     auto_calibration_valid_bitmap: int = 0
-    rope_init_status: int = 0
-    rope_init_reason: int = 0
-    rope_init_sequence: int = 0
-    rope_init_joint_mask: int = 0
-    rope_init_timestamp_ms: int = 0
+    pull_joint_into_workspace_status: int = 0
+    pull_joint_into_workspace_reason: int = 0
+    pull_joint_into_workspace_sequence: int = 0
+    pull_joint_into_workspace_joint_mask: int = 0
+    pull_joint_into_workspace_timestamp_ms: int = 0
     pending_direct_generation: int = 0
     applied_direct_generation: int = 0
     direct_reject_reason: int = 0
