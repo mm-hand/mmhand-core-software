@@ -15,6 +15,10 @@ from nicegui import app, ui
 
 ROOT = Path(__file__).resolve().parents[2] / 'resources'
 MODEL = ROOT / 'hku_hand_v2_urdf'
+# Same palm-facing direction and up vector as mmhand_teleop's robot viewer.
+CAMERA = dict(x=0.1046, y=-0.0168, z=-0.4559, look_at_x=0.1050,
+              look_at_y=-0.0191, look_at_z=-0.0759,
+              up_x=0.9994, up_y=-0.03465, up_z=-0.00149)
 
 def _vec(text, default):
     return tuple(float(v) for v in (text or default).split())
@@ -38,14 +42,14 @@ def build(hand):
         ui.label('Green: target · Red: measured').classes('text-sm')
         reset = ui.button('Reset view')
     status = ui.label('Waiting for feedback')
-    camera = ui.scene.perspective_camera(near=0.01)
-    camera.x, camera.y, camera.z = 0.16, -0.22, 0.19
-    scene = ui.scene(width=800, height=550, grid=False, camera=camera).classes('w-full')
+    camera = ui.scene.perspective_camera(fov=42, near=0.01)
+    for key, value in CAMERA.items():
+        setattr(camera, key, value)
+    scene = ui.scene(width=800, height=360, grid=False, camera=camera).classes('w-full')
     shown = False
-    reset.on_click(lambda: scene.move_camera(
-        x=0.16, y=-0.22, z=0.19, look_at_x=0, look_at_y=0, look_at_z=0))
+    reset.on_click(lambda: scene.move_camera(**CAMERA))
     poses = []
-    def add_link(name, motors, color):
+    def add_link(name, motors, color, opacity):
         link = links[name]
         for visual in link.findall('visual'):
             mesh = visual.find('geometry/mesh')
@@ -55,7 +59,7 @@ def build(hand):
             xyz = _vec(origin.get('xyz') if origin is not None else None, '0 0 0')
             rpy = _vec(origin.get('rpy') if origin is not None else None, '0 0 0')
             scale = _vec(mesh.get('scale'), '1 1 1')
-            scene.stl('/hand-meshes/' + Path(mesh.attrib['filename']).name).move(*xyz).rotate(*rpy).scale(*scale).material(color, opacity=0.5)
+            scene.stl('/hand-meshes/' + Path(mesh.attrib['filename']).name).move(*xyz).rotate(*rpy).scale(*scale).material(color, opacity=opacity)
         for joint in by_parent.get(name, []):
             origin = joint.find('origin')
             xyz = _vec(origin.get('xyz') if origin is not None else None, '0 0 0')
@@ -66,13 +70,22 @@ def build(hand):
                 with scene.group() as rotation:
                     idx = indices.get(joint.attrib['name'])
                     if idx is not None: motors.append((idx, axis, rotation))
-                    add_link(joint.find('child').attrib['link'], motors, color)
-    with scene:
-        for color in ('#20b45a', '#e53935'):
-            motors = []
-            with scene.group():
-                for root in roots: add_link(root, motors, color)
-            poses.append(motors)
+                    add_link(joint.find('child').attrib['link'], motors, color, opacity)
+    def create_models():
+        # Tab panels mount lazily. Creating objects before the scene's first
+        # init sends their creation calls to a component that does not exist yet.
+        # NiceGUI restores existing objects itself on later scene remounts.
+        if poses:
+            return
+        with scene:
+            for color, opacity in (('#20b45a', 0.45), ('#e53935', 0.85)):
+                motors = []
+                with scene.group() as model:
+                    for root in roots: add_link(root, motors, color, opacity)
+                if color == '#20b45a':
+                    model.visible(False)
+                poses.append((model, motors))
+    scene.on('init', create_models)
     def refresh(snapshot):
         nonlocal shown
         if not shown:
@@ -81,15 +94,14 @@ def build(hand):
             scene.run_method('resize')
             shown = True
         rows = snapshot['joints']
-        valid = sum(row.get('angle') is not None for row in rows)
+        valid = sum(row.get('angle') is not None and math.isfinite(row['angle']) for row in rows)
         status.set_text(f'Live feedback · {valid}/{len(rows)} joints' if valid == len(rows)
-                        else f'Partial feedback · {valid}/{len(rows)} joints')
-        for motors, key in zip(poses, ('target', 'angle')):
+                        else f'Partial feedback · {valid}/{len(rows)} joints · missing angles use last known or zero')
+        for (model, motors), key in zip(poses, ('target', 'angle')):
+            if key == 'target':
+                model.visible(snapshot.get('control_mode') == 'FEEDBACK' and snapshot.get('communication') == 'Online')
             for idx, axis, rotation in motors:
                 value = rows[idx].get(key)
-                if key == 'target' and snapshot.get('communication') != 'Online':
-                    value = None
-                rotation.visible(value is not None and math.isfinite(value))
                 if value is not None and math.isfinite(value):
                     # URDF axes are unit vectors; Rodrigues rotation handles arbitrary axes.
                     x,y,z = axis; norm = math.sqrt(x*x+y*y+z*z)

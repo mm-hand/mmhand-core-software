@@ -51,6 +51,35 @@ def test_every_native_page_builds_and_refreshes_unknown_feedback(page, name):
     confirm.assert_not_called()
     assert client.elements
 
+def test_hand_models_follow_feedback_and_control_state(page):
+    hand, client = page
+    refresh = hand_view.build(hand)
+    scene = next(element for element in client.elements.values() if isinstance(element, ui.scene))
+    init_handlers = [event.handler for event in scene._event_listeners.values() if event.type == 'init']
+    init_handlers[-1]()
+    models = [obj for obj in scene.objects.values() if obj.parent.id == 'scene']
+    assert len(models) == 2
+    target, measured = models
+    snapshot = hand.application_snapshot()
+    refresh(snapshot)
+    assert measured.visible_ and not target.visible_
+    assert all(obj.visible_ for obj in scene.objects.values() if measured in obj.ancestors)
+
+    snapshot['communication'] = 'Online'
+    snapshot['control_mode'] = 'FEEDBACK'
+    before = {obj.id: obj.R for obj in scene.objects.values() if measured in obj.ancestors}
+    snapshot['joints'][0]['angle'] = 30.0
+    refresh(snapshot)
+    assert target.visible_
+    rotated = [obj for obj in scene.objects.values() if obj.id in before and obj.R != before[obj.id]]
+    assert rotated
+    previous = [obj.R for obj in rotated]
+    snapshot['joints'][0]['angle'] = None
+    snapshot['control_mode'] = 'IDLE'
+    refresh(snapshot)
+    assert not target.visible_ and measured.visible_
+    assert [obj.R for obj in rotated] == previous
+
 def test_adaptive_kp_is_one_expansion_after_kd_with_one_enable_button(page):
     hand, client = page
     hand.request_apply_control_parameters = Mock()
