@@ -34,8 +34,8 @@ def run_native(tmp_path, name, source):
 
 
 def test_health_snapshot_reads_each_mailbox_once_and_preserves_safety_thresholds(tmp_path):
-    implementation = (SRC / 'safety/policies/SystemFaultPolicy.cpp').read_text()
-    header = (SRC / 'safety/policies/SystemFaultPolicy.h').read_text()
+    implementation = (SRC / 'safety/policies/SystemFaultPolicy.cpp').read_text(encoding='utf-8')
+    header = (SRC / 'safety/policies/SystemFaultPolicy.h').read_text(encoding='utf-8')
     snapshot_type = function(header, 'struct SystemHealthSnapshot') + ';'
     source = r'''
 #include <cassert>
@@ -92,8 +92,8 @@ int main() {
 
 
 def test_loaded_single_and_dual_lut_bounds_follow_applied_parameters_and_rebuild_old_limits(tmp_path):
-    dispatcher = (SRC / 'tasks/host_comm/HostCommandDispatcher.cpp').read_text()
-    lut = (SRC / 'system/calibration/TendonCalibrationLut.cpp').read_text()
+    dispatcher = (SRC / 'tasks/host_comm/HostCommandDispatcher.cpp').read_text(encoding='utf-8')
+    lut = (SRC / 'system/calibration/TendonCalibrationLut.cpp').read_text(encoding='utf-8')
     source = r'''
 #include <cassert>
 #include <cmath>

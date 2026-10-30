@@ -1,6 +1,6 @@
 """Console transactions, cancellation and recording lifecycle with simulated hardware."""
 
-from _clock_helpers import stamp
+from _clock_helpers import live_status_feedback, stamp
 import threading
 import time
 from unittest.mock import ANY, Mock
@@ -30,8 +30,14 @@ def test_s3_rx_newer_than_snapshot_clock_is_online_instead_of_no_valid_frames(ha
     assert connection['data_status'] == 'Online'
 
 
-def joint_preparation_device(hand, monkeypatch, *, ready_state=SYSTEM_STATE_READY, fault=None):
-    """Emulate P4 scope/START replies, keeping the actual host command queue."""
+def joint_preparation_device(hand, monkeypatch, *, ready_state=SYSTEM_STATE_READY,
+                             fault=None, live_status=True):
+    """Emulate P4 scope/START replies, keeping the actual host command queue.
+
+    ``live_status`` streams synthetic status frames for the whole test, which is
+    what real hardware does and what the enable predicate needs. Tests that
+    exercise a stale status frame pass ``live_status=False``.
+    """
     controller = hand._controller
     state = controller.current_state
     controller.set_control_mode(ControlMode.DIRECT_MOTOR)
@@ -109,6 +115,13 @@ def joint_preparation_device(hand, monkeypatch, *, ready_state=SYSTEM_STATE_READ
         return sent
 
     monkeypatch.setattr(comm, 'send_command', reply)
+    if live_status:
+        # Real hardware streams status frames; a synchronous mock would go stale
+        # during the multi-second enable wait and never satisfy its predicate.
+        feed = live_status_feedback(state)
+        feed.__enter__()
+        # Keep the generator alive so its finally clause can stop the thread.
+        monkeypatch.setattr(comm, 'status_feed', feed, raising=False)
     return comm, scope_writer
 
 
@@ -341,15 +354,20 @@ def test_clear_faults_releases_host_stop_even_when_live_hardware_faults_recur(ha
 
 @pytest.mark.parametrize('failure', ['no_ack', 'rejected', 'old_status', 'new_stop'])
 def test_clear_faults_cannot_clear_stop_without_ack_and_fresh_stationary_status(hand, monkeypatch, failure):
-    comm, _ = joint_preparation_device(hand, monkeypatch)
+    comm, _ = joint_preparation_device(hand, monkeypatch, live_status=False)
     hand._estop_requested_at = time.time() - 1
-
     def reset_ack(*args, **kwargs):
         if failure == 'no_ack':
             return None
         received = time.time()
         if failure == 'new_stop':
             hand.stop_motion()
+        if failure == 'old_status':
+            # The request gate already saw fresh status. This case is about the
+            # post-ACK confirmation, so the frame goes stale right after the ACK.
+            state = hand._controller.current_state
+            state.system_status_last_rx_ts = received - 5
+            stamp(state, 'system_status_last_rx_ts')
         return (206, 0, 1 if failure == 'rejected' else 2, received)
 
     monkeypatch.setattr(comm, 'wait_for_ack', reset_ack)

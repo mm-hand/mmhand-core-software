@@ -106,15 +106,21 @@ def hand(monkeypatch, tmp_path):
     hand.close_application()
 
 
-def wait_operation(hand, result):
+def wait_operation(hand, result, timeout_s=10):
+    """Wait for an operation to settle.
+
+    The budget must exceed every internal wait the operation performs: ENABLE
+    alone allows up to 5 s for the P4 confirmation, so a 2 s budget expired
+    whenever the suite ran under load.
+    """
     assert result.accepted, result.message
-    deadline = time.monotonic() + 2
+    deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         item = next(row for row in hand._application_operations if row['operation_id'] == result.operation_id)
         if item['status'] in ('SUCCESS', 'FAILED'):
             return item
         time.sleep(0.005)
-    pytest.fail('operation did not finish')
+    pytest.fail(f'operation did not finish within {timeout_s}s')
 
 
 def direct_target_device(hand, monkeypatch, *, load=0):

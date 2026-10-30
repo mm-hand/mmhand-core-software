@@ -25,6 +25,29 @@ function Add-Failure([string]$message) {
     $script:failures.Add($message)
 }
 
+# ripgrep is not always on PATH: editors and IDEs ship their own copy. Resolve it
+# once so the scan rules below call one known executable.
+function Resolve-Ripgrep {
+    $onPath = (Get-Command rg -ErrorAction SilentlyContinue).Source
+    if ($onPath) { return $onPath }
+    $bundled = @(
+        "$env:ProgramFiles\Microsoft VS Code\resources\app\node_modules.asar.unpacked\@vscode\ripgrep\bin\rg.exe",
+        "$env:LOCALAPPDATA\Programs\Microsoft VS Code\resources\app\node_modules.asar.unpacked\@vscode\ripgrep\bin\rg.exe",
+        "$env:LOCALAPPDATA\Programs\Arduino IDE\resources\app\lib\backend\native\rg.exe"
+    ) | Where-Object { Test-Path -LiteralPath $_ }
+    foreach ($candidate in @($bundled)) {
+        if ($candidate) { return [string]$candidate }
+    }
+    return $null
+}
+
+$rg = Resolve-Ripgrep
+if (-not $rg) {
+    Write-Error "ripgrep (rg.exe) is required for the R8 scan rules but was not found on PATH or in a bundled editor. Install ripgrep and rerun."
+    exit 2
+}
+Write-Host "Using ripgrep at $rg"
+
 function Get-RelativeSourcePath([System.IO.FileInfo]$file) {
     return $file.FullName.Substring($sourceRoot.Length + 1).Replace("\", "/")
 }
@@ -304,7 +327,7 @@ if (-not $contextBody.Success) {
 
 # R8：飞特、Host 串口和 TWAI 只能通过各自 HAL 唯一入口。
 # 内嵌 SDK 源码树（hal/servo/FTServo_Arduino）本身豁免，业务侧仍只允许 FeetechServoDriver。
-$sdkViolations = & rg -n `
+$sdkViolations = & $rg -n `
     "SMS_STS|SyncWritePosEx|WritePosEx|EnableTorque|\bFeedBack\s*\(|\bReadPos\s*\(" `
     $sourceRoot -g "*.h" -g "*.cpp" -g "*.c" `
     -g "!**/FTServo_Arduino/**" `
@@ -316,7 +339,7 @@ if ($LASTEXITCODE -gt 1) {
                  ($sdkViolations -join "`n"))
 }
 
-$canViolations = & rg -n "\btwai_[a-zA-Z0-9_]+\s*\(" `
+$canViolations = & $rg -n "\btwai_[a-zA-Z0-9_]+\s*\(" `
     $sourceRoot -g "*.h" -g "*.cpp" -g "*.c" `
     -g "!**/TwaiCanDriver.h" -g "!**/TwaiCanDriver.cpp"
 if ($LASTEXITCODE -gt 1) {
@@ -327,7 +350,7 @@ if ($LASTEXITCODE -gt 1) {
 }
 
 # 舵机目标邮箱只允许 Gateway 读写；最终发送必须经过结构化 SafetyDecision。
-$queueViolations = & rg -n "servoTargetQueue\.(send|receive|overwrite|reset)" `
+$queueViolations = & $rg -n "servoTargetQueue\.(send|receive|overwrite|reset)" `
     $sourceRoot -g "*.h" -g "*.cpp" -g "*.c" `
     -g "!**/ActuatorCommandGateway.cpp"
 if ($LASTEXITCODE -gt 1) {
@@ -402,7 +425,7 @@ foreach ($entry in $safetyEventContracts.GetEnumerator()) {
 
 # 安全目录不做中央裁决：Policy 返回判断，业务执行动作。
 # 业务只能经 SafetyEventReporter 上报，禁止直接写 EventStore。
-$safetyBypassViolations = & rg -n `
+$safetyBypassViolations = & $rg -n `
     "\b(recordSafetyEvent|recordSafetyRuleEvent|serviceRecordSafety)\s*\(" `
     $sourceRoot -g "*.h" -g "*.cpp" -g "*.c" `
     -g "!**/SafetyEventStore.h" `

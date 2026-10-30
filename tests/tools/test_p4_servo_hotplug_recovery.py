@@ -184,7 +184,9 @@ def hotplug_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dic
     service = (P4_SRC / "tasks/servo_bus/ServoBusService.cpp").read_text(encoding="utf-8")
     names = ("struct ServoOnlineRecoveryContext {", "static void processServoOnlineTransitions(")
     code = "\n".join(_production_function(service, name) + (";" if name.startswith("struct") else "") for name in names)
-    mapping = _production_function((P4_SRC / "safety/SafetyRuleRegistry.cpp").read_text(), "SafetyRuleId ruleForServoRejectReason(")
+    mapping = _production_function(
+        (P4_SRC / "safety/SafetyRuleRegistry.cpp").read_text(encoding="utf-8"),
+        "SafetyRuleId ruleForServoRejectReason(")
     source = directory / "servo_hotplug_test.cpp"
     source.write_text(NATIVE_SOURCE.replace("/* PRODUCTION_SERVICE */", code)
                       .replace("/* PRODUCTION_RULE_MAPPING */", mapping), encoding="utf-8")
