@@ -27,7 +27,7 @@ def _trace(active_joint_mask=1, frames=None):
         or [
             ReplayFrame(0.0, [10.0] * ENCODER_COUNT),
             ReplayFrame(0.03, [15.0] * ENCODER_COUNT),
-            ReplayFrame(0.06, [20.0] * ENCODER_COUNT),
+            ReplayFrame(0.06, [16.0] * ENCODER_COUNT),
         ],
     )
 
@@ -134,12 +134,12 @@ def test_replay_sends_complete_trace_and_finishes():
     sent_values = [row[0][0] for row in backend.sent]
     assert len(sent_values) == 7
     assert sent_values[0] == 10.0
-    assert sent_values[-1] == 20.0
+    assert sent_values[-1] == 16.0
     assert sent_values == sorted(sent_values)
     assert backend.sent[-1][1]["source"].startswith("Replay:")
     assert backend.sent[-1][1]["command_joint_mask"] == 1
     assert controller.status().state == "completed"
-    assert controller.status().current_targets[0] == 20.0
+    assert controller.status().current_targets[0] == 16.0
 
 
 def test_replay_can_start_again_after_completed_run():

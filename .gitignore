@@ -30,7 +30,7 @@ docs/ai/.explain_cache/
 .understand-anything/
 tmp/
 desktop/resources/config/calib_load_snapshot.before_new_device_*.json
-desktop/resources/hku_hand_v2_urdf_builtin/
+desktop/resources/mmhand_urdf_builtin/
 
 *.egg-info/
 desktop/resources/config/*.before-device-isolation.bak

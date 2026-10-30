@@ -18,7 +18,7 @@ CONFIG_DIR = RESOURCE_DIR / "config"
 # Default runtime root is the config directory itself. Tests and tools may
 # override it with MMHAND_DATA_DIR without touching tracked configuration.
 DATA_DIR = Path(os.environ.get("MMHAND_DATA_DIR") or CONFIG_DIR).expanduser().resolve()
-URDF_DIR = RESOURCE_DIR / "hku_hand_v2_urdf"
+URDF_DIR = RESOURCE_DIR / "mmhand_urdf"
 # Logs and recordings share the repository-level logs tree. The app writes
 # recordings under logs/; the whole tree is gitignored.
 LOG_DIR = Path(os.environ.get("MMHAND_LOG_DIR") or (PROJECT_ROOT / "logs")).resolve()
@@ -42,4 +42,4 @@ CALIB_ACTIVE_SNAPSHOT_PATH = DATA_DIR / "calibration_bundle.mmcal.json"
 # One merged robot-model contract: hand-authored source/manifest plus generated mapping.
 ROBOT_MODEL_PATH = CONFIG_DIR / "robot_model.json"
 PRODUCT_FINGERPRINT_PATH = CONFIG_DIR / "product_fingerprint.json"
-DEFAULT_URDF_PATH = URDF_DIR / "urdf" / "hand.urdf"
+DEFAULT_URDF_PATH = URDF_DIR / "urdf" / "mmhand.urdf"

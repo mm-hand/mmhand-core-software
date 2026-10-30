@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from nicegui import app, ui
 
 ROOT = Path(__file__).resolve().parents[2] / 'resources'
-MODEL = ROOT / 'hku_hand_v2_urdf'
+MODEL = ROOT / 'mmhand_urdf'
 # Same palm-facing direction and up vector as mmhand_teleop's robot viewer.
 CAMERA = dict(x=0.1046, y=-0.0168, z=-0.4559, look_at_x=0.1050,
               look_at_y=-0.0191, look_at_z=-0.0759,
@@ -28,7 +28,7 @@ def build(hand):
         app.add_static_files('/hand-meshes', str(MODEL / 'meshes'))
     except RuntimeError:
         pass
-    urdf = ET.parse(MODEL / 'urdf' / 'hand.urdf').getroot()
+    urdf = ET.parse(MODEL / 'urdf' / 'mmhand.urdf').getroot()
     mapping = json.loads((ROOT / 'config' / 'robot_model.json').read_text())['manifest']['joints']
     indices = {j['urdf_joint_name']: j['joint_index'] for j in mapping}
     links = {e.attrib['name']: e for e in urdf.findall('link')}

@@ -24,7 +24,7 @@ from tools.robot_model_source import inspect_source, validate_tree
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL = ROOT / "desktop/resources/config/robot_model.json"
 DEFAULT_MANIFEST = DEFAULT_MODEL
-DEFAULT_URDF = ROOT / "desktop/resources/hku_hand_v2_urdf/urdf/hand.urdf"
+DEFAULT_URDF = ROOT / "desktop/resources/mmhand_urdf/urdf/mmhand.urdf"
 DEFAULT_SOURCE = DEFAULT_MODEL
 DEFAULT_MAPPING = DEFAULT_MODEL
 DEFAULT_FINGERPRINT = ROOT / "desktop/resources/config/product_fingerprint.json"
@@ -113,6 +113,24 @@ def load_manifest(path: Path) -> dict:
     return data
 
 
+def normalize_limit_deg(value: float) -> float:
+    """把一个 URDF 限位端点折回 (-180, 180] 并消除 CAD 截断弧度尾差。
+
+    CAD 会把同一个关节绕多圈录入（-425° 与 -65° 等价）。不归一就会把多圈数值
+    原样写进 P4 限位表和映射 CRC。JSON、P4 CRC 与校验工具必须共用这一份规则。
+    """
+    value = math.fmod(float(value), 360.0)
+    if value <= -180.0:
+        value += 360.0
+    elif value > 180.0:
+        value -= 360.0
+    # CAD 常用截断弧度表示整数角（例如 1.570796 ≈ 90°），消除无意义的 1e-5° 尾差。
+    nearest_integer = round(value)
+    if abs(value - nearest_integer) < 0.001:
+        return float(nearest_integer)
+    return round(value, 6)
+
+
 def load_urdf_limits(path: Path, manifest: dict) -> list[tuple[int, float, float]]:
     """从活动 URDF 读取真实限位；语义清单不再复制这些数值。"""
     try:
@@ -138,19 +156,14 @@ def load_urdf_limits(path: Path, manifest: dict) -> list[tuple[int, float, float
             raise ModelGenerationError(f"non-numeric URDF limit: {name}") from exc
         if not math.isfinite(lower_rad) or not math.isfinite(upper_rad) or lower_rad >= upper_rad:
             raise ModelGenerationError(f"invalid URDF limit: {name}")
-        def normalize_deg(value: float) -> float:
-            # CAD 常用截断弧度表示整数角（例如 1.570796 ≈ 90°），消除无意义的 1e-5° 尾差。
-            nearest_integer = round(value)
-            if abs(value - nearest_integer) < 0.001:
-                return float(nearest_integer)
-            return round(value, 6)
-
         # 同一规范化结果同时进入 JSON 和 P4 CRC，避免跨语言浮点尾差。
-        limits.append((
-            index,
-            normalize_deg(math.degrees(lower_rad)),
-            normalize_deg(math.degrees(upper_rad)),
-        ))
+        lower_deg = normalize_limit_deg(math.degrees(lower_rad))
+        upper_deg = normalize_limit_deg(math.degrees(upper_rad))
+        if not 0.0 < upper_deg - lower_deg <= 180.0:
+            raise ModelGenerationError(
+                f"URDF joint range is not one revolute turn: {name}"
+            )
+        limits.append((index, lower_deg, upper_deg))
     return limits
 
 
@@ -197,7 +210,7 @@ def render_mapping(manifest: dict, limits: list[tuple[int, float, float]],
         "p4_sync_required": False,
         "p4_generated_header_required": True,
         "description": "Generated from original URDF and robot_model_manifest.json; do not edit manually.",
-        "source_urdf": "desktop/resources/hku_hand_v2_urdf/urdf/hand.urdf",
+        "source_urdf": "desktop/resources/mmhand_urdf/urdf/mmhand.urdf",
         "source_commit": source_commit,
         "source_urdf_path": source_urdf_path,
         "motors": [{key: value for key, value in motor.items() if key != "tendon_shorten_abs_sign"}

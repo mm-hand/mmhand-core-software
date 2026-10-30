@@ -4,11 +4,11 @@
   "mapping_id": "structure_urdf_v3",
   "feedback_mapping_version": 3,
   "manual_scaled_mapping_version": 4,
-  "control_model_crc": "3441BF7B",
-  "visual_model_crc": "12AA9F89",
+  "control_model_crc": "BB18CE36",
+  "visual_model_crc": "D5CA466D",
   "hardware_map_crc": "CC2DB96D",
   "parameter_crc": "36C2A9AB",
   "firmware_source_crc": "FE906786",
-  "structure_commit_crc": "8A350AA1",
-  "source_commit": "f1e383f2204e3648c3899501e8483d0baa9ff8ea"
+  "structure_commit_crc": "DF6D97B2",
+  "source_commit": "1539d2578e61e51c38a62efdd1a7e098d7798863"
 }

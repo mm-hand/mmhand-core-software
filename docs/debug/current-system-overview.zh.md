@@ -123,7 +123,7 @@ C:/Users/73547/mmhand/
 │  └─ resources/
 │     ├─ config/                    运行参数、schema、模型/协议、测点几何
 │     ├─ images/                    关节—电机ID示意图
-│     └─ hku_hand_v2_urdf/           机械模型资源
+│     └─ mmhand_urdf/               机械模型资源（左手，21 关节）
 ├─ tests/                           desktop/firmware/tools回归
 ├─ tools/                           模型/协议/参数/安全生成和架构检查
 │  └─ debug/                        编译、上传、OpenOCD、GDB及P4 FIFO修补

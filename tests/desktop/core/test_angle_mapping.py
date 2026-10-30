@@ -12,9 +12,11 @@ from desktop.core import angle_mapping
 from desktop.core.calibration_snapshot import seal_snapshot
 from desktop.core.protocol import ENCODER_COUNT, MOTOR_COUNT
 from desktop.paths import DEFAULT_URDF_PATH, ROBOT_MODEL_PATH
+from tools.generate_robot_model import normalize_limit_deg
 
 
 def _active_urdf_limits_deg() -> dict[str, tuple[float, float]]:
+    """独立读 URDF，再套生成器的归一规则，避免复制「折回 (-180,180]」这段逻辑。"""
     root = ET.parse(DEFAULT_URDF_PATH).getroot()
     limits: dict[str, tuple[float, float]] = {}
     for joint in root.findall("joint"):
@@ -24,8 +26,8 @@ def _active_urdf_limits_deg() -> dict[str, tuple[float, float]]:
         if limit is None:
             continue
         limits[str(joint.get("name"))] = (
-            math.degrees(float(limit.attrib["lower"])),
-            math.degrees(float(limit.attrib["upper"])),
+            normalize_limit_deg(math.degrees(float(limit.attrib["lower"]))),
+            normalize_limit_deg(math.degrees(float(limit.attrib["upper"]))),
         )
     return limits
 

@@ -58,7 +58,7 @@ def test_generator_outputs_desktop_and_p4_contracts(tmp_path: Path) -> None:
 def test_urdf_limit_change_updates_every_control_contract(tmp_path: Path) -> None:
     tree = ET.parse(generate_robot_model.DEFAULT_URDF)
     root = tree.getroot()
-    target = next(joint for joint in root.findall("joint") if joint.get("name") == "Little_MCP_AA")
+    target = next(joint for joint in root.findall("joint") if joint.get("name") == "little_aa_joint")
     target.find("limit").set("upper", "1.000000")
     changed_urdf = tmp_path / "hand.urdf"
     tree.write(changed_urdf, encoding="utf-8", xml_declaration=True)

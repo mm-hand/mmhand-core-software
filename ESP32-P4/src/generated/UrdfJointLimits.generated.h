@@ -18,14 +18,14 @@ struct UrdfJointLimitDeg {
 
 static const uint8_t kUrdfFeedbackMappingVersion = 3;
 static const uint8_t kManualScaledUrdfFeedbackMappingVersion = 4;
-static const uint32_t kManualScaledUrdfConfigCrc = 0xCD1E5D06UL;
+static const uint32_t kManualScaledUrdfConfigCrc = 0xC490BA68UL;
 static const UrdfJointLimitDeg kUrdfJointLimits[ENCODER_TOTAL_NUM] = {
-    {-70.000000f, 21.000000f},  // J00
-    {-15.000000f, 90.000000f},  // J01
+    {-75.000000f, 16.000000f},  // J00
+    {-14.000000f, 90.000000f},  // J01
     {-9.000000f, 89.000000f},  // J02
     {-13.000000f, 101.000000f},  // J03
     {-46.000000f, 26.000000f},  // J04
-    {-15.000000f, 90.000000f},  // J05
+    {-14.000000f, 90.000000f},  // J05
     {-9.000000f, 89.000000f},  // J06
     {-13.000000f, 101.000000f},  // J07
     {-32.000000f, 30.000000f},  // J08

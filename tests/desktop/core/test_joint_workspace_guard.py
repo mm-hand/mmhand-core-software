@@ -18,6 +18,15 @@ from desktop.core.protocol import (
 )
 
 
+def _ros2_frame(value=10.0):
+    """一个 21 关节都落在 URDF 区间内的 ROS2 帧。
+
+    21 个关节的公共合法区间是 [0°, 16°]：J20（thumb CMC）下限 0°，
+    J00（little AA）上限 16°，所以默认取 10°。
+    """
+    return [value] * ENCODER_COUNT
+
+
 def _ready_state(joint_idx=0, current_min=None):
     version, urdf_crc = urdf_manual_scaled_mapping_metadata()
     spec = get_spec(joint_idx)
@@ -205,7 +214,7 @@ def test_backend_reports_not_sent_when_atomic_queue_rejects_command():
     controller.queue_result = False
     backend = HandBackend(controller=controller)
 
-    result = backend.send_joint_targets([20.0] * ENCODER_COUNT, source="test")
+    result = backend.send_joint_targets([10.0] * ENCODER_COUNT, source="test")
 
     assert not result.sent
     assert "not queued" in result.message
@@ -374,7 +383,7 @@ def test_ros2_frame_requires_existing_enable_authorization():
     backend.register_joint_target_callback(recorded_commands.append)
 
     blocked = backend.send_ros2_joint_targets(
-        [20.0] * ENCODER_COUNT,
+        _ros2_frame(),
         source="ROS2:/raw_ik_target",
     )
     assert not blocked.sent
@@ -382,7 +391,7 @@ def test_ros2_frame_requires_existing_enable_authorization():
     assert controller.sent == []
     _arm_ros2_backend(backend)
     sent = backend.send_ros2_joint_targets(
-        [20.0] * ENCODER_COUNT,
+        _ros2_frame(),
         source="ROS2:/raw_ik_target",
     )
     assert sent.sent
@@ -405,11 +414,11 @@ def test_collision_hold_does_not_block_ros2_retreat_target():
     _arm_ros2_backend(backend)
 
     forward = backend.send_ros2_joint_targets(
-        [20.0] * ENCODER_COUNT,
+        _ros2_frame(14.0),
         source="ROS2:/raw_ik_target",
     )
     retreat = backend.send_ros2_joint_targets(
-        [15.0] * ENCODER_COUNT,
+        _ros2_frame(8.0),
         source="ROS2:/raw_ik_target",
     )
 
@@ -417,7 +426,7 @@ def test_collision_hold_does_not_block_ros2_retreat_target():
     assert retreat.sent
     assert backend.ros2_output_armed()
     assert controller.run_requests == 2
-    assert 15.0 <= controller.sent[-1][1][0] < 20.0  # Retreat passes the new One Euro path.
+    assert 8.0 <= controller.sent[-1][1][0] < 14.0  # Retreat passes the new One Euro path.
 
 
 def test_estop_revokes_ros2_and_following_frames_cannot_restart_feedback():
@@ -427,14 +436,14 @@ def test_estop_revokes_ros2_and_following_frames_cannot_restart_feedback():
     _arm_ros2_backend(backend)
 
     before_stop = backend.send_ros2_joint_targets(
-        [20.0] * ENCODER_COUNT,
+        _ros2_frame(),
         source="ROS2:/mmhand/joint_targets",
     )
     assert before_stop.sent
 
     backend.stop()
     after_stop = backend.send_ros2_joint_targets(
-        [20.0] * ENCODER_COUNT,
+        _ros2_frame(),
         source="ROS2:/mmhand/joint_targets",
     )
 
