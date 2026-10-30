@@ -397,7 +397,7 @@ def test_direct_control_prompt_blocks_the_page_until_zeroing(page):
     refresh(snapshot)
     assert dialog.value
     # Confirm：发起全部归零，留在页面，不再重复弹。
-    click(buttons['Set All Motors to ABS 0'])
+    click(buttons['Initialize Motor Coordinates'])
     hand.request_direct_zero_all.assert_called_once_with()
     assert not dialog.value
     refresh(snapshot)

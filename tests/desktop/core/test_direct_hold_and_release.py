@@ -99,7 +99,10 @@ def test_direct_enable_rejects_untrusted_or_clamped_hold(fault):
 def test_release_only_connected_motor(monkeypatch):
     controller = controller_with_motor()
     state = controller.current_state
-    controller.rebase_servo_abs_zero = MagicMock(return_value=ServoRebaseZeroResult(True, "ok", 1, 8, 0))
+    def rebase(*args, **kwargs):
+        state.servo_angles[3] = 2048
+        return ServoRebaseZeroResult(True, "ok", 1, 8, 0)
+    controller.rebase_servo_abs_zero = MagicMock(side_effect=rebase)
     controller.set_active_scope = MagicMock(return_value=True)
     invalidate = MagicMock(return_value="saved")
     monkeypatch.setattr(core_logic, "invalidate_calibration_snapshot_scope", invalidate)
@@ -118,7 +121,7 @@ def test_release_only_connected_motor(monkeypatch):
     with live_servo_feedback(state):
         result = controller.manual_prepare_all_motors()
     assert result.ok and result.reached_motor_mask == 8
-    assert state.servo_angles[3] == 1500
+    assert state.servo_angles[3] == 548
     controller.set_active_scope.assert_called_once_with(8, 0, False)
     assert invalidate.call_args.kwargs["motor_mask"] == 8
     assert invalidate.call_args.kwargs["joint_mask"] == 4

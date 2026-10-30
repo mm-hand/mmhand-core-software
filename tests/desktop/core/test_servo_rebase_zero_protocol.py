@@ -626,6 +626,7 @@ def test_rebase_invalidates_only_old_scope_and_captures_runtime_before_new_auto(
     state = controller.current_state
     state.has_servo_angle_data = True
     state.servo_online_bitmap = 3
+    state.servo_angles[:2] = [2047, 2048]
     state.has_product_fingerprint = True
     state.product_fingerprint = {"protocol_version": HOST_PROTOCOL_VERSION, "device_id": identity["device_id"]}
     controller._servo_rebase_zero_device_id = identity["device_id"]
@@ -637,8 +638,8 @@ def test_rebase_invalidates_only_old_scope_and_captures_runtime_before_new_auto(
     controller._service_servo_rebase_zero_capture(state)
     runtime = controller._multiturn_store.load(identity=identity)
     assert int(runtime["valid_motor_mask"], 0) == 3 | other
-    assert runtime["logical_abs"][:2] == [0, 0]
-    assert runtime["raw"][:2] == [0, 0]
+    assert runtime["logical_abs"][:2] == [2047, 2048]
+    assert runtime["raw"][:2] == [2047, 2048]
     assert runtime["logical_abs"][26] == 9000
     # 新 Auto 尚未生成，不提前把运行原点写成有效 Auto/LUT 快照。
     assert int(read_snapshot(snapshot_path)["multiturn_anchor_valid_bitmap"], 0) == other
@@ -649,8 +650,8 @@ def test_rebase_invalidates_only_old_scope_and_captures_runtime_before_new_auto(
     stale.servo_feedback_p4_time_ms = 99
     controller._persist_multiturn_state(stale, force=True)
     runtime = controller._multiturn_store.load(identity=identity)
-    assert runtime["logical_abs"][:2] == [0, 0]
-    assert runtime["raw"][:2] == [0, 0]
+    assert runtime["logical_abs"][:2] == [2047, 2048]
+    assert runtime["raw"][:2] == [2047, 2048]
 
 
 def test_reconcile_retries_load_without_shifting_twice(tmp_path, monkeypatch):

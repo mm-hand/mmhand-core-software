@@ -1917,7 +1917,7 @@ class HandController:
     def rebase_servo_abs_zero(
         self, motor_mask: int, *, cancelled=lambda: False, send_gate=None,
     ) -> ServoRebaseZeroResult:
-        """静止时将所选电机当前位置设为 ABS 0；调用者先释放运动 owner。
+        """静止时将所选电机当前位置校准到原生 ABS 2048；调用者先释放运动 owner。
 
         P4用0x0B校正并以正常原生反馈确认；主机只提交一次，未知结果仅查询。
         """

@@ -517,14 +517,11 @@ static bool stepServoRebaseZero(SystemRuntimeContext* sharedData,
             (unsigned)channel, result == p4::servo::RestoreResult::Success ? 1U : 0U,
             writer->phase(), driver ? (long)driver->getAbsolutePosition(route.servoId) : 0L);
         if (driver) {
-            FW_LOG_INFO_PRINTF("[SERVO ZERO DIAG] M%02u bus=%u id=%u 0B_ack=%d error=%u status=%u 0A_ack=%d error=%u status=%u\r\n",
+            FW_LOG_INFO_PRINTF("[SERVO ZERO DIAG] M%02u bus=%u id=%u 0B_ack=%d error=%u status=%u\r\n",
                 (unsigned)channel, (unsigned)route.busIndex, (unsigned)route.servoId,
                 (int)driver->zeroCommandDiagnostic().correctionAck,
                 (unsigned)driver->zeroCommandDiagnostic().correctionError,
-                (unsigned)driver->zeroCommandDiagnostic().correctionStatus,
-                (int)driver->zeroCommandDiagnostic().resetAck,
-                (unsigned)driver->zeroCommandDiagnostic().resetError,
-                (unsigned)driver->zeroCommandDiagnostic().resetStatus);
+                (unsigned)driver->zeroCommandDiagnostic().correctionStatus);
             FW_LOG_INFO_PRINTF("[SERVO ZERO VERIFY] M%02u reason=%s elapsed_ms=%lu baseline_seq=%lu feedback_seq=%lu abs=%ld\r\n",
                 (unsigned)channel, writer->reason(),
                 (unsigned long)(p4::platform::time::monotonicMillis() - writer->startedAt()),

@@ -14,7 +14,7 @@ from .common import (FINGERS, finger_cards, selection, target_editor, label, sho
 ZERO_PROMPT = (
     'No motor calibration is loaded, so Direct Control has no motor coordinates. '
     'Load a calibration file that includes motor calibration, or continue to set every '
-    "online motor's current position as ABS 0. Continuing clears motor calibration from "
+    "online motor's current position as ABS 2048. Continuing clears motor calibration from "
     'the saved calibration file. Motor Calibration zeroes the motors again when it starts.')
 
 
@@ -45,10 +45,10 @@ def build(hand, act, confirm, leave=None):
         ui.label(ZERO_PROMPT).classes('text-sm whitespace-pre-wrap')
         with ui.row():
             ui.button('Cancel', on_click=cancel_zero).props('flat dense')
-            ui.button('Set All Motors to ABS 0', on_click=confirm_zero).props('dense color=primary')
+            ui.button('Initialize Motor Coordinates', on_click=confirm_zero).props('dense color=primary')
 
     def prompt_zero(snapshot):
-        """缺电机坐标时提示：载入标定文件，或把所有在线电机设为当前 ABS 0。"""
+        """缺电机坐标时提示：载入标定文件，或初始化在线电机坐标。"""
         if not snapshot.get('direct_zero_required'):
             answered[0] = False
             return

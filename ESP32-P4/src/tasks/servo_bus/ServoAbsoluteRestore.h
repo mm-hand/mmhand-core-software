@@ -1,6 +1,6 @@
 /**
  * @file ServoAbsoluteRestore.h
- * @brief 仅用于完整ABS归零：0x0B校准后0x0A清圈数，新反馈确认。
+ * @brief 用0x0B建立原生ABS基准，并用新反馈确认。
  */
 #ifndef MMHAND_SERVO_ABSOLUTE_RESTORE_H
 #define MMHAND_SERVO_ABSOLUTE_RESTORE_H
@@ -19,7 +19,6 @@ public:
             reason_ = "precheck";
             startedAt_ = nowMs;
             sequence_ = 0;
-            turnsCleared_ = false;
             if (!driver || !driver->isOnline(id) ||
                 !driver->isMultiTurnConfigured(id)) return RestoreResult::Failed;
             driver_ = driver;
@@ -28,7 +27,6 @@ public:
             session_ = driver->getFeedback(id).onlineSessionGeneration;
             deadline_ = nowMs + 750;
             calibratedAt_ = nowMs;
-            turnsCleared_ = false;
             reason_ = "correction_rejected";
             if (!driver->beginAbsoluteRestore(id)) return RestoreResult::Failed;
             reason_ = "waiting_correction_feedback";
@@ -41,20 +39,8 @@ public:
             reason_ = "session_changed";
             return RestoreResult::Failed;
         }
-        if (!turnsCleared_) {
-            if (int32_t(nowMs - calibratedAt_) < 250 ||
-                driver->getFeedback(id).feedbackSequence == sequence_) {
-                if (int32_t(nowMs - deadline_) >= 0) { active_ = false; reason_ = "correction_feedback_timeout"; return RestoreResult::Failed; }
-                return RestoreResult::Pending;
-            }
-            if (!driver->clearAbsoluteTurns(id)) { active_ = false; reason_ = "reset_rejected"; return RestoreResult::Failed; }
-            sequence_ = driver->getFeedback(id).feedbackSequence;
-            turnsCleared_ = true;
-            reason_ = "waiting_reset_feedback";
-            deadline_ = nowMs + 500;
-            return RestoreResult::Pending;
-        }
-        if (driver->confirmAbsoluteRestore(id, sequence_)) {
+        if (int32_t(nowMs - calibratedAt_) >= 250 &&
+            driver->confirmAbsoluteRestore(id, sequence_)) {
             active_ = false;
             reason_ = "verified";
             return RestoreResult::Success;
@@ -62,12 +48,12 @@ public:
         if (int32_t(nowMs - deadline_) >= 0) {
             active_ = false;
             reason_ = driver->getFeedback(id).feedbackSequence == sequence_
-                ? "reset_feedback_timeout" : "position_outside_tolerance";
+                ? "correction_feedback_timeout" : "position_outside_tolerance";
             return RestoreResult::Failed;
         }
         return RestoreResult::Pending;
     }
-    const char* phase() const { return turnsCleared_ ? "verify_zero" : "calibrate"; }
+    const char* phase() const { return "verify_position"; }
     const char* reason() const { return reason_; }
     uint32_t startedAt() const { return startedAt_; }
     uint32_t baselineSequence() const { return sequence_; }
@@ -78,7 +64,6 @@ private:
     uint32_t calibratedAt_ = 0;
     uint32_t startedAt_ = 0;
     const char* reason_ = "not_started";
-    bool turnsCleared_ = false;
     uint32_t sequence_ = 0;
     uint32_t session_ = 0;
     uint32_t deadline_ = 0;

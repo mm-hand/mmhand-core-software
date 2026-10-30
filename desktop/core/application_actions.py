@@ -1268,7 +1268,7 @@ class ApplicationActions(IdResetActions):
             with self._application_lock:
                 chosen = tuple(sorted(set(self._selected_motors if motors is None else motors)))
             if not chosen or any(type(m) is not int or m not in range(MOTOR_COUNT) for m in chosen):
-                raise ValueError('Select valid motors to set ABS zero')
+                raise ValueError('Select valid motors to initialize coordinates')
         except (TypeError, ValueError) as exc:
             return OperationResult(False, None, str(exc))
         mask = sum(1 << m for m in chosen)
@@ -1370,18 +1370,18 @@ class ApplicationActions(IdResetActions):
                     return False, 'ABS zero may have completed; new trusted feedback/JSON save is unconfirmed. No automatic retry.'
                 if not result.ok:
                     return False, f'ABS zero partly completed (saved mask=0x{confirmed:08X}); {result.message}'
-                return True, 'Selected motor ABS zero confirmed in P4, servo feedback and saved desktop coordinates'
+                return True, 'Selected motor coordinates confirmed in P4, servo feedback and saved desktop coordinates'
 
             return self._run_manual_transaction(
                 transaction, (False, 'Another device transaction is active')
             )
 
-        return self.submit_operation('Set Motor ABS Zero', zero,
+        return self.submit_operation('Initialize Motor Coordinates', zero,
                                      scope=' / '.join(f'M{m:02d}' for m in chosen))
 
 
     def request_direct_zero_all(self):
-        """Direct 页无标定入口：把所有在线可路由电机设为当前 ABS 0。"""
+        """Direct 页无标定入口：初始化所有在线可路由电机的坐标。"""
         state = self.get_state_snapshot()
         mask = (state.servo_online_bitmap & state.servo_route_controllable_bitmap
                 & VALID_MOTOR_MASK & ~state.servo_route_conflict_bitmap)

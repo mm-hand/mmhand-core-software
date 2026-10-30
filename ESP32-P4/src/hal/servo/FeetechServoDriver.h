@@ -61,7 +61,6 @@ struct ServoFeedbackInternal {
     // 供本次 P4 会话内的热插拔恢复使用；跨重启恢复由桌面端 JSON 负责。
     uint32_t feedbackSequence; ///< 每份真实反馈递增，恢复只接受写入后的新样本。
     bool restorePending; ///< 已发送过0x0B，结果尚未由原生反馈确认。
-    int32_t restoreTarget; ///< 未决写入冻结首次目标，禁止按改变后的相位重算。
     uint32_t lastUpdate; ///< 最近一次有效反馈时间。
 };
 
@@ -102,10 +101,11 @@ struct ServoReadDiagnostic {
 };
 
 struct ServoZeroCommandDiagnostic {
-    int8_t correctionAck = -1, resetAck = -1;
+    int8_t correctionAck = -1;
     uint8_t correctionError = 0, correctionStatus = 0;
-    uint8_t resetError = 0, resetStatus = 0;
 };
+
+inline constexpr int32_t kServoCalibrationPosition = 2048;
 
 /** 一条飞特 UART 总线的唯一驱动实例。 */
 class FeetechServoDriver {
@@ -500,10 +500,9 @@ public:
         clearQueuedTargets();
         if (!setTorqueEnabled(id, false)) return false;
         fb.absoluteReliable = false;
-        fb.restoreTarget = 0;
         fb.restorePending = true;
         // 丢ACK可能发生在写入之后；后续同样等待新的原生反馈，不重复置数。
-        const bool acknowledged = _sms.CalibratePosition(id, 0) > 0;
+        const bool acknowledged = _sms.CalibratePosition(id, kServoCalibrationPosition) > 0;
         _zeroDiagnostic.correctionAck = acknowledged ? 1 : 0;
         _zeroDiagnostic.correctionError = _sms.getLastError();
         _zeroDiagnostic.correctionStatus = _sms.getState();
@@ -525,7 +524,7 @@ public:
         // 0x0B 写入后偶尔回弹 1–3 个计数（约 0.09°–0.26°）；整圈差是 4096，
         // 远大于该容差，所以仍不会放过单圈相位或差整圈的值。
         constexpr int32_t kRestoreToleranceCounts = 4;
-        const int32_t restoreError = fb.absolutePosition - fb.restoreTarget;
+        const int32_t restoreError = fb.absolutePosition - kServoCalibrationPosition;
         if (restoreError < -kRestoreToleranceCounts ||
             restoreError > kRestoreToleranceCounts) return false;
         fb.restorePending = false;
@@ -554,18 +553,6 @@ public:
             _feedback[id].restorePending = false;
             _feedback[id].absoluteReliable = false;
         }
-    }
-
-    bool clearAbsoluteTurns(uint8_t id) {
-        if (id > MAX_SERVO_ID || !_feedback[id].online || !_torqueDisabled[id]) return false;
-        abortSyncRead(false);
-        const bool acknowledged = _sms.Reset(id) > 0;
-        _zeroDiagnostic.resetAck = acknowledged ? 1 : 0;
-        _zeroDiagnostic.resetError = _sms.getLastError();
-        _zeroDiagnostic.resetStatus = _sms.getState();
-        // A missing reply is ambiguous; an explicit motor error is a rejection.
-        return (acknowledged && _zeroDiagnostic.resetStatus == 0) ||
-               (!acknowledged && _zeroDiagnostic.resetError != 0);
     }
 
     const ServoZeroCommandDiagnostic& zeroCommandDiagnostic() const { return _zeroDiagnostic; }

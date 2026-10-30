@@ -1080,7 +1080,7 @@ def build_servo_rebase_zero_cmd(motor_mask: int) -> bytes:
 
 
 def build_motor_abs_zero_cmd(motor_mask: int) -> bytes:
-    """Direct 页将所选电机当前实际位置设为 ABS 0；不发运动目标。"""
+    """Direct 页将所选电机当前实际位置设为原生 ABS 2048；不发运动目标。"""
     mask = int(motor_mask)
     if mask <= 0 or mask & ~((1 << MOTOR_COUNT) - 1):
         raise ValueError("motor ABS zero requires a non-zero valid motor mask")

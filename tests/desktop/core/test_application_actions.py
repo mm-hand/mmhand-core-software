@@ -242,7 +242,7 @@ def direct_zero_device(hand, monkeypatch, *, success=None, fault='', change_sele
         stamp(state, 'servo_abs_last_rx_ts')
         for motor in range(27):
             if done & (1 << motor):
-                state.servo_angles[motor] = 0
+                state.servo_angles[motor] = 2048
         if fault == 'old_feedback':
             state.servo_feedback_p4_time_ms = 999
         if fault == 'unknown':
@@ -277,7 +277,7 @@ def test_direct_targets_continue_after_zero_and_a_light_reverse_load(hand, monke
     direct_zero_device(hand, monkeypatch)
     assert wait_operation(hand, hand.request_direct_zero(tuple(range(27))))['status'] == 'SUCCESS'
     state = hand._controller.current_state
-    assert state.servo_angles == [0] * 27
+    assert state.servo_angles == [2048] * 27
     comm = direct_target_device(hand, monkeypatch)
     assert wait_operation(hand, hand.request_motors({11: 3000}))['status'] == 'SUCCESS'
     # Recorded M11 feedback at the failing second request: known ABS=2997,
@@ -298,7 +298,7 @@ def test_direct_zero_only_selected_motor_without_expanding_joint_scope(hand, mon
     writer = direct_zero_device(hand, monkeypatch)
     assert wait_operation(hand, hand.request_direct_zero())['status'] == 'SUCCESS'
     assert writer.call_args.args == (1 << 9,)
-    assert hand._controller.current_state.servo_angles[9] == 0
+    assert hand._controller.current_state.servo_angles[9] == 2048
     assert hand._controller.current_state.servo_angles[8] == 7008
     assert list(hand._controller.get_servo_abs_zero_generations()) == [0] * 9 + [1] + [0] * 17
     assert hand.application_snapshot()['motors'][9]['abs_zero_generation'] == 1
@@ -465,9 +465,9 @@ def test_snapshot_waits_for_the_saved_zero_feedback_frame_before_refreshing_draf
     state.servo_angles[9] = 7009
     assert hand.application_snapshot()['motors'][9]['abs_zero_generation'] == 0
     state.servo_feedback_p4_time_ms = 1001
-    state.servo_angles[9] = 0
+    state.servo_angles[9] = 2048
     row = hand.application_snapshot()['motors'][9]
-    assert row['abs_zero_generation'] == 1 and row['abs'] == 0
+    assert row['abs_zero_generation'] == 1 and row['abs'] == 2048
     hand._controller._reset_local_runtime_state('SYNCING')
     assert hand.application_snapshot()['motors'][9]['abs_zero_generation'] == 1
 

@@ -414,45 +414,44 @@ static void halScenario(const std::string& name) {
     }
     p4::servo::AbsoluteRestore writer;
     using Result = p4::servo::RestoreResult;
-    const int target=0;
     if(name=="ack_missing")device.fault=Fault::AckMissing;
     if(name=="ack_status")device.fault=Fault::AckStatus;
     if(name=="torque_missing")device.fault=Fault::TorqueMissing;
-    if(name=="reset_ack_missing")device.fault=Fault::ResetAckMissing;
-    if(name=="reset_ack_status")device.fault=Fault::ResetAckStatus;
     auto first=writer.step(&driver,1,1000);
     if(name=="ack_status" || name=="torque_missing") {
         require(first==Result::Failed,"rejected write accepted");return;
     }
     require(first==Result::Pending && !driver.isAbsoluteReliable(1),"cached sample trusted");
     require(driver.zeroCommandDiagnostic().correctionAck == (name=="ack_missing" ? 0 : 1), "correction ACK evidence lost");
-    require(driver.zeroCommandDiagnostic().resetAck == -1, "reset reported before it was sent");
     require(device.corrections==1 && device.resets==0,"wrong command order");
+    require(device.hardwarePosition==2048, "incorrect calibration target");
     if(name=="cancel") {writer.cancel(); require(!writer.active(),"cancel failed");return;}
+    if(name=="disconnect_pending") {
+        driver.invalidateIfFeedbackStale(1,driver.getFeedback(1).lastUpdate+100,80);
+        require(writer.step(&driver,1,1250)==Result::Failed && !driver.isAbsoluteReliable(1), "disconnect accepted");
+        require(device.corrections==1 && device.resets==0, "disconnect retried a command");
+        return;
+    }
     if(name=="stale") {
         require(writer.step(&driver,1,1750)==Result::Failed,"missing new feedback did not time out");return;
     }
-    require(driver.probeFeedback(1),"post-calibration feedback missing");
-    require(writer.step(&driver,1,1249)==Result::Pending && device.resets==0,"reset sent before settle");
-    const auto resetResult = writer.step(&driver,1,1250);
-    require(device.resets==1, "turn reset missing");
-    if(name=="reset_ack_status") {
-        require(resetResult==Result::Failed && driver.zeroCommandDiagnostic().resetStatus==4, "reset error accepted");
-        require(std::string(writer.reason())=="reset_rejected", "reset rejection reason missing");
-        return;
-    }
-    require(resetResult==Result::Pending, "reset did not wait for verification");
-    require(driver.zeroCommandDiagnostic().resetAck == (name=="reset_ack_missing" ? 0 : 1), "reset ACK evidence missing");
-    require(writer.step(&driver,1,1251)==Result::Pending,"pre-reset sample accepted");
     if(name=="read_missing")device.fault=Fault::ReadMissing;
     if(name=="read_mismatch")device.fault=Fault::ReadMismatch;
     if(name=="read_status")device.fault=Fault::ReadStatus;
+    if(name=="edge_low")device.hardwarePosition=2044;
+    if(name=="edge_high")device.hardwarePosition=2052;
+    if(name=="outside_low")device.hardwarePosition=2043;
+    if(name=="outside_high")device.hardwarePosition=2053;
+    if(name=="wrong_turn_positive")device.hardwarePosition=6144;
+    if(name=="wrong_turn_negative")device.hardwarePosition=-2048;
     driver.probeFeedback(1);
-    const bool bad=name=="read_missing" || name=="read_mismatch" || name=="read_status";
-    require(writer.step(&driver,1,1750)==(bad?Result::Failed:Result::Success),"full-coordinate verification incorrect");
-    require(std::string(writer.reason()) == (name=="read_mismatch" ? "position_outside_tolerance" : bad ? "reset_feedback_timeout" : "verified"), "verification reason incorrect");
+    require(writer.step(&driver,1,1249)==Result::Pending,"position accepted before settle");
+    const bool bad=name=="read_missing" || name=="read_mismatch" || name=="read_status" ||
+        name=="outside_low" || name=="outside_high" || name=="wrong_turn_positive" || name=="wrong_turn_negative";
+    const auto status=writer.step(&driver,1,bad?1750:1250);
+    require(status==(bad?Result::Failed:Result::Success),"full-coordinate verification incorrect");
     require(driver.isAbsoluteReliable(1)==!bad,"incorrect coordinate trust");
-    require(device.corrections==1 && device.resets==1,"commands repeated");
+    require(device.corrections==1 && device.resets==0,"commands repeated or reset sent");
     if(name=="disconnect") {
         driver.invalidateIfFeedbackStale(1,driver.getFeedback(1).lastUpdate+100,80);
         require(!driver.isAbsoluteReliable(1),"offline retained trust");
@@ -611,7 +610,7 @@ def native_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dict
 
 
 SCENARIOS = (
-    "reset_ack_missing", "reset_ack_status",
+    "edge_low", "edge_high", "outside_low", "outside_high", "wrong_turn_positive", "wrong_turn_negative", "disconnect_pending",
     "sdk_example", "sdk_zero", "sdk_negative", "sdk_signed_limits",
     "sdk_minimum_invalid", "sdk_invalid_id", "sdk_broadcast", "sdk_level_zero",
     "sdk_level_zero_missing", "sdk_short_tx", "sdk_legacy_recal", "sdk_ack_missing",
