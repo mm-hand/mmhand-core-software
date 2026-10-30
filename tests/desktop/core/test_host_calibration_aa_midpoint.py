@@ -236,8 +236,8 @@ def test_midpoint_failures_never_enter_single_search(centered_io, monkeypatch, f
     assert io._aa_hold is None
     if fault == 'stall':
         assert 'did not follow' in outcome['reason']
-        assert '20 seconds' in outcome['reason']
-        assert 20000 <= io.now_ms() <= 20100
+        assert '40 seconds' in outcome['reason']
+        assert 40000 <= io.now_ms() <= 40100
         assert max(abs(call.args[0][0]) for call in io.publish.call_args_list) <= 40
     if fault == 'limit':
         assert 'limits' in outcome['reason']

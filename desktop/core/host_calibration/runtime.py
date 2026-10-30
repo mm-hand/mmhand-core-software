@@ -540,8 +540,8 @@ class HostCalibrationIO:
                         stable += 1
                     else:
                         stable = 0
-                        if now - progress_at >= 20000:
-                            raise ValueError('AA angle did not follow tendon movement for 20 seconds')
+                        if now - progress_at >= 40000:
+                            raise ValueError('AA angle did not follow tendon movement for 40 seconds')
                         step = max(1, speed * min(now - last_command, 100) // 1000)
                         for motor, direction in zip(motors, response):
                             delta = step if (direction > 0) == (angle < center) else -step
