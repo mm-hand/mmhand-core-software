@@ -67,16 +67,26 @@ bool FeetechServoDriver::checkOnlineConfiguration(uint8_t id)
         return false;
     }
     feedback.onlineCheck = ServoOnlineCheck::ConfigurationFailed;
-    uint8_t config[11] = {}, profile[3] = {};
+    uint8_t config[11] = {}, profile[3] = {}, overload[3] = {};
     if (_sms.Read(id, 8, config, sizeof(config)) != sizeof(config) || _sms.getState() ||
-        _sms.Read(id, 84, profile, sizeof(profile)) != sizeof(profile) || _sms.getState()) return false;
+        _sms.Read(id, 84, profile, sizeof(profile)) != sizeof(profile) || _sms.getState() ||
+        _sms.Read(id, 34, overload, sizeof(overload)) != sizeof(overload) || _sms.getState()) return false;
+    const int unloadCondition = _sms.readByte(id, 19);
+    if (unloadCondition < 0 || _sms.getState()) return false;
+    const uint8_t unloadDesired = (uint8_t)((uint8_t)unloadCondition | 0x20);
+    // 负载保护只保留舵机自己：过载扭矩 95%（寄存器36）、保护时间 2 s（寄存器35）。
+    constexpr uint8_t kOverloadTorquePercent = 95;
+    constexpr uint8_t kProtectionTime10ms = 200;
+    const bool overloadDiffer = overload[1] != kProtectionTime10ms ||
+                                overload[2] != kOverloadTorquePercent ||
+                                unloadDesired != (uint8_t)unloadCondition;
     const uint8_t phase = config[10] | 0x10;
     const uint8_t desired[3] = {254, 254, 0};
     const bool limitsDiffer = config[1] || config[2] || config[3] || config[4];
     const int initialLock = _sms.readByte(id, SMS_STS_LOCK);
     if (initialLock < 0 || _sms.getState()) return false;
     const bool different = initialLock != 1 || config[0] != 1 || phase != config[10] || limitsDiffer ||
-        memcmp(profile, desired, sizeof(profile));
+        overloadDiffer || memcmp(profile, desired, sizeof(profile));
     if (different) {
         if (!setTorqueEnabled(id, false)) {
             // A reply-level 0 motor may have applied torque-off without ACK.
@@ -92,20 +102,32 @@ bool FeetechServoDriver::checkOnlineConfiguration(uint8_t id)
         uint8_t limits[4] = {};
         if (limitsDiffer) _sms.genWrite(id, SMS_STS_MIN_ANGLE_LIMIT_L, limits, sizeof(limits));
         if (phase != config[10]) _sms.writeByte(id, 18, phase);
+        if (overload[1] != kProtectionTime10ms) _sms.writeByte(id, 35, kProtectionTime10ms);
+        if (overload[2] != kOverloadTorquePercent) _sms.writeByte(id, 36, kOverloadTorquePercent);
+        if (unloadDesired != (uint8_t)unloadCondition) _sms.writeByte(id, 19, unloadDesired);
         for (uint8_t i = 0; i < 3; ++i) {
             if (profile[i] != desired[i]) _sms.writeByte(id, 84 + i, desired[i]);
         }
         delay(kMultiTurnConfigDelayMs);
         _sms.LockEprom(id);
         delay(kMultiTurnConfigDelayMs);
+        uint8_t overloadAfter[3] = {};
         if (_sms.readByte(id, SMS_STS_LOCK) != 1 || _sms.getState() ||
             _sms.Read(id, 8, config, sizeof(config)) != sizeof(config) || _sms.getState() ||
             _sms.Read(id, 84, profile, sizeof(profile)) != sizeof(profile) || _sms.getState() ||
+            _sms.Read(id, 34, overloadAfter, sizeof(overloadAfter)) != sizeof(overloadAfter) ||
+            _sms.getState() ||
+            overloadAfter[1] != kProtectionTime10ms ||
+            overloadAfter[2] != kOverloadTorquePercent ||
+            _sms.readByte(id, 19) != (int)unloadDesired || _sms.getState() ||
             config[0] != 1 || config[10] != phase || config[1] || config[2] || config[3] || config[4] ||
             memcmp(profile, desired, sizeof(profile))) return false;
     }
     feedback.onlineCheck = ServoOnlineCheck::Ready;
     _multiTurnConfigured[id] = true;
+    FW_LOG_INFO_PRINTF("[SERVO OVERLOAD CFG] id=%u time10ms=%u torque=%u unload=0x%02X\r\n",
+                       (unsigned)id, (unsigned)kProtectionTime10ms,
+                       (unsigned)kOverloadTorquePercent, (unsigned)unloadDesired);
     return true;
 }
 
@@ -168,18 +190,20 @@ ServoSyncReadResult FeetechServoDriver::collectSyncRead(uint64_t nowUs)
         }
         captureReadDiagnostic(id, true, _syncReadFeedbackLen,
                               (uint32_t)((nowUs - _syncReadStartedUs) / 1000U),
-                              rxLen != _syncReadFeedbackLen || _sms.getState() != 0);
-        if (rxLen == _syncReadFeedbackLen && _sms.getState() == 0) {
+                              rxLen != _syncReadFeedbackLen);
+        if (rxLen == _syncReadFeedbackLen) {
             const int16_t current = _syncReadIncludeCurrent
                 ? decodeSigned(rxBuf[13], rxBuf[14])
                 : _feedback[id].current;
+            // 状态字节非 0 表示舵机故障，但位置/负载仍然有效：保留遥测，只标记故障。
             recordFeedbackSuccess(id,
                                   decodeSigned(rxBuf[0], rxBuf[1]),
                                   decodeSigned(rxBuf[2], rxBuf[3]),
                                   decodeServoLoad(rxBuf[4], rxBuf[5]),
                                   current,
                                   rxBuf[6],
-                                  rxBuf[7]);
+                                  rxBuf[7],
+                                  _sms.getState());
             successCount++;
         } else {
             markReadFailure(id);

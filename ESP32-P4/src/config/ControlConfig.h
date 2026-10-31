@@ -25,12 +25,6 @@ inline constexpr uint16_t kEncoderDisconnectRaw = 0xFFFF;
 inline constexpr uint32_t kCanBusOfflineTimeoutMs = 1000;
 inline constexpr uint32_t kServoTelemetryTimeoutMs = 500;
 
-/** 直控与反馈模式的硬过载阈值；碰撞检测不使用该负载值。 */
-inline constexpr int16_t kDirectOverloadLoadThreshold = 800;
-inline constexpr int16_t kFeedbackOverloadLoadThreshold = 2000;
-inline constexpr uint8_t kDirectOverloadLatchCycles = 20;
-inline constexpr uint8_t kFeedbackOverloadLatchCycles = 20;
-
 /** 速度 0 表示使用舵机固件默认速度，适合连续反馈控制。 */
 inline constexpr uint16_t kFeedbackServoSpeed = 0;
 

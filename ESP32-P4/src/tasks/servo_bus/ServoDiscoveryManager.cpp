@@ -191,7 +191,8 @@ bool ServoDiscoveryManager::step(uint32_t nowMs, bool motionActive)
         servoId,
         targetedScan ? kRecoveryProbeTimeoutMs : kDiscoveryProbeTimeoutMs);
     if (!present) logServoReadFailure(driver, probedBus, servoId);
-    servoRouteTable().recordProbe(probedBus, servoId, present);
+    const bool faulted = present && driver->isFaulted(servoId);
+    servoRouteTable().recordProbe(probedBus, servoId, present, faulted);
 
     bool scanFinished = false;
     if (targetedScan) {

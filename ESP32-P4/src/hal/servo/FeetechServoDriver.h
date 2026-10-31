@@ -17,6 +17,7 @@
 #include "../../config/BoardConfig.h"
 #include "../../config/ServoConfig.h"
 #include "../../config/topology/HardwareMap.h"
+#include "../../system/log/FirmwareLog.h"
 
 using mmhand::config::servo::kMultiTurnConfigDelayMs;
 using mmhand::config::servo::kOfflineInvalidateMisses;
@@ -44,6 +45,7 @@ struct ServoFeedbackInternal {
     int16_t current;     ///< ST3215 Present Current 原始值。
     uint8_t voltage;     ///< ST3215 Present Voltage 原始值。
     uint8_t temperature; ///< 摄氏温度。
+    uint8_t motorStatus; ///< 最近一帧应答的状态字节；非0表示舵机自身故障（过载等）。
     // 电机直接报告的有符号原生ABS，不按数值范围切换解释。
     int32_t absolutePosition;
     bool absoluteReliable; ///< logical ABS 是否可供运动控制。
@@ -313,7 +315,7 @@ public:
         return id <= MAX_SERVO_ID ? _readDiagnostics[id] : empty;
     }
 
-    /** 对一台离线舵机执行低频单播探测，成功时更新上线去抖状态。 */
+    /** 对一台离线舵机执行低频单播探测；回包完整即在线，状态位另行标记。 */
     bool probeFeedback(uint8_t id,
                        uint16_t timeoutMs = SERVO_PROBE_TIMEOUT_MS)
     {
@@ -326,10 +328,12 @@ public:
         const uint32_t startedMs = millis();
         const int feedbackResult = _sms.FeedBack(id);
         _sms.IOTimeOut = previousTimeout;
-        captureReadDiagnostic(id, false, 15, millis() - startedMs,
-                              feedbackResult < 0 || _sms.getState() != 0);
-        if (feedbackResult < 0 || _sms.getState() != 0) {
-            markReadFailure(id);
+        const bool commOk = feedbackResult > 0;
+        const uint8_t status = commOk ? _sms.getState() : 0;
+        captureReadDiagnostic(id, false, 15, millis() - startedMs, !commOk);
+        if (!commOk) {
+            // 探测用于发现：其它 BUS 上的超时不是这台电机的读失败，
+            // 不能因此把已在线（尤其故障在线）的电机判掉线；在线权威归控制读路径。
             return false;
         }
         recordFeedbackSuccess(id,
@@ -338,7 +342,8 @@ public:
                               (int16_t)_sms.ReadLoad(-1),
                               (int16_t)_sms.ReadCurrent(-1),
                               (uint8_t)_sms.ReadVoltage(-1),
-                              (uint8_t)_sms.ReadTemper(-1));
+                              (uint8_t)_sms.ReadTemper(-1),
+                              status);
         return true;
     }
 
@@ -361,6 +366,12 @@ public:
     bool isOnline(uint8_t id) const
     {
         return id <= MAX_SERVO_ID && _feedback[id].online;
+    }
+
+    /** 舵机自身报告故障（过载/过压/磁编/超温/过流）；仍在线、可读遥测。 */
+    bool isFaulted(uint8_t id) const
+    {
+        return id <= MAX_SERVO_ID && _feedback[id].motorStatus != 0;
     }
 
     /** 表示 logical ABS 已由桌面 JSON、ABS设零或标定重新建立可信基准。 */
@@ -481,7 +492,8 @@ public:
         if (!_serial || id > MAX_SERVO_ID) {
             return false;
         }
-        const bool ok = (_sms.EnableTorque(id, enabled ? 1 : 0) > 0 && _sms.getState() == 0);
+        // 舵机处于故障态时应答帧仍带 status 位，但写入本身已生效；只看 ACK。
+        const bool ok = (_sms.EnableTorque(id, enabled ? 1 : 0) > 0);
         if (ok) {
             _torqueDisabled[id] = !enabled;
         }
@@ -581,10 +593,18 @@ private:
                                int16_t load,
                                int16_t current,
                                uint8_t voltage,
-                               uint8_t temperature)
+                               uint8_t temperature,
+                               uint8_t status = 0)
     {
         ServoFeedbackInternal& fb = _feedback[id];
         const bool wasOnline = fb.online;
+        if (fb.motorStatus != status && status != 0) {
+            FW_LOG_WARN_PRINTF("[SERVO PROTECT] id=%u status=0x%02X load=%d\r\n",
+                               (unsigned)id, (unsigned)status, (int)load);
+        } else if (fb.motorStatus != 0 && status == 0) {
+            FW_LOG_INFO_PRINTF("[SERVO PROTECT CLEARED] id=%u\r\n", (unsigned)id);
+        }
+        fb.motorStatus = status;
         fb.absolutePosition = rawPos;
 
         ++fb.feedbackSequence;

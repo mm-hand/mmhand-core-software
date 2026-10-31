@@ -33,7 +33,6 @@
 #include "../../system/ports/SystemEventPort.h"
 #include "../../system/TaskRuntimeMetrics.h"
 #include "../../safety/policies/ControlInputSafetyPolicy.h"
-#include "../../safety/policies/OverloadSafetyPolicy.h"
 #include "../../safety/policies/CollisionSafetyPolicy.h"
 #include "../../safety/policies/ControlBoundarySafetyPolicy.h"
 #include "../../safety/SafetyEventReporter.h"
@@ -85,8 +84,6 @@ struct ControlServiceRuntime {
     // 上位机上传的 LUT 由 HostComm 跨核更新；控制周期只使用同代一致快照。
     JointCalibrationRuntimeSnapshot calibrationSnapshot[ENCODER_TOTAL_NUM];
     uint32_t calibrationSnapshotValidMask;
-    uint32_t overloadFaultLatched;
-    uint8_t overloadHighCount[SERVO_TOTAL_NUM];
     int32_t feedbackCollisionHoldAbs[ENCODER_TOTAL_NUM][MAX_JOINT_ACTUATORS];
     bool feedbackCollisionPidPushActive[ENCODER_TOTAL_NUM];
     // 上一控制周期采用的碰撞窗口档位；单电机按物理方向更新，双电机固定 RELEASE。
@@ -99,7 +96,6 @@ struct ControlServiceRuntime {
     // 单腱和双腱 LUT 钳位按关节做边沿锁存，避免贴边时每 10 ms 重复上报。
     uint32_t lutClampEventLatchedBitmap;
     uint32_t lutClampObservedBitmap;
-    uint32_t lastOverloadFaultResetToken;
     ControlCommandSnapshot_t commandSnapshot;
     uint32_t lastPidComputeMs;
     bool prevMotorOnline[SERVO_TOTAL_NUM];
@@ -318,9 +314,7 @@ bool initMotionControlService(SystemRuntimeContext* sharedData, uint32_t nowMs)
     memset(&g_controlRuntime, 0, sizeof(g_controlRuntime));
     g_jointController.resetAll();
     for (auto& filter : g_feedbackFilters) filter.reset();
-    g_controlRuntime.lastOverloadFaultResetToken =
-        sharedAtomicLoad(&sharedData->overload_fault_reset_token);
-    // 控制服务启动时清空对外公开的故障状态。
+    // 过载显示位由舵机状态字喂养（见 ServoBusService），这里只做启动清零。
     SharedSafetyGuard guard;
     sharedAtomicStore(&sharedData->overload_fault_bitmap, (uint32_t)0);
     for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
@@ -363,8 +357,6 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
     auto& mappedData = runtime.mappedData;
     auto& calibrationSnapshot = runtime.calibrationSnapshot;
     auto& calibrationSnapshotValidMask = runtime.calibrationSnapshotValidMask;
-    auto& overloadFaultLatched = runtime.overloadFaultLatched;
-    auto& overloadHighCount = runtime.overloadHighCount;
     auto& feedbackCollisionHoldAbs = runtime.feedbackCollisionHoldAbs;
     auto& feedbackCollisionPidPushActive = runtime.feedbackCollisionPidPushActive;
     auto& feedbackCollisionDriveMotionMode =
@@ -373,7 +365,6 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
         runtime.lastFeedbackCollisionSensorTimestamp;
     auto& upperWorkspaceHighCount = runtime.upperWorkspaceHighCount;
     auto& upperWorkspaceWarningBitmap = runtime.upperWorkspaceWarningBitmap;
-    auto& lastOverloadFaultResetToken = runtime.lastOverloadFaultResetToken;
     auto& commandSnapshot = runtime.commandSnapshot;
     auto& prevMotorOnline = runtime.prevMotorOnline;
     auto& hotplugHoldMotor = runtime.hotplugHoldMotor;
@@ -404,23 +395,6 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
             lastJointCommandToken = jointCommandToken;
         }
 
-        const uint32_t overloadFaultResetToken =
-            sharedAtomicLoad(&sharedData->overload_fault_reset_token);
-        if (overloadFaultResetToken != lastOverloadFaultResetToken)
-        {
-            // 操作端请求故障复位时，同时清理私有锁存状态和共享故障 bitmap/负载快照。
-            overloadFaultLatched = 0;
-            memset(overloadHighCount, 0, sizeof(overloadHighCount));
-            {
-                SharedSafetyGuard guard;
-                sharedAtomicStore(&sharedData->overload_fault_bitmap, (uint32_t)0);
-                for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
-                    sharedData->overload_fault_load[ch] = 0;
-                }
-            }
-            lastOverloadFaultResetToken = overloadFaultResetToken;
-        }
-
         ServoTargetBatch_t targetBatch;
         runtime.cycleTrace = {};
         memset(&targetBatch, 0, sizeof(targetBatch));
@@ -442,13 +416,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
 
         ServoTelemetryData_t telemetryData;
         memset(&telemetryData, 0, sizeof(telemetryData));
-        bool telemetryFresh = false;
-        if (sharedData->servoTelemetryQueue.peek(&telemetryData)) {
-            // 负载/电流数据用于过载保护，因此比编码器映射更快过期。
-            telemetryFresh =
-                p4::system::snapshotFreshAtCycle(nowMs, telemetryData.timestamp,
-                    kServoTelemetryTimeoutMs, uint32_t(kPeriodSec * 1000));
-        }
+        sharedData->servoTelemetryQueue.peek(&telemetryData);
 
         for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++)
         {
@@ -478,9 +446,6 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
         if (servoData.timestamp != 0) {
             runtime.servoOnlineBaselineValid = true;
         }
-
-        sharedAtomicFetchOr(&sharedData->overload_fault_bitmap, overloadFaultLatched);
-        overloadFaultLatched = sharedAtomicLoad(&sharedData->overload_fault_bitmap);
 
         bool canBusOnline = false;
         if (sharedData->canRxQueue.peek(&sensorData) && sensorData.isValid) {
@@ -640,54 +605,6 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
         const bool controlEnabled = hostControlEnabled &&
                                     controlOwnerActive &&
                                     (feedbackOutputState || directOutputState);
-        const bool normalOutputAllowed = controlEnabled;
-
-        if (normalOutputAllowed && telemetryFresh)
-        {
-            // 被命令电机持续高负载后锁存过载故障。
-            const uint32_t overloadMotorMask =
-                p4::safety::overloadActiveMotorMask(
-                    sharedData, commandSnapshot);
-            for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++)
-            {
-                const uint32_t bit = 1UL << ch;
-                if (((overloadMotorMask & bit) == 0) ||
-                    telemetryData.onlineStatus[ch] == 0)
-                {
-                    overloadHighCount[ch] = 0;
-                    continue;
-                }
-
-                const p4::safety::OverloadSampleDecision overloadDecision =
-                    p4::safety::evaluateOverloadSample(
-                        commandSnapshot.controlMode,
-                        telemetryData.load[ch],
-                        overloadHighCount[ch]);
-                overloadHighCount[ch] = overloadDecision.nextHighCount;
-
-                if (overloadDecision.shouldLatch &&
-                    (overloadFaultLatched & bit) == 0)
-                {
-                    overloadFaultLatched |= bit;
-                    {
-                        SharedSafetyGuard guard;
-                        sharedData->overload_fault_load[ch] = telemetryData.load[ch];
-                    }
-                    FW_LOG_INFO_PRINTF("[CONTROL] OVERLOAD_HOLD M%02u load=%d threshold=%d cycles=%u mode=%u\r\n",
-                                  (unsigned)ch,
-                                  mmhand::servo::loadMagnitude(telemetryData.load[ch]),
-                                  overloadDecision.threshold,
-                                  (unsigned)overloadDecision.latchCycles,
-                                  (unsigned)commandSnapshot.controlMode);
-                }
-            }
-        }
-        else
-        {
-            memset(overloadHighCount, 0, sizeof(overloadHighCount));
-        }
-        sharedAtomicFetchOr(&sharedData->overload_fault_bitmap, overloadFaultLatched);
-        overloadFaultLatched = sharedAtomicLoad(&sharedData->overload_fault_bitmap);
 
         if (commandSnapshot.controlMode == CONTROL_MODE_JOINT) {
             // 本地轨迹仍要限幅；只对本帧明确控制的关节上报越界，避免未选关节的默认值制造误告警。
@@ -928,7 +845,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                     const bool encoderFault = (sharedAtomicLoad(&sharedData->encoder_fault_bitmap) & bit) != 0;
                     const auto safety = p4::safety::evaluateControlSafety(canBusOnline, sensorData, mappedData, joint, encoderFault);
                     bool eligible = safety.allowed && servoFresh && (feedbackCommandJointMask & bit) &&
-                        (calibrationSnapshotValidMask & bit) && !p4::safety::jointHasOverloadFault(joint, overloadFaultLatched);
+                        (calibrationSnapshotValidMask & bit);
                     for (uint8_t axis = 0; axis < getJointActuatorCount(joint); ++axis) {
                         JointActuatorItem actuator;
                         if (!getJointActuator(joint, axis, &actuator) || hotplugHoldMotor[actuator.motorChannel]) eligible = false;

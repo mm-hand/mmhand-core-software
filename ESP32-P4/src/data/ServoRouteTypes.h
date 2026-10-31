@@ -20,6 +20,7 @@ enum class ServoRouteState : uint8_t {
     Offline,
     Conflict,
     BusOverloaded,
+    Faulted, ///< 通信正常（可读遥测），但舵机自身报故障，禁止发运动目标。
 };
 
 struct ServoRoute {
@@ -31,9 +32,11 @@ struct ServoRoute {
 struct ServoRouteSnapshot {
     ServoRoute routes[SERVO_TOTAL_NUM];
     uint32_t detectedIdMask[NUM_BUSES]; ///< 每条 BUS 实际响应的 ID0..ID26 位图。
+    uint32_t faultedIdMask[NUM_BUSES];  ///< 每条 BUS 上"在线但舵机报故障"的 ID 位图。
     uint32_t validMotorMask;            ///< 具有唯一 BUS 的 Mxx。
-    uint32_t controllableMotorMask;     ///< 唯一路由且 BUS 未超容量的 Mxx。
+    uint32_t controllableMotorMask;     ///< 唯一路由、BUS 未超容量且舵机无故障的 Mxx。
     uint32_t conflictMotorMask;         ///< 同一 ID 在多条 BUS 响应的 Mxx。
+    uint32_t faultedMotorMask;          ///< 在线但舵机自身报故障的 Mxx。
     uint8_t busDeviceCount[NUM_BUSES];  ///< 每条 BUS 响应的唯一 ID 数；协议无法区分同 BUS 同 ID 的多台设备。
     uint8_t busOverloadMask;            ///< bit0..bit3 表示 BUS0..BUS3 超过12台。
     uint8_t scanState;                  ///< 0空闲、1全量扫描、2单电机恢复扫描。

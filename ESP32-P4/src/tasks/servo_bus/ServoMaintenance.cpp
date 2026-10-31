@@ -92,7 +92,8 @@ bool stepServoMaintenance(SystemRuntimeContext* context, uint32_t nowMs) {
     else if (op == 2) {
         portENTER_CRITICAL(&lock); active=false; session=0; portEXIT_CRITICAL(&lock);
         servoDiscoveryManager().begin();
-    } else if (op > 4 || bus >= NUM_BUSES || oldId >= 254 || (op == 4 && newId >= 254)) status = 3;
+    } else if (op > 4 || bus >= NUM_BUSES || oldId >= 254 ||
+               (op == 4 && newId >= 254)) status = 3;
     else {
         lastRequestMs=nowMs;
         auto* driver = servoBusRegistry().driver(bus);

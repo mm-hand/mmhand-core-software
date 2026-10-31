@@ -430,6 +430,11 @@ static void processServoOnlineTransitions(
         recovery->activeChannel = 0xFF;
         return;
     }
+    // 故障中的舵机不写 EEPROM，也不把它当作可配置的在线设备。
+    if (driver->isFaulted(route.servoId)) {
+        recovery->activeChannel = 0xFF;
+        return;
+    }
     if (!driver->checkOnlineConfiguration(route.servoId)) {
         driver->finishRecoveryAttempt(route.servoId, false, nowMs);
         recovery->activeChannel = 0xFF;
@@ -762,6 +767,37 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
             }
             FeetechServoDriver* driver =
                 servoBusRegistry().driver(route.busIndex);
+            if (driver && driver->isFaulted(route.servoId)) {
+                const ServoFeedbackInternal& feedback =
+                    driver->getFeedback(route.servoId);
+                const uint32_t bit = 1UL << motor;
+                // 舵机自报过载：立即断开这台电机的扭矩（卸载后状态位才会清）。
+                if ((feedback.motorStatus & 0x20) != 0 &&
+                    !driver->isTorqueDisabled(route.servoId)) {
+                    driver->setTorqueEnabled(route.servoId, false);
+                }
+                {
+                    SharedSafetyGuard guard;
+                    sharedAtomicFetchOr(&sharedData->overload_fault_bitmap, bit);
+                    sharedData->overload_fault_load[motor] = feedback.load;
+                }
+                // 立刻退出可控集合（安全侧），遥测保留；
+                // 排一次定向探测，状态位清零后由扫描自动恢复 Online。
+                servoRouteTable().markMotorFaulted(motor);
+                servoDiscoveryManager().requestMotorScan(motor, route.busIndex);
+                FW_LOG_WARN_PRINTF(
+                    "[SERVO FAULT] M%02u BUS%u id=%u status=0x%02X load=%d -> torque off, not controllable\r\n",
+                    (unsigned)motor, (unsigned)route.busIndex,
+                    (unsigned)route.servoId,
+                    (unsigned)feedback.motorStatus, (int)feedback.load);
+                continue;
+            }
+            if (driver) {
+                // 状态位清零、回到 Online：同步清掉过载显示位。
+                SharedSafetyGuard guard;
+                sharedAtomicFetchAnd(&sharedData->overload_fault_bitmap,
+                                     ~(1UL << motor));
+            }
             if (driver && driver->invalidateIfFeedbackStale(
                     route.servoId,
                     feedbackCheckNowMs,

@@ -15,10 +15,12 @@ public:
     void begin();
     void beginFullScan();
     void beginMotorScan(uint8_t motorChannel);
-    void recordProbe(uint8_t busIndex, uint8_t servoId, bool present);
+    void recordProbe(uint8_t busIndex, uint8_t servoId, bool present,
+                     bool faulted = false);
     void finishScan();
     void setScanProgress(uint8_t progress);
     void markMotorOffline(uint8_t motorChannel);
+    void markMotorFaulted(uint8_t motorChannel);
 
     bool resolveDetected(uint8_t motorChannel, ServoRoute* out) const;
     bool resolveControllable(uint8_t motorChannel, ServoRoute* out) const;

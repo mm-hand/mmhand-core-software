@@ -44,9 +44,11 @@ void ServoRouteTable::begin()
 void ServoRouteTable::beginFullScan()
 {
     memset(snapshot_.detectedIdMask, 0, sizeof(snapshot_.detectedIdMask));
+    memset(snapshot_.faultedIdMask, 0, sizeof(snapshot_.faultedIdMask));
     snapshot_.validMotorMask = 0;
     snapshot_.controllableMotorMask = 0;
     snapshot_.conflictMotorMask = 0;
+    snapshot_.faultedMotorMask = 0;
     snapshot_.busOverloadMask = 0;
     snapshot_.scanState = 1;
     snapshot_.scanProgress = 0;
@@ -66,10 +68,12 @@ void ServoRouteTable::beginMotorScan(uint8_t motorChannel)
     const uint32_t idBit = 1UL << motorMap[motorChannel].servoID;
     for (uint8_t bus = 0; bus < NUM_BUSES; ++bus) {
         snapshot_.detectedIdMask[bus] &= ~idBit;
+        snapshot_.faultedIdMask[bus] &= ~idBit;
     }
     snapshot_.validMotorMask &= ~(1UL << motorChannel);
     snapshot_.controllableMotorMask &= ~(1UL << motorChannel);
     snapshot_.conflictMotorMask &= ~(1UL << motorChannel);
+    snapshot_.faultedMotorMask &= ~(1UL << motorChannel);
     snapshot_.routes[motorChannel].busIndex = SERVO_ROUTE_BUS_UNKNOWN;
     snapshot_.routes[motorChannel].state = ServoRouteState::Probing;
     snapshot_.scanState = 2;
@@ -79,19 +83,23 @@ void ServoRouteTable::beginMotorScan(uint8_t motorChannel)
 
 void ServoRouteTable::recordProbe(uint8_t busIndex,
                                   uint8_t servoId,
-                                  bool present)
+                                  bool present,
+                                  bool faulted)
 {
     if (busIndex >= NUM_BUSES || servoId > MAX_SERVO_ID) {
         return;
     }
     const uint32_t bit = 1UL << servoId;
-    const int motor = findMotorChannelByServoId(servoId);
     if (present) {
         snapshot_.detectedIdMask[busIndex] |= bit;
-        if (motor >= 0) {
+        if (faulted) {
+            snapshot_.faultedIdMask[busIndex] |= bit;
+        } else {
+            snapshot_.faultedIdMask[busIndex] &= ~bit;
         }
     } else {
         snapshot_.detectedIdMask[busIndex] &= ~bit;
+        snapshot_.faultedIdMask[busIndex] &= ~bit;
     }
 }
 
@@ -100,6 +108,7 @@ void ServoRouteTable::rebuildDerivedState()
     snapshot_.validMotorMask = 0;
     snapshot_.controllableMotorMask = 0;
     snapshot_.conflictMotorMask = 0;
+    snapshot_.faultedMotorMask = 0;
     snapshot_.busOverloadMask = 0;
     for (uint8_t bus = 0; bus < NUM_BUSES; ++bus) {
         snapshot_.busDeviceCount[bus] = popcount27(snapshot_.detectedIdMask[bus]);
@@ -129,7 +138,11 @@ void ServoRouteTable::rebuildDerivedState()
             snapshot_.conflictMotorMask |= 1UL << motor;
         } else {
             snapshot_.validMotorMask |= 1UL << motor;
-            if ((snapshot_.busOverloadMask & (1U << foundBus)) != 0) {
+            if ((snapshot_.faultedIdMask[foundBus] & (1UL << id)) != 0) {
+                // 通信正常、遥测可读，但舵机自身报故障：不可控，等待状态位清零。
+                route.state = ServoRouteState::Faulted;
+                snapshot_.faultedMotorMask |= 1UL << motor;
+            } else if ((snapshot_.busOverloadMask & (1U << foundBus)) != 0) {
                 route.state = ServoRouteState::BusOverloaded;
             } else {
                 route.state = ServoRouteState::Online;
@@ -154,6 +167,24 @@ void ServoRouteTable::setScanProgress(uint8_t progress)
     }
 }
 
+void ServoRouteTable::markMotorFaulted(uint8_t motorChannel)
+{
+    if (motorChannel >= SERVO_TOTAL_NUM) {
+        return;
+    }
+    ServoRoute& route = snapshot_.routes[motorChannel];
+    if (route.state == ServoRouteState::Faulted ||
+        route.busIndex >= NUM_BUSES) {
+        return;
+    }
+    route.state = ServoRouteState::Faulted;
+    snapshot_.validMotorMask |= 1UL << motorChannel;
+    snapshot_.controllableMotorMask &= ~(1UL << motorChannel);
+    snapshot_.faultedMotorMask |= 1UL << motorChannel;
+    snapshot_.faultedIdMask[route.busIndex] |= 1UL << route.servoId;
+    ++snapshot_.generation;
+}
+
 void ServoRouteTable::markMotorOffline(uint8_t motorChannel)
 {
     if (motorChannel >= SERVO_TOTAL_NUM) {
@@ -162,11 +193,13 @@ void ServoRouteTable::markMotorOffline(uint8_t motorChannel)
     ServoRoute& route = snapshot_.routes[motorChannel];
     if (route.busIndex < NUM_BUSES) {
         snapshot_.detectedIdMask[route.busIndex] &= ~(1UL << route.servoId);
+        snapshot_.faultedIdMask[route.busIndex] &= ~(1UL << route.servoId);
     }
     route.busIndex = SERVO_ROUTE_BUS_UNKNOWN;
     route.state = ServoRouteState::Offline;
     snapshot_.validMotorMask &= ~(1UL << motorChannel);
     snapshot_.controllableMotorMask &= ~(1UL << motorChannel);
+    snapshot_.faultedMotorMask &= ~(1UL << motorChannel);
     ++snapshot_.generation;
 }
 
@@ -178,7 +211,8 @@ bool ServoRouteTable::resolveDetected(uint8_t motorChannel, ServoRoute* out) con
     const ServoRoute& route = snapshot_.routes[motorChannel];
     if (route.busIndex >= NUM_BUSES ||
         (route.state != ServoRouteState::Online &&
-         route.state != ServoRouteState::BusOverloaded)) {
+         route.state != ServoRouteState::BusOverloaded &&
+         route.state != ServoRouteState::Faulted)) {
         return false;
     }
     *out = route;

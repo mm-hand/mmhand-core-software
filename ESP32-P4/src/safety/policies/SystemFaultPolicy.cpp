@@ -61,9 +61,6 @@ SystemHealthSnapshot readSystemHealth(SystemRuntimeContext* sharedData, uint32_t
         !p4::state::requiredServosOnline(sharedData, servoSnapshot)) {
         faults |= SYSTEM_FAULT_SERVO_OFFLINE;
     }
-    if (sharedAtomicLoad(&sharedData->overload_fault_bitmap) != 0) {
-        faults |= SYSTEM_FAULT_OVERLOAD;
-    }
     if ((sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap) &
          p4::state::requiredMotorMask(sharedData)) != 0) {
         faults |= SYSTEM_FAULT_MULTITURN_UNKNOWN;
