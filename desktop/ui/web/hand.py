@@ -20,10 +20,14 @@ from desktop.core.tactile_geometry import SENSOR_LINKS, module_points
 
 ROOT = Path(__file__).resolve().parents[2] / 'resources'
 MODEL = ROOT / 'mmhand_urdf'
-# Same palm-facing direction and up vector as mmhand_teleop's robot viewer.
-CAMERA = dict(x=0.1046, y=-0.0168, z=-0.4559, look_at_x=0.1050,
-              look_at_y=-0.0191, look_at_z=-0.0759,
-              up_x=0.9994, up_y=-0.03465, up_z=-0.00149)
+# mmhand.urdf puts the fingers along +z, so the camera looks down +y at a point
+# level with the palm and keeps up exactly on +z: any lean in `up` rolls the
+# whole hand over. The distance is fixed by the 0.80 vertical fill in the test.
+CAMERA = dict(x=-0.019, y=-0.4555, z=0.0917, look_at_x=-0.019,
+              look_at_y=-0.0536, look_at_z=0.0917,
+              up_x=0.0, up_y=0.0, up_z=1.0)
+FOV = 42
+SCENE = dict(width=1200, height=620)
 ARROW_RADIUS = 0.0008
 ARROW_MIN = 5.0
 
@@ -74,11 +78,11 @@ def build(hand):
         ui.label('Light gray: original URDF · Gray: contact-calibrated · Green: target').classes('text-sm')
         reset = ui.button('Reset view')
     status = ui.label('Waiting for feedback')
-    camera = ui.scene.perspective_camera(fov=42, near=0.01)
+    camera = ui.scene.perspective_camera(fov=FOV, near=0.01)
     for key, value in CAMERA.items():
         setattr(camera, key, value)
-    scene = ui.scene(width=800, height=360, grid=False, camera=camera,
-                     background_color='#ffffff').classes('w-full')
+    scene = ui.scene(grid=False, camera=camera, background_color='#ffffff',
+                     **SCENE).classes('w-full')
     shown = False
     reset.on_click(lambda: scene.move_camera(**CAMERA))
     poses, tactile = [], {}
