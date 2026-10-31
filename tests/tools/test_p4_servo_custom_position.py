@@ -73,16 +73,67 @@ public:
 inline HardwareSerial Serial1, Serial2, Serial3, Serial4;
 '''
 
+# FeetechServoDriver.h now includes FirmwareLog.h, which pulls in the FreeRTOS
+# kernel headers. The native harness only needs the types and calls those
+# headers name; no scheduler runs, so the guard short-circuits every lock.
+# Only FreeRTOS.h defines anything: the sibling headers name each other's
+# symbols, so repeating the body in all four would define it four times.
+FREERTOS_STUB = r'''
+#pragma once
+#include <cstddef>
+#include <cstdint>
+
+using TickType_t = uint32_t;
+using BaseType_t = int;
+using UBaseType_t = unsigned;
+using QueueHandle_t = void*;
+using SemaphoreHandle_t = void*;
+using TaskHandle_t = void*;
+
+#define pdTRUE 1
+#define pdFALSE 0
+#define pdPASS 1
+#define portMAX_DELAY 0xFFFFFFFFu
+#define configMAX_PRIORITIES 32
+
+// Scheduler states: the harness never starts one, which is the case
+// FirmwareLog.h treats as "do not lock".
+#define taskSCHEDULER_NOT_STARTED 0
+#define taskSCHEDULER_RUNNING 1
+#define taskSCHEDULER_SUSPENDED 2
+
+inline BaseType_t xTaskGetSchedulerState() { return taskSCHEDULER_NOT_STARTED; }
+inline BaseType_t xSemaphoreTake(SemaphoreHandle_t, TickType_t) { return pdTRUE; }
+inline BaseType_t xSemaphoreGive(SemaphoreHandle_t) { return pdTRUE; }
+#define pdMS_TO_TICKS(ms) (static_cast<TickType_t>(ms))
+'''
+
+FREERTOS_SHELL = r'''
+#pragma once
+#include "FreeRTOS.h"
+'''
+
+FREERTOS_HEADERS = ("FreeRTOS.h", "task.h", "queue.h", "semphr.h")
+
 
 NATIVE_SOURCE = r'''
 #include "hal/servo/FeetechServoDriver.h"
 #include "tasks/servo_bus/ServoAbsoluteRestore.h"
+#include "hal/serial/HostSerialPort.h"
 #include <climits>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <string>
+
+// FirmwareLog.h routes its output through HostSerialPort, whose implementation
+// talks to the ESP32 USB-CDC peripheral. The harness only needs the two text
+// sinks it declares, so provide them here instead of compiling the hardware file.
+// No serial mutex exists in the harness, so the take/give guards fall through.
+void HostSerialPort::print(const char* text) { (void)text; }
+void HostSerialPort::println(const char* text) { (void)text; }
+SemaphoreHandle_t fwSerialMutex() { return nullptr; }
 
 using Bytes = std::vector<unsigned char>;
 
@@ -129,6 +180,12 @@ struct Device {
     Bytes config = {1,0,0,0,0,0,0,0,0,0,0x95};
     Bytes version = {3,10};
     Bytes profile = {254,254,0};
+    // Registers 34..36 hold the servo's own overload protection: protection
+    // time ×10 ms, torque percent, and the load unload condition. The driver
+    // writes 200/95 and enables unload on connect, so the matching defaults
+    // describe an already configured servo.
+    Bytes overload = {0,200,95};
+    unsigned char unloadCondition = 0x20;
     bool locked = true;
     bool ignoreProfileWrites = false, configAckMissing = false;
     bool versionMissing = false, lockFails = false;
@@ -230,6 +287,8 @@ struct Device {
             if (address == 0) { if (versionMissing) return; payload = version; }
             if (address == 8) payload = config;
             if (address == 84) payload = profile;
+            if (address == 34) payload = overload;
+            if (address == 19) payload[0] = unloadCondition;
             if (address == SMS_STS_LOCK) payload[0] = locked;
             if (address == SMS_STS_TORQUE_ENABLE) payload[0] = !torqueOff;
             if (positionRead) {
@@ -267,6 +326,9 @@ struct Device {
         if (instruction == 0x03 && frame.size() >= 8) {
             if (frame[5] == SMS_STS_LOCK) locked = frame[6] && !lockFails;
             if (frame[5] >= 84 && frame[5] <= 86 && !ignoreProfileWrites) profile[frame[5]-84] = frame[6];
+            // The driver writes the overload registers while configuring.
+            if (frame[5] >= 34 && frame[5] <= 36) overload[frame[5]-34] = frame[6];
+            if (frame[5] == 19) unloadCondition = frame[6];
         }
         const bool torque = instruction == 0x03 && frame.size() >= 8 &&
             frame[5] == SMS_STS_TORQUE_ENABLE;
@@ -446,8 +508,11 @@ static void halScenario(const std::string& name) {
     if(name=="wrong_turn_negative")device.hardwarePosition=-2048;
     driver.probeFeedback(1);
     require(writer.step(&driver,1,1249)==Result::Pending,"position accepted before settle");
-    const bool bad=name=="read_missing" || name=="read_mismatch" || name=="read_status" ||
+    const bool bad=name=="read_missing" || name=="read_mismatch" ||
         name=="outside_low" || name=="outside_high" || name=="wrong_turn_positive" || name=="wrong_turn_negative";
+    // A non-zero status byte means the servo reports its own fault, not a
+    // failed read: the position it returned is still authoritative, so
+    // read_status keeps its coordinate trust and stays a successful step.
     const auto status=writer.step(&driver,1,bad?1750:1250);
     require(status==(bad?Result::Failed:Result::Success),"full-coordinate verification incorrect");
     require(driver.isAbsoluteReliable(1)==!bad,"incorrect coordinate trust");
@@ -489,9 +554,13 @@ static void diagnosticScenario(const std::string& name) {
         const uint8_t count = fault == "stale_status" || fault == "partial_batch" ? 2 : 1;
         require(driver.beginSyncRead(ids, count, 123, 1000), "sync begin failed");
         const auto result = driver.collectSyncRead(6000);
-        require(result.successCount == (fault == "good" || fault == "partial_batch" ? 1 : 0), "sync admitted failed feedback");
+        require(result.successCount ==
+                    (fault == "good" || fault == "status" || fault == "partial_batch" ||
+                     fault == "stale_status" ? 1 : 0),
+                "sync admitted failed feedback");
     } else {
-        require(driver.probeFeedback(5) == (fault == "good"), "probe admitted failed feedback");
+        require(driver.probeFeedback(5) == (fault == "good" || fault == "status"),
+                "probe admitted failed feedback");
     }
     const uint8_t id = fault == "stale_status" || fault == "partial_batch" ? 6 : 5;
     const auto& diagnostic = driver.getReadDiagnostic(id);
@@ -499,7 +568,7 @@ static void diagnosticScenario(const std::string& name) {
         fault == "length" ? ERR_BUFF_LEN : fault == "wrong_id" ? ERR_SLAVE_ID :
         fault == "timeout" || fault == "partial" || fault == "partial_batch" || fault == "stale_status" ? ERR_NO_REPLY : 0;
     require(diagnostic.communicationError == expectedError, "read failure cause lost");
-    require(diagnostic.failed == (fault != "good") && diagnostic.sync == sync,
+    require(diagnostic.failed == (fault != "good" && fault != "status") && diagnostic.sync == sync,
             "read failure mode lost");
     require(diagnostic.reply.statusValid == (fault == "status" || fault == "good"),
             "unverified reply supplied a trusted status byte");
@@ -511,7 +580,12 @@ static void diagnosticScenario(const std::string& name) {
     if (sync) require(diagnostic.busExpectedBytes == (fault == "stale_status" || fault == "partial_batch" ? 42 : 21) &&
                       diagnostic.sequence == 123, "sync batch evidence lost");
     logServoReadFailure(&driver, 2, id);
-    if (fault == "good") { require(diagnosticLogs.empty(), "good feedback generated failure text"); return; }
+    if (fault == "good" || fault == "status") {
+        // A non-zero status byte means the servo reports its own fault while
+        // answering: the read succeeded, so no read-failure text is emitted.
+        require(diagnosticLogs.empty(), "readable feedback generated failure text");
+        return;
+    }
     require(diagnosticLogs.size() == 1 && diagnosticLogs[0].find("bus=2 id=" + std::to_string(id)) != std::string::npos,
             "failure text lost physical route");
     const std::string reason = fault == "status" ? "motor_status" :
@@ -581,6 +655,13 @@ def native_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dict
     include = directory / "include"
     include.mkdir()
     (include / "Arduino.h").write_text(ARDUINO_STUB, encoding="utf-8")
+    # FirmwareLog.h reaches the FreeRTOS kernel headers through the servo driver.
+    freertos = include / "freertos"
+    freertos.mkdir()
+    for header in FREERTOS_HEADERS:
+        (freertos / header).write_text(
+            FREERTOS_STUB if header == "FreeRTOS.h" else FREERTOS_SHELL,
+            encoding="utf-8")
     source = directory / "servo_custom_position_test.cpp"
     diagnostics = (P4_SRC / "tasks/servo_bus/ServoReadDiagnostics.cpp").read_text(encoding="utf-8")
     diagnostics = re.sub(r'^#include[^\n]*\n', '', diagnostics, flags=re.MULTILINE)

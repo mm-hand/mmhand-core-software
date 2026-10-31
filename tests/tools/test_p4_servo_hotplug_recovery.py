@@ -48,7 +48,11 @@ public:
     int32_t native=200, saved=8392;
     unsigned writes=0;
     bool snapshot=false;
+    // A non-zero status byte means the servo reports its own fault while still
+    // answering; telemetry stays readable, so fault and online are independent.
+    bool faulted=false;
     bool isOnline(uint8_t) const { return online; }
+    bool isFaulted(uint8_t) const { return faulted; }
     bool isRecoveryAttemptDue(uint8_t, uint32_t) const { return pending; }
     bool checkOnlineConfiguration(uint8_t) { return configured; }
     int32_t getAbsolutePosition(uint8_t) const { return native; }

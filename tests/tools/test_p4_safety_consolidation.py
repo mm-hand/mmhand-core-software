@@ -80,9 +80,11 @@ int main() {
     r.canRxQueue.data.timestamp=r.servoFeedbackQueue.data.timestamp=3000;
     r.encoder_fault_bitmap=2;
     r.overload_fault_bitmap=1; r.multi_turn_unknown_bitmap=2;
+    // The servo owns its own overload protection, so overload_fault_bitmap is a
+    // display-only bit and no longer contributes SYSTEM_FAULT_OVERLOAD.
     h=readSystemHealth(&r,3000);
-    assert(h.faults==(1|4|64) && h.encoderFaultMask==2);
-    r.system_state=3; h=readSystemHealth(&r,3000); assert(h.faults==(4|64));
+    assert(h.faults==(1|64) && h.encoderFaultMask==2);
+    r.system_state=3; h=readSystemHealth(&r,3000); assert(h.faults==(64));
     r.overload_fault_bitmap=0; r.multi_turn_unknown_bitmap=0;
     r.system_fault_latched_bitmap=4; h=readSystemHealth(&r,3000); assert(h.faults==4);
     assert(readSystemHealth(nullptr,3000).faults==0);
