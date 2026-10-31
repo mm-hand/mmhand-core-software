@@ -37,9 +37,10 @@ def centered_io(io, monkeypatch):
         count = math.ceil((hi - lo) / 5) + 1
         state.joint_calib_results[aa] = {
             'success': True, 'scaled': True, 'hasManualScaledV4Fields': True,
-            'mappingVersion': 4, 'urdfConfigCrc': io.urdf_config_crc(),
+            'mappingVersion': 5, 'urdfConfigCrc': io.urdf_config_crc(),
             'manualReferenceCrc': manual_encoder_reference_entry_crc(aa, 6000, 10000),
             'manualSpanCounts': 4000,
+            'angleK': (hi - lo) / 4000.0, 'angleB': lo,
             'currentMinDeg': lo, 'currentMaxDeg': hi, 'angleMin': lo, 'angleMax': hi,
             'tendonLutValid': True, 'tendonLutCount': count,
             'tendonLutMotor': list(joint_motors(aa)),
@@ -311,7 +312,7 @@ def test_thumb_cmc_does_not_require_or_move_aa(centered_io):
 
 
 def test_general_lut_interpolation_preserves_short_last_interval_and_rejects_extrapolation():
-    result = dict(success=True, scaled=True, mappingVersion=4, tendonLutValid=True,
+    result = dict(success=True, scaled=True, mappingVersion=5, tendonLutValid=True,
         tendonLutCount=3, tendonLutMotor=[0, 1], tendonLutMotorAbs=[[0, 10, 20], [0, -10, -20]],
         tendonLutAngleStartDeg=-8, tendonLutAngleStepDeg=5, angleMax=1)
     assert dual_lut_targets(result, (0, 1), 0) == {0: 18, 1: -18}

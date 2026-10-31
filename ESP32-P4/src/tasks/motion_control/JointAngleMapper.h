@@ -10,14 +10,16 @@
 
 #include <stdint.h>
 
+#include "../../system/calibration/CalibrationRuntimeStore.h"
 
 namespace p4::control {
 
 /** 将角度换算为最近的 14 bit 编码器 counts，结果允许带符号。 */
 int32_t degToEncoderCount(float deg);
 
-/** 将目标角限制到该关节的静态 URDF Min/Max。 */
-float clampJointTargetDeg(float targetDeg, uint8_t jointIndex);
+/** 将目标角限制到该关节当前生效的 V5 模型端点。 */
+float clampJointTargetDeg(float targetDeg, uint8_t jointIndex,
+                          const JointCalibrationResult& calibration);
 
 } // namespace p4::control
 

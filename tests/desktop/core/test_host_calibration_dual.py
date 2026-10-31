@@ -493,7 +493,7 @@ def test_complete_thumb_dual_trace_releases_then_searches_preloads_exchanges_and
     assert outcome["success"] and not outcome["preflight_failed"]
     assert observed["exchange"]
     assert io.commands[0][1] == {21: -3200}
-    assert outcome["result"]["mappingVersion"] == 4
+    assert outcome["result"]["mappingVersion"] == 5
     assert outcome["result"]["tendonLutValid"]
     assert outcome["result"]["tendonLutMotor"] == [20, 21]
     assert outcome["result"]["encoderSpan"] >= 546

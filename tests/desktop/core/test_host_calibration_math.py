@@ -65,9 +65,12 @@ def test_manual_crc_matches_big_endian_five_byte_contract():
 def test_full_manual_mapping_preserved_and_auto_endpoints_do_not_rescale():
     io = MathIO()
     result = build_calibration_result(io, 1, 16200, 0, 3500, -100, 400, 2000)
-    assert result["mappingVersion"] == 4
-    # host 结果只保留静态 URDF/angle 字段，currentMin/Max 概念已删除。
+    assert result["mappingVersion"] == 5
+    # V5: angleMin/angleMax 是 angleB / angleK*manualSpan+angleB 的派生端点。
     assert (result["angleMin"], result["angleMax"]) == (0.0, 83.0)
+    per_count = f32(f32(83.0) / f32(4384.0))
+    assert result["angleK"] == per_count
+    assert result["angleB"] == 0.0
     assert "currentMinDeg" not in result
     assert "currentMaxDeg" not in result
     assert result["autoMinRaw"] == 16200
@@ -83,8 +86,9 @@ def test_full_manual_mapping_preserved_and_auto_endpoints_do_not_rescale():
     above = map_manual_scaled_encoder_to_urdf(io, 1, result, 4010)
     assert below["outside_counts"] == -10 and not below["feedback_ready"]
     assert above["outside_counts"] == 10 and above["feedback_ready"]
-    assert below["urdf_deg"] == encoder_count_to_deg(-10)
-    assert above["urdf_deg"] == f32(83.0 + encoder_count_to_deg(10))
+    # V5: 窗口外也使用同一 k/b 斜率。
+    assert below["urdf_deg"] == f32(f32(per_count * f32(-10)) + f32(0.0))
+    assert above["urdf_deg"] == f32(f32(per_count * f32(4394)) + f32(0.0))
     io.reference["maxRaw"] = 4001
     assert map_manual_scaled_encoder_to_urdf(io, 1, result, 4000) is None
 

@@ -20,9 +20,7 @@ int32_t calibrationWrapEncoderCount(int32_t value);
 int32_t calibrationForwardEncoderDelta(int32_t from, int32_t to);
 // 计算 target-actual 的最短有符号环形差，结果位于 [-8192,8192]。
 int32_t calibrationWrapEncoderDelta(int32_t target, int32_t actual);
-// 按 16384 counts/360° 在 counts 与角度之间换算，仅用于区间外诊断。
-float calibrationEncoderCountToDeg(int32_t count);
-// 角度换算为磁编 counts，使用同一诊断比例并四舍五入。
+// 角度换算为磁编 counts，用于 LUT/装配诊断，四舍五入。
 int32_t calibrationDegToEncoderCount(float deg);
 
 // 单次磁编到 URDF 角度映射结果。
@@ -36,7 +34,7 @@ struct EncoderUrdfMapResult {
     float urdfDeg;                 // 区间内线性映射、区间外诊断外推角度。
 };
 
-// 生成当前 V4 映射契约：Manual Min/Max 对应 URDF Min/Max，Auto 仅供诊断。
+// 当前 V5 映射契约：Manual Min/Max 是 counts 安全窗口；angleK/angleB 给出角度解释。
 bool applyManualScaledUrdfMappingToCalibration(
     uint8_t jointIndex,
     const ManualEncoderReference& manual,

@@ -252,7 +252,7 @@
       "requires_handshake": true,
       "value": 223,
       "payload_bytes": 188,
-      "description": "恢复单关节唯一 Auto/LUT v4 标定快照"
+      "description": "恢复单关节唯一 Auto/LUT v5 快照（保留槽承载 angleK/angleB）"
     },
     {
       "name": "CMD_CALIB_LOAD_LIMITS",

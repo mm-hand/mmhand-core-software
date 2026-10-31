@@ -38,17 +38,20 @@ struct CalibrationAssemblyWarningInfo {
     uint16_t spanDifferenceCounts;   // Manual Span 与 URDF Span 的绝对差。
 };
 
-// 每个关节的自动标定结果。当前结构只表达 Manual 全行程映射 V4。
+// 每个关节的自动标定结果。当前结构只表达 Manual 全行程映射 V5：
+// theta = angleK * countCoordinate + angleB。
 struct JointCalibrationResult {
     bool success;       // true 表示该结构中的 Auto 结果已完整生成。
-    float angleMax;     // 控制工作区最大角，V4 中固定等于 URDF Max。
+    float angleMax;     // 当前生效模型的最大角 = angleK * manualSpan + angleB。
 
-    // 映射版本与模型契约。mappingVersion 只允许当前 V4。
+    // 映射版本与模型契约。mappingVersion 只允许当前 V5。
     uint8_t mappingVersion;
-    float angleMin;           // 控制工作区最小角，V4 中固定等于 URDF Min。
+    float angleMin;           // 当前生效模型的最小角，等于 angleB。
     uint32_t urdfConfigCrc;   // 标定结果绑定的 URDF/映射契约 CRC。
+    float angleK;             // counts -> 角度斜率，joint calibration 给初值，contact 可修正。
+    float angleB;             // count 坐标为 0 处的角度，joint calibration 给初值。
 
-    // Manual 全行程映射 V4。修改某一关节 Manual 后，只使该关节 Auto 失效。
+    // Manual 全行程映射 V5。修改某一关节 Manual 后，只使该关节 Auto 失效。
     uint16_t autoMinRaw;       // 自动标定松端物理 14-bit raw。
     uint16_t autoMaxRaw;       // 自动标定紧端物理 14-bit raw。
     int32_t manualSpanCounts;  // 沿安装正方向计算的 Manual Span。

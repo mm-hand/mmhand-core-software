@@ -547,13 +547,13 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                                 kUpperWorkspaceWarningCounts,
                                 outsideCounts);
                             FW_LOG_WARN_PRINTF(
-                                "[CONTROL] UPPER_WORKSPACE_WARN J%02u outside=%ld threshold=%ld raw=%u mapped=%.3f urdfMax=%.3f\r\n",
+                                "[CONTROL] UPPER_WORKSPACE_WARN J%02u outside=%ld threshold=%ld raw=%u mapped=%.3f modelMax=%.3f\r\n",
                                 (unsigned)i,
                                 (long)outsideCounts,
                                 (long)kUpperWorkspaceWarningCounts,
                                 (unsigned)sensorData.encoderValues[i],
                                 mappedDeg,
-                                kUrdfJointLimits[i].maxDeg);
+                                calibrationSnapshot[i].result.angleMax);
                         }
                     } else {
                         if (warning.recovered) {
@@ -612,7 +612,8 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
             for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++) {
                 const float requestedDeg = localTargets[jointIndex];
                 const float appliedDeg = p4::control::clampJointTargetDeg(
-                    requestedDeg, jointIndex);
+                    requestedDeg, jointIndex,
+                    calibrationSnapshot[jointIndex].result);
                 localTargets[jointIndex] = appliedDeg;
 
                 const uint32_t bit = 1UL << jointIndex;

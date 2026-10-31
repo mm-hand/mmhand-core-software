@@ -49,10 +49,12 @@ def p4_state_badge(state, hand, fresh=True):
         value = encoder.current_angle_deg
         if encoder.angle_error or not isinstance(value, (int, float)) or not math.isfinite(value):
             continue
-        lo, hi = get_spec(joint).urdf_range_deg
+        spec = get_spec(joint)
+        lo, hi = spec.urdf_range_deg
         workspace = resolve_joint_workspace_range(state, joint, lo, hi, mapping_version, urdf_crc)
         if not workspace.ready:
             return f'{label}: J{joint:02d} {workspace.reason}'
+        lo, hi = workspace.urdf_min_deg, workspace.urdf_max_deg
         if value < lo:
             violation = f'J{joint:02d} low by {lo - value:.2f}°'
             break
@@ -155,9 +157,16 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
         row['angle_out_of_workspace'] = bool(
             fresh and getattr(state.encoders[j], 'angle_out_of_workspace', False))
         result = state.joint_calib_results[j] or {}
+        spec = get_spec(j)
+        workspace = resolve_joint_workspace_range(
+            state, j, spec.urdf_range_deg[0], spec.urdf_range_deg[1],
+            hand._workspace_mapping_version, hand._workspace_urdf_crc)
+        if workspace.ready:
+            row['min'], row['max'] = workspace.urdf_min_deg, workspace.urdf_max_deg
         minimum, maximum = draft.get('min', row['manual_min']), draft.get('max', row['manual_max'])
         span = forward_encoder_delta(minimum, maximum) if row['manual_valid'] or {'min', 'max'} <= draft.keys() else None
-        urdf_span = deg_to_encoder_count(f32(f32(row['max']) - f32(row['min'])))
+        # 装配诊断仍比较 Manual span 与标称 URDF span，不随 contact 的 k/b 变化。
+        urdf_span = deg_to_encoder_count(f32(spec.urdf_range_deg[1] - spec.urdf_range_deg[0]))
         quality = joint_quality(row['manual_valid'] or draft.get('status') == 'SAVED', span, urdf_span, hand._joint_transactions.get(j, draft.get('status', '')), fresh)
         saved_pair = hand._manual_saved_pairs.get(j)
         persisted = (draft.get('status') == 'SAVED' or state.manual_reference_committed and

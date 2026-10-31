@@ -30,6 +30,7 @@ from .host_calibration.config import joint_motors, shorten_sign
 from .session_log import close_session_log, log_session, session_log_since
 from .communication.connection_diagnostics import describe_connection_failure
 from .console_snapshot import enrich_snapshot, motor_quality
+from .data_models import resolve_joint_workspace_range
 from .id_actions import IdResetActions
 from .user_issues import operation_issue, issue_text, host_issue, IssueMessage
 from .control_parameters import ControlParameterStore
@@ -910,11 +911,17 @@ class ApplicationActions(IdResetActions):
         mask = int(joint_mask) if joint_mask is not None else sum(1 << j for j in self._selected_joints)
         if not mask or mask & ~((1 << ENCODER_COUNT) - 1):
             return OperationResult(False, None, 'Select a valid joint scope')
+        state = self.get_state_snapshot()
         for j in range(ENCODER_COUNT):
             if mask & (1 << j):
-                lo, hi = get_spec(j).urdf_range_deg
+                spec = get_spec(j)
+                workspace = resolve_joint_workspace_range(
+                    state, j, spec.urdf_range_deg[0], spec.urdf_range_deg[1],
+                    self._workspace_mapping_version, self._workspace_urdf_crc)
+                lo, hi = ((workspace.urdf_min_deg, workspace.urdf_max_deg)
+                          if workspace.ready else spec.urdf_range_deg)
                 if not lo <= float(values[j]) <= hi:
-                    return OperationResult(False, None, f'J{j:02d} target exceeds URDF limits [{lo}, {hi}]')
+                    return OperationResult(False, None, f'J{j:02d} target exceeds active model limits [{lo}, {hi}]')
 
         def send(epoch):
             with self._application_lock:

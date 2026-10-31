@@ -148,11 +148,11 @@ def _default_motors() -> List[MotorSlot]:
 
 @dataclass(frozen=True)
 class JointWorkspaceRange:
-    """Validated host-side view of one joint's static URDF workspace.
+    """Validated host-side view of one joint's active V5 model workspace.
 
-    V4 snapshots only prove that the joint has a valid Auto/LUT and that the
-    persisted mapping matches the current URDF. The command interval itself is
-    always the static URDF Min/Max; there is no dynamic "current" workspace.
+    The command interval comes from the calibration result's angleMin/angleMax
+    (angleB and angleK*manualSpan+angleB), sanity-checked against the nominal
+    URDF range. Counts remain the safety window.
     """
 
     joint_index: int
@@ -181,7 +181,7 @@ def resolve_joint_workspace_range(
     expected_mapping_version: int,
     expected_urdf_crc: int,
 ) -> JointWorkspaceRange:
-    """校验 V4 标定有效性，并返回固定的 URDF Min/Max 控制区间。"""
+    """校验 V5 标定有效性，并返回当前生效的模型端点控制区间。"""
 
     idx = int(joint_index)
     urdf_min = float(urdf_min_deg)
@@ -217,20 +217,19 @@ def resolve_joint_workspace_range(
     results = list(getattr(model, "joint_calib_results", []) or [])
     result = results[idx] if idx < len(results) else None
     if not isinstance(result, dict) or not bool(result.get("success", False)):
-        return JointWorkspaceRange(**base, reason="v4 calibration result missing")
+        return JointWorkspaceRange(**base, reason="v5 calibration result missing")
     if not bool(result.get("hasManualScaledV4Fields", False)):
-        return JointWorkspaceRange(**base, reason="v4 calibration fields missing")
+        return JointWorkspaceRange(**base, reason="v5 calibration fields missing")
     try:
         mapping_version = int(result.get("mappingVersion", 0) or 0)
         mapping_crc = int(result.get("urdfConfigCrc", 0) or 0)
         result_manual_crc = int(result.get("manualReferenceCrc", 0) or 0)
-        # 旧快照可能仍带已删除的 currentMinDeg/currentMaxDeg；host 只读取并忽略
-        # 这两个多余字段。V4 范围契约只要求 LUT 的 angleMin/angleMax 等于静态
-        # URDF Min/Max，命令区间不再来自动态 current 工作区。
         angle_min = float(result.get("angleMin"))
         angle_max = float(result.get("angleMax"))
+        angle_k = float(result.get("angleK"))
+        angle_b = float(result.get("angleB"))
     except (TypeError, ValueError):
-        return JointWorkspaceRange(**base, reason="invalid v4 calibration fields")
+        return JointWorkspaceRange(**base, reason="invalid v5 calibration fields")
 
     manual_min_values = list(
         getattr(model, "manual_reference_min_raw", []) or []
@@ -248,8 +247,8 @@ def resolve_joint_workspace_range(
         return JointWorkspaceRange(**base, reason="Manual endpoint data missing")
     manual_crc_match = result_manual_crc == manual_entry_crc
     mapping_valid = (
-        int(expected_mapping_version) == 4
-        and mapping_version == 4
+        int(expected_mapping_version) == 5
+        and mapping_version == 5
         and mapping_crc == (int(expected_urdf_crc) & 0xFFFFFFFF)
     )
     base["manual_crc_match"] = manual_crc_match
@@ -258,14 +257,25 @@ def resolve_joint_workspace_range(
         return JointWorkspaceRange(**base, reason="URDF mapping version/CRC mismatch")
     if not manual_crc_match:
         return JointWorkspaceRange(**base, reason="Manual CRC mismatch")
+    # V5: angleK/angleB 是 counts->角度解释；端点是派生值。sanity 带防止坏拟合。
+    span = angle_max - angle_min
+    nominal_span = urdf_max - urdf_min
     if (
         not math.isfinite(angle_min)
         or not math.isfinite(angle_max)
-        or abs(angle_min - urdf_min) > 0.01
-        or abs(angle_max - urdf_max) > 0.01
+        or not math.isfinite(angle_k)
+        or not math.isfinite(angle_b)
+        or angle_k <= 0.0
+        or angle_max <= angle_min
+        or abs(angle_min - urdf_min) > 5.0
+        or abs(angle_max - urdf_max) > 5.0
+        or span < 0.9 * nominal_span
+        or span > 1.1 * nominal_span
     ):
-        return JointWorkspaceRange(**base, reason="V4 range must equal static URDF Min/Max")
+        return JointWorkspaceRange(**base, reason="V5 model endpoints outside sanity band")
 
+    base["urdf_min_deg"] = angle_min
+    base["urdf_max_deg"] = angle_max
     base["ready"] = True
     return JointWorkspaceRange(**base)
 

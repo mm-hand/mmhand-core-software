@@ -55,7 +55,7 @@ def usable_snapshot_aa_result(
     result = results[joint] if 0 <= joint < len(results) else None
     if not isinstance(result, dict) or not bool(result.get("success", False)):
         return None
-    if int(result.get("mappingVersion", 0) or 0) != 4:
+    if int(result.get("mappingVersion", 0) or 0) != 5:
         return None
     if int(result.get("urdfConfigCrc", -1) or -1) != int(urdf_config_crc):
         return None

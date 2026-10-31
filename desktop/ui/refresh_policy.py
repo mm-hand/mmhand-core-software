@@ -14,7 +14,7 @@ HEAVY_INTERVAL_S = 0.5
 PLOTS_INTERVAL_S = 1.0
 
 # Leaves whose refresher builds charts from curve/component history.
-PLOT_LEAVES = ('Curves', 'Tactile')
+PLOT_LEAVES = ('Curves',)
 # Only this leaf consumes snapshot['curves'] / snapshot['control_components'].
 CURVE_LEAVES = ('Curves',)
 

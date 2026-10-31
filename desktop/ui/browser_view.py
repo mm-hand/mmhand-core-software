@@ -13,14 +13,15 @@ from nicegui import core, ui
 from desktop.core.user_issues import issue_text, operation_issue
 from . import refresh_policy as policy
 from .web import renumber_motors, renumber_tactile, joint_calibration, motor_calibration, feedback_control, direct_control
-from .web import replay, plots, tactile, diagnostics, control_parameters, hand as hand_view
+from .web import replay, plots, diagnostics, control_parameters, hand as hand_view
+from .web import contact_calibration as contact_view
 from .web.common import show
 
-TABS = ['Calibration', 'Control', 'Replay', 'Plot', 'Settings']
+TABS = ['Calibration', 'Control', 'Plot', 'Settings']
 SUBTABS = {
-    'Calibration': ['Joint Calibration', 'Motor Calibration'],
-    'Control': ['Feedback Control', 'Direct Control'],
-    'Plot': ['Hand', 'Tactile', 'Curves'],
+    'Calibration': ['Joint Calibration', 'Contact Calibration', 'Motor Calibration'],
+    'Control': ['Feedback Control', 'Direct Control', 'Replay'],
+    'Plot': ['Hand', 'Curves'],
     'Settings': ['Renumber Motor', 'Renumber Tactile', 'Control Parameters', 'Diagnostics'],
 }
 def status_background(value):
@@ -385,9 +386,6 @@ def build_page(hand):
                 with ui.tab_panels(tabs, value=TABS[0], animated=False).classes('page-panels').props('keep-alive') as panels:
                     for group in TABS:
                         with ui.tab_panel(group).classes('w-full'):
-                            if group == 'Replay':
-                                refreshers['Replay'] = replay.build(hand, act)
-                                continue
                             with ui.tabs(value=SUBTABS[group][0]).classes('console-subtabs w-full').props('dense no-caps active-color=primary') as child_tabs:
                                 for name in SUBTABS[group]: ui.tab(name)
                             subtabs[group] = child_tabs
@@ -395,12 +393,13 @@ def build_page(hand):
                                 for name in SUBTABS[group]:
                                     with ui.tab_panel(name):
                                         if name == 'Joint Calibration': refreshers[name] = joint_calibration.build(hand, act, open_import, confirm)
+                                        elif name == 'Contact Calibration': refreshers[name] = contact_view.build(hand, act)
                                         elif name == 'Motor Calibration': refreshers[name] = motor_calibration.build(hand, act, open_import)
                                         elif name == 'Feedback Control': refreshers[name] = feedback_control.build(hand, act)
                                         elif name == 'Direct Control': refreshers[name] = direct_control.build(hand, act, confirm, leave_direct_control)
+                                        elif name == 'Replay': refreshers[name] = replay.build(hand, act)
                                         elif name == 'Hand': refreshers[name] = hand_view.build(hand)
                                         elif name == 'Curves': refreshers[name] = plots.build(hand, act)
-                                        elif name == 'Tactile': refreshers[name] = tactile.build(hand)
                                         elif name == 'Renumber Motor': refreshers[name] = renumber_motors.build(hand, act)
                                         elif name == 'Renumber Tactile': refreshers[name] = renumber_tactile.build(hand, act)
                                         elif name == 'Diagnostics': refreshers[name] = diagnostics.build(hand, act)

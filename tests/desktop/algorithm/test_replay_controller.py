@@ -61,6 +61,9 @@ def _ready_state(active_mask=1, calibrated_mask=None):
             "currentMaxDeg": spec.urdf_range_deg[1],
             "angleMin": spec.urdf_range_deg[0],
             "angleMax": spec.urdf_range_deg[1],
+            "angleK": (spec.urdf_range_deg[1] - spec.urdf_range_deg[0]) / 4000.0,
+            "angleB": spec.urdf_range_deg[0],
+            "manualSpanCounts": 4000,
             "hasManualScaledV4Fields": True,
         }
     return state

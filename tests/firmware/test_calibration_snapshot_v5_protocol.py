@@ -1,4 +1,4 @@
-"""锁定当前唯一 Auto/LUT V4 快照长度，防止旧映射字段重新进入运行协议。"""
+"""锁定当前唯一 Auto/LUT V5 快照长度，防止旧映射字段重新进入运行协议。"""
 
 import struct
 
@@ -14,13 +14,15 @@ from desktop.core.protocol import (
 )
 
 
-def _minimal_v4_result() -> dict:
+def _minimal_v5_result() -> dict:
     return {
         "joint": 0,
         "success": True,
-        "mappingVersion": 4,
+        "mappingVersion": 5,
         "angleMax": 11.0,
         "angleMin": -45.0,
+        "angleK": 0.014,
+        "angleB": -45.0,
         "startEncoder": 100,
         "tightEncoder": 200,
         "zeroEncoder": 100,
@@ -47,8 +49,8 @@ def _minimal_v4_result() -> dict:
     }
 
 
-def test_calib_load_joint_uses_only_v4_payload() -> None:
-    frame = build_calib_load_joint_cmd(_minimal_v4_result())
+def test_calib_load_joint_uses_only_v5_payload() -> None:
+    frame = build_calib_load_joint_cmd(_minimal_v5_result())
 
     assert COMMAND_PAYLOAD_LENGTHS[CMD_CALIB_LOAD_JOINT] == 188
     assert len(frame) == 192
@@ -72,8 +74,8 @@ def test_manual_entry_crc_matches_p4_contract_vectors() -> None:
     assert manual_encoder_reference_crc(mins, maxs) == 0x0D47316D
 
 
-def test_full_5_degree_lut_round_trips_through_the_v4_load_frame() -> None:
-    result = _minimal_v4_result()
+def test_full_5_degree_lut_round_trips_through_the_v5_load_frame() -> None:
+    result = _minimal_v5_result()
     rows = [[1000 + 37 * index for index in range(24)],
             [5000 - 41 * index for index in range(24)]]
     result.update(

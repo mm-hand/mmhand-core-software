@@ -443,7 +443,7 @@ class HostCalibrationIO:
             else:
                 result = state.joint_calib_results[aa]
         workspace = resolve_joint_workspace_range(state, aa, *self.urdf_limits(aa),
-                                                  4, self.urdf_config_crc())
+                                                  5, self.urdf_config_crc())
         if not workspace.ready:
             raise ValueError(f'load or calibrate AA first: {workspace.reason}')
         motors = joint_motors(aa)
@@ -1196,7 +1196,11 @@ class HostCalibrationIO:
         self.snapshot_store.merge_calibration({
             **self.snapshot_identity,
             'saved_at_host_time': time.time(), 'hand_profile': HAND_PROFILE,
-            'feedback_mapping_version': 4, 'manual_scaled_mapping_version': 4,
+            'feedback_mapping_version': int(
+                (self.snapshot_identity.get('product_fingerprint') or {}).get(
+                    'feedback_mapping_version', 3)),
+            'manual_scaled_mapping_version': int(
+                urdf_manual_scaled_mapping_metadata()[0]),
             'urdf_config_crc': f'0x{self.urdf_config_crc():08X}',
             'manual_reference_crc': f'0x{state.manual_reference_crc:08X}',
             'active_joint_mask': hex(1 << joint), 'active_motor_mask': hex(mask),

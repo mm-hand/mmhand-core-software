@@ -310,7 +310,7 @@ static bool feedbackTargetsPointIntoWorkspace(SystemRuntimeContext* sharedData)
         return false;
     }
 
-    // 自动恢复只允许“向工作空间内部”运动；V4 工作区下界固定等于 URDF Min。
+    // 自动恢复只允许“向工作空间内部”运动；V5 下界是当前标定端点 angleMin。
     bool safe = true;
     for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; joint++) {
         if ((activeMask & (1UL << joint)) == 0) {
@@ -323,9 +323,9 @@ static bool feedbackTargetsPointIntoWorkspace(SystemRuntimeContext* sharedData)
         }
         const JointCalibrationResult& calib = snapshot.result;
         const float targetDeg = sharedData->targetAngles[joint];
-        const float urdfMinDeg = kUrdfJointLimits[joint].minDeg;
-        if (!calib.success || !isfinite(targetDeg) || !isfinite(urdfMinDeg) ||
-            targetDeg < urdfMinDeg) {
+        const float minDeg = calib.angleMin;
+        if (!calib.success || !isfinite(targetDeg) || !isfinite(minDeg) ||
+            targetDeg < minDeg) {
             safe = false;
             break;
         }

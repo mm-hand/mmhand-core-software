@@ -24,16 +24,23 @@ int32_t degToEncoderCount(float deg)
         scaled + (scaled >= 0.0f ? 0.5f : -0.5f));
 }
 
-float clampJointTargetDeg(float targetDeg, uint8_t jointIndex)
+float clampJointTargetDeg(float targetDeg, uint8_t jointIndex,
+                          const JointCalibrationResult& calibration)
 {
     if (!isfinite(targetDeg) || jointIndex >= ENCODER_TOTAL_NUM) {
         return 0.0f;
     }
 
-    // V4 的控制目标始终受静态 URDF Min/Max 约束。Auto 标定只负责
-    // 证明该关节可控并生成 Tendon LUT，不能再缩短或平移目标角区间。
-    const float minDeg = kUrdfJointLimits[jointIndex].minDeg;
-    const float maxDeg = kUrdfJointLimits[jointIndex].maxDeg;
+    // V5: 目标角钳到当前标定端点，等价于钳 Manual counts 窗口。
+    // 标定结果无效时退回标称 URDF 端点，控制入口仍会拒绝无效关节。
+    float minDeg = kUrdfJointLimits[jointIndex].minDeg;
+    float maxDeg = kUrdfJointLimits[jointIndex].maxDeg;
+    if (calibration.mappingVersion == kManualScaledUrdfFeedbackMappingVersion &&
+        isfinite(calibration.angleMin) && isfinite(calibration.angleMax) &&
+        calibration.angleMax > calibration.angleMin) {
+        minDeg = calibration.angleMin;
+        maxDeg = calibration.angleMax;
+    }
 
     const p4::safety::BoundaryClampDecision decision =
         p4::safety::clampFloatToBoundary(targetDeg, minDeg, maxDeg);

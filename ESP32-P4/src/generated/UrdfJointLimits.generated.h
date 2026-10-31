@@ -17,8 +17,8 @@ struct UrdfJointLimitDeg {
 };
 
 static const uint8_t kUrdfFeedbackMappingVersion = 3;
-static const uint8_t kManualScaledUrdfFeedbackMappingVersion = 4;
-static const uint32_t kManualScaledUrdfConfigCrc = 0xC490BA68UL;
+static const uint8_t kManualScaledUrdfFeedbackMappingVersion = 5;
+static const uint32_t kManualScaledUrdfConfigCrc = 0x1B202C14UL;
 static const UrdfJointLimitDeg kUrdfJointLimits[ENCODER_TOTAL_NUM] = {
     {-75.000000f, 16.000000f},  // J00
     {-14.000000f, 90.000000f},  // J01

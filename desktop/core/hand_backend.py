@@ -721,16 +721,22 @@ class HandBackend(ApplicationActions):
         try:
             if len(values) != ENCODER_COUNT:
                 raise ValueError('joint target count')
+            state = self.get_current_state()
             clamped_values = []
             for joint, value in enumerate(values):
                 number = float(value)
-                low, high = get_spec(joint).urdf_range_deg
+                spec = get_spec(joint)
+                workspace = resolve_joint_workspace_range(
+                    state, joint, spec.urdf_range_deg[0], spec.urdf_range_deg[1],
+                    self._workspace_mapping_version, self._workspace_urdf_crc)
+                low, high = ((workspace.urdf_min_deg, workspace.urdf_max_deg)
+                             if workspace.ready else spec.urdf_range_deg)
                 if not math.isfinite(number) or not (
                     low - ROS2_JOINT_LIMIT_TOLERANCE_DEG
                     <= number
                     <= high + ROS2_JOINT_LIMIT_TOLERANCE_DEG
                 ):
-                    raise ValueError('joint target outside URDF limits')
+                    raise ValueError('joint target outside active model limits')
                 clamped_values.append(min(max(number, low), high))
         except (ValueError, TypeError):
             return JointCommandResult(sent=False, message='ROS2 frame rejected: requires 21 finite URDF degree values within joint limits', targets=values)

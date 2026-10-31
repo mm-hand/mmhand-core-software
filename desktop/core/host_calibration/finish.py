@@ -30,7 +30,7 @@ def dual_lut_targets(result, motors, angle):
         rows = result.get('tendonLutMotorAbs', [])
         if (not result.get('success') or not result.get('scaled') or
                 not result.get('tendonLutValid') or
-                int(result.get('mappingVersion', 0)) != 4 or
+                int(result.get('mappingVersion', 0)) != 5 or
                 not 2 <= count <= TENDON_LUT_MAX_SAMPLES or
                 tuple(result.get('tendonLutMotor', ())) != tuple(motors) or
                 len(rows) != 2 or any(len(row) < count for row in rows)):

@@ -645,9 +645,9 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                 const uint16_t autoMinRaw = readU16BigEndian(p); p += 2;
                 const uint16_t autoMaxRaw = readU16BigEndian(p); p += 2;
                 const uint32_t incomingManualCrc = readU32BigEndian(p); p += 4;
-                // V4 工作区固定为生成的 URDF Min/Max；保留旧 current 双槽位
-                // 以维持 188-byte payload，仅跳过不保存。
-                p += 8;
+                // V5: 原先闲置的两个 float 槽承载 angleK/angleB；payload 仍为 188 字节。
+                result.angleK = readFloatBigEndian(p); p += 4;
+                result.angleB = readFloatBigEndian(p); p += 4;
 
                 const uint32_t localManualEntryCrc =
                     manualEncoderReferenceEntryCrc(

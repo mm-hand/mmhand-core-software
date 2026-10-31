@@ -42,11 +42,11 @@ def test_all_21_mapping_limits_match_active_urdf():
         assert spec.urdf_range_deg == pytest.approx(actual, abs=1e-4)
 
 
-def test_feedback_mapping_declares_current_v4_manual_contract():
+def test_feedback_mapping_declares_current_v5_manual_contract():
     data = json.loads(ROBOT_MODEL_PATH.read_text(encoding="utf-8"))["mapping"]
     assert data["schema_version"] == 4
     assert data["feedback_mapping_version"] == 3
-    assert data["manual_scaled_mapping_version"] == 4
+    assert data["manual_scaled_mapping_version"] == 5
     assert data["p4_sync_required"] is False
     assert data["p4_generated_header_required"] is True
 

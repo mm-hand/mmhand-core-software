@@ -3,7 +3,7 @@
   "model_id": "mmhand_structure_21dof",
   "mapping_id": "structure_urdf_v3",
   "feedback_mapping_version": 3,
-  "manual_scaled_mapping_version": 4,
+  "manual_scaled_mapping_version": 5,
   "description": "Merged robot-model contract: source + manifest + generated mapping.",
   "source": {
     "source_commit": "1539d2578e61e51c38a62efdd1a7e098d7798863",
@@ -18,7 +18,7 @@
     "model_id": "mmhand_structure_21dof",
     "mapping_id": "structure_urdf_v3",
     "feedback_mapping_version": 3,
-    "manual_scaled_mapping_version": 4,
+    "manual_scaled_mapping_version": 5,
     "description": "Original URDF joint names and actuator bindings. Geometry and limits come only from the URDF.",
     "joints": [
       {
@@ -456,7 +456,7 @@
     "model_id": "mmhand_structure_21dof",
     "mapping_id": "structure_urdf_v3",
     "feedback_mapping_version": 3,
-    "manual_scaled_mapping_version": 4,
+    "manual_scaled_mapping_version": 5,
     "p4_sync_required": false,
     "p4_generated_header_required": true,
     "description": "Generated from original URDF and robot_model_manifest.json; do not edit manually.",

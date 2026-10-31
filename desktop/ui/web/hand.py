@@ -1,17 +1,22 @@
-"""Overlaid live URDF poses using the local STL assets.
+"""Three URDF poses: original model, contact-calibrated model, and target.
 
-职责：把只读关节反馈和目标角叠加到 URDF 三维场景。
+职责：把只读关节反馈、目标角和触觉合力/法向分布画到 URDF 三维场景。
 线程：NiceGUI 页面事件循环；仅消费快照，不创建任务。
 输入：后端同步快照。
-输出：场景位姿和静态说明。
-状态所有权：不拥有设备状态，只缓存已显示的位姿。
+输出：三只手的位姿、触觉点云和合力箭头。
+状态所有权：不拥有设备状态，只缓存已显示的位姿和场景对象。
 禁止依赖：禁止直接操作协议、串口和控制器。
 """
 import json
 import math
 from pathlib import Path
 import xml.etree.ElementTree as ET
+
+import numpy as np
 from nicegui import app, ui
+
+from desktop.core.contact_calibration import active_origins
+from desktop.core.tactile_geometry import SENSOR_LINKS, module_points
 
 ROOT = Path(__file__).resolve().parents[2] / 'resources'
 MODEL = ROOT / 'mmhand_urdf'
@@ -19,9 +24,33 @@ MODEL = ROOT / 'mmhand_urdf'
 CAMERA = dict(x=0.1046, y=-0.0168, z=-0.4559, look_at_x=0.1050,
               look_at_y=-0.0191, look_at_z=-0.0759,
               up_x=0.9994, up_y=-0.03465, up_z=-0.00149)
+ARROW_RADIUS = 0.0008
+ARROW_MIN = 5.0
+
 
 def _vec(text, default):
     return tuple(float(v) for v in (text or default).split())
+
+
+def _colors(taxels):
+    values = np.asarray(taxels, float)[..., 2].reshape(-1)
+    levels = np.clip(values / 255.0, 0.0, 1.0)
+    return [[float(level), float(0.25 * (1.0 - level)), float(1.0 - level)]
+            for level in levels]
+
+
+def _rotation_from_force(force):
+    direction = np.asarray(force, float)
+    norm = float(np.linalg.norm(direction))
+    if norm <= 1e-9:
+        return None, 0.0
+    y = direction / norm
+    helper = np.array([1.0, 0.0, 0.0]) if abs(y[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    x = np.cross(helper, y)
+    x /= max(np.linalg.norm(x), 1e-9)
+    z = np.cross(x, y)
+    return np.column_stack([x, y, z]).tolist(), norm
+
 
 def build(hand):
     try:
@@ -38,18 +67,33 @@ def build(hand):
     by_parent = {}
     for j in joints:
         by_parent.setdefault(j.find('parent').attrib['link'], []).append(j)
+    sensor_by_link = {link: key for key, link in SENSOR_LINKS.items()}
+    corrections = active_origins()
+
     with ui.row().classes('page-toolbar'):
-        ui.label('Green: target · Gray: measured').classes('text-sm')
+        ui.label('Light gray: original URDF · Gray: contact-calibrated · Green: target').classes('text-sm')
         reset = ui.button('Reset view')
     status = ui.label('Waiting for feedback')
     camera = ui.scene.perspective_camera(fov=42, near=0.01)
     for key, value in CAMERA.items():
         setattr(camera, key, value)
-    scene = ui.scene(width=800, height=360, grid=False, camera=camera, background_color='#ffffff').classes('w-full')
+    scene = ui.scene(width=800, height=360, grid=False, camera=camera,
+                     background_color='#ffffff').classes('w-full')
     shown = False
     reset.on_click(lambda: scene.move_camera(**CAMERA))
-    poses = []
-    def add_link(name, motors, color, opacity):
+    poses, tactile = [], {}
+
+    def add_marker(key, parent, points):
+        with parent:
+            cloud = scene.point_cloud(points.tolist(),
+                                      colors=[[0.0, 0.0, 0.0]] * len(points),
+                                      point_size=0.0015)
+            cloud.visible(False)
+            arrow = scene.cylinder(ARROW_RADIUS, ARROW_RADIUS, 1.0, 8)
+            arrow.visible(False)
+        tactile[key] = (cloud, arrow, points, points.mean(axis=0))
+
+    def add_link(name, motors, color, opacity, corrected, with_tactile):
         link = links[name]
         for visual in link.findall('visual'):
             mesh = visual.find('geometry/mesh')
@@ -61,52 +105,92 @@ def build(hand):
             scale = _vec(mesh.get('scale'), '1 1 1')
             scene.stl('/hand-meshes/' + Path(mesh.attrib['filename']).name).move(*xyz).rotate(*rpy).scale(*scale).material(color, opacity=opacity)
         for joint in by_parent.get(name, []):
+            override = corrections.get(joint.attrib['name']) if corrected else None
             origin = joint.find('origin')
-            xyz = _vec(origin.get('xyz') if origin is not None else None, '0 0 0')
-            rpy = _vec(origin.get('rpy') if origin is not None else None, '0 0 0')
+            xyz = tuple(override['xyz']) if override else _vec(
+                origin.get('xyz') if origin is not None else None, '0 0 0')
+            rpy = tuple(override['rpy']) if override else _vec(
+                origin.get('rpy') if origin is not None else None, '0 0 0')
             axis_element = joint.find('axis')
             axis = _vec(axis_element.get('xyz') if axis_element is not None else None, '1 0 0')
+            child = joint.find('child').attrib['link']
             with scene.group().move(*xyz).rotate(*rpy):
                 with scene.group() as rotation:
                     idx = indices.get(joint.attrib['name'])
-                    if idx is not None: motors.append((idx, axis, rotation))
-                    add_link(joint.find('child').attrib['link'], motors, color, opacity)
+                    if idx is not None:
+                        motors.append((idx, axis, rotation))
+                    key = sensor_by_link.get(child)
+                    if with_tactile and key is not None:
+                        add_marker(key, rotation, module_points(key[1]))
+                    add_link(child, motors, color, opacity, corrected,
+                             with_tactile and key is None)
+
     def create_models():
-        # Tab panels mount lazily. Creating objects before the scene's first
-        # init sends their creation calls to a component that does not exist yet.
-        # NiceGUI restores existing objects itself on later scene remounts.
         if poses:
             return
         with scene:
-            for color, opacity in (('#20b45a', 0.45), ('#808080', 0.85)):
+            for name, color, opacity, corrected, key, always in (
+                    ('original', '#d1d5db', 0.30, False, 'angle', True),
+                    ('current', '#808080', 0.85, True, 'angle', True),
+                    ('target', '#20b45a', 0.45, True, 'target', False)):
                 motors = []
                 with scene.group() as model:
-                    for root in roots: add_link(root, motors, color, opacity)
-                if color == '#20b45a':
+                    for root in roots:
+                        add_link(root, motors, color, opacity, corrected, name == 'current')
+                if not always:
                     model.visible(False)
-                poses.append((model, motors))
+                poses.append((model, motors, key, always))
     scene.on('init', create_models)
+
     def refresh(snapshot):
         nonlocal shown
         if not shown:
-            # Plot panels are kept alive while hidden, so the scene's initial
-            # resize can see a zero-width tab. Re-measure after Hand is shown.
             scene.run_method('resize')
             shown = True
         rows = snapshot['joints']
         valid = sum(row.get('angle') is not None and math.isfinite(row['angle']) for row in rows)
-        status.set_text(f'Live feedback · {valid}/{len(rows)} joints' if valid == len(rows)
-                        else f'Partial feedback · {valid}/{len(rows)} joints · missing angles use last known or zero')
-        for (model, motors), key in zip(poses, ('target', 'angle')):
-            if key == 'target':
-                model.visible(snapshot.get('control_mode') == 'FEEDBACK' and snapshot.get('communication') == 'Online')
+        tactile_state = snapshot.get('tactile') or {}
+        status.set_text(
+            f"Feedback {valid}/{len(rows)} · Tactile {tactile_state.get('level', 'NONE')}")
+        control = snapshot.get('control_mode') in ('FEEDBACK', 'DIRECT')
+        online = snapshot.get('communication') == 'Online'
+        for model, motors, key, always in poses:
+            model.visible(always or (control and online))
             for idx, axis, rotation in motors:
                 value = rows[idx].get(key)
-                if value is not None and math.isfinite(value):
-                    # URDF axes are unit vectors; Rodrigues rotation handles arbitrary axes.
-                    x,y,z = axis; norm = math.sqrt(x*x+y*y+z*z)
-                    if norm == 0: continue
-                    x,y,z=x/norm,y/norm,z/norm
-                    angle=math.radians(value); c=math.cos(angle); s=math.sin(angle); t=1-c
-                    rotation.rotate_R([[t*x*x+c,t*x*y-s*z,t*x*z+s*y], [t*x*y+s*z,t*y*y+c,t*y*z-s*x], [t*x*z-s*y,t*y*z+s*x,t*z*z+c]])
+                if value is None or not math.isfinite(value):
+                    continue
+                x, y, z = axis
+                norm = math.sqrt(x * x + y * y + z * z)
+                if norm == 0:
+                    continue
+                x, y, z = x / norm, y / norm, z / norm
+                angle = math.radians(value)
+                c = math.cos(angle)
+                s = math.sin(angle)
+                t = 1 - c
+                rotation.rotate_R([[t * x * x + c, t * x * y - s * z, t * x * z + s * y],
+                                   [t * x * y + s * z, t * y * y + c, t * y * z - s * x],
+                                   [t * x * z - s * y, t * y * z + s * x, t * z * z + c]])
+        for module in tactile_state.get('modules') or []:
+            marker = tactile.get((module['finger'], module['module']))
+            if marker is None:
+                continue
+            cloud, arrow, points, center = marker
+            taxels = module.get('taxels')
+            if module.get('valid') and tactile_state.get('level') == 'FULL' and taxels:
+                cloud.set_points(points.tolist(), _colors(taxels))
+                cloud.visible(True)
+            else:
+                cloud.visible(False)
+            force = module.get('force') if module.get('valid') else None
+            rotation, magnitude = (None, 0.0) if force is None else _rotation_from_force(force)
+            if rotation is None or magnitude < ARROW_MIN:
+                arrow.visible(False)
+                continue
+            length = min(0.02, 0.004 + 0.00012 * magnitude)
+            direction = np.asarray(rotation, float)[:, 1]
+            arrow.move(*(center + direction * length / 2.0)) \
+                 .rotate_R(rotation).scale(1.0, length, 1.0).material('#ef4444')
+            arrow.visible(True)
     return refresh

@@ -11,7 +11,7 @@ from desktop.core.host_calibration.finish import dual_lut_targets, finish_dual_z
 
 def _result(joint, *, rows=None, start=-2.5, step=5.0, maximum=7.5):
     return {
-        'success': True, 'scaled': True, 'mappingVersion': 4,
+        'success': True, 'scaled': True, 'mappingVersion': 5,
         'tendonLutValid': True, 'tendonLutCount': len(rows[0]) if rows else 3,
         'tendonLutMotor': list(joint_motors(joint)),
         'tendonLutAngleStartDeg': start, 'tendonLutAngleStepDeg': step,

@@ -94,9 +94,10 @@ def apply_manual_scaled_mapping(io, joint: int, result: dict,
     if (not all(math.isfinite(v) for v in (span, per_count, urdf_min, urdf_max))
             or span <= 0.0 or per_count <= 0.0):
         return False
-    result.update(mappingVersion=4, autoMinRaw=auto_min_raw, autoMaxRaw=auto_max_raw,
+    result.update(mappingVersion=5, autoMinRaw=auto_min_raw, autoMaxRaw=auto_max_raw,
                   manualSpanCounts=manual_span, autoSpanCounts=auto_span,
                   manualReferenceCrc=manual_entry_crc(joint, manual),
+                  angleK=per_count, angleB=urdf_min,
                   angleMin=urdf_min, angleMax=urdf_max,
                   urdfConfigCrc=int(io.urdf_config_crc()))
     return True
@@ -109,22 +110,20 @@ def map_manual_scaled_encoder_to_urdf(io, joint: int, result: dict,
         return None
     manual = io.manual_reference(joint)
     lo, hi = _manual_endpoints(manual)
-    urdf_min, urdf_max = (f32(v) for v in io.urdf_limits(joint))
     stored_span = int(result.get("manualSpanCounts", 0))
-    if (result.get("mappingVersion") != 4
+    angle_k = float(result.get("angleK", math.nan))
+    angle_b = float(result.get("angleB", math.nan))
+    values = [float(result.get(key, math.nan))
+              for key in ("angleMin", "angleMax")]
+    if (result.get("mappingVersion") != 5
             or int(result.get("urdfConfigCrc", -1)) != int(io.urdf_config_crc())
             or not manual.get("valid", False)
             or not all(0 <= value < 16384 for value in (lo, hi, raw))
-            or not 0 < stored_span < 16384):
-        return None
-    # host 结果只保留静态 URDF/angle 字段；旧结果里多余的 currentMinDeg/
-    # currentMaxDeg 不再参与反馈映射校验。
-    values = [float(result.get(key, math.nan))
-              for key in ("angleMin", "angleMax")]
-    if (not all(math.isfinite(v) for v in values)
-            or values[1] <= values[0]
-            or any(abs(f32(v - expected)) > f32(0.01)
-                   for v, expected in zip(values, (urdf_min, urdf_max)))):
+            or not 0 < stored_span < 16384
+            or not math.isfinite(angle_k) or angle_k <= 0.0
+            or not math.isfinite(angle_b)
+            or not all(math.isfinite(v) for v in values)
+            or values[1] <= values[0]):
         return None
     span = forward_encoder_delta(lo, hi)
     if not 0 < span < 16384 or span != stored_span:
@@ -136,13 +135,7 @@ def map_manual_scaled_encoder_to_urdf(io, joint: int, result: dict,
         coordinate = -below if below < above else forward
     below = max(0, -coordinate)
     above = max(0, coordinate - span)
-    if coordinate < 0:
-        mapped = f32(urdf_min + encoder_count_to_deg(coordinate))
-    elif coordinate <= span:
-        deg_per_count = f32(f32(urdf_max - urdf_min) / f32(span))
-        mapped = f32(urdf_min + f32(f32(coordinate) * deg_per_count))
-    else:
-        mapped = f32(urdf_max + encoder_count_to_deg(coordinate - span))
+    mapped = f32(f32(f32(angle_k) * f32(coordinate)) + f32(angle_b))
     if not math.isfinite(mapped):
         return None
     return {"valid": True, "feedback_ready": below == 0,

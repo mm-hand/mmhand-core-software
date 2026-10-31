@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
@@ -42,6 +43,51 @@ class CalibrationSnapshotError(ValueError):
     """快照格式、完整性或版本不满足当前程序要求。"""
 
 
+def upgrade_snapshot_to_current(payload: dict) -> dict:
+    """V4 -> V5：补 angleK/angleB、新 CRC/指纹并重新封存；不重做物理标定。"""
+    if int(payload.get("manual_scaled_mapping_version", 0) or 0) == 5:
+        return payload
+    if int(payload.get("manual_scaled_mapping_version", 0) or 0) != 4:
+        raise CalibrationSnapshotError("unsupported manual-scaled mapping version")
+
+    from desktop.paths import PRODUCT_FINGERPRINT_PATH
+
+    from .angle_mapping import urdf_manual_scaled_mapping_metadata
+
+    expected_version, expected_crc = urdf_manual_scaled_mapping_metadata()
+    if int(expected_version) != 5:
+        raise CalibrationSnapshotError("current mapping version is not v5")
+    fingerprint = json.loads(PRODUCT_FINGERPRINT_PATH.read_text(encoding="utf-8"))
+    upgraded = copy.deepcopy(payload)
+    for result in upgraded.get("joint_calib_results") or []:
+        if not isinstance(result, dict) or not bool(result.get("success", False)):
+            continue
+        if int(result.get("mappingVersion", 0) or 0) != 4:
+            continue
+        span = int(result.get("manualSpanCounts", 0) or 0)
+        try:
+            angle_min = float(result["angleMin"])
+            angle_max = float(result["angleMax"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise CalibrationSnapshotError("V4 result missing angle endpoints") from exc
+        if span <= 0 or not (math.isfinite(angle_min) and math.isfinite(angle_max)):
+            raise CalibrationSnapshotError("V4 result has invalid manual span")
+        result.update(
+            mappingVersion=5,
+            urdfConfigCrc=int(expected_crc) & 0xFFFFFFFF,
+            angleK=(angle_max - angle_min) / float(span),
+            angleB=angle_min,
+        )
+    upgraded["manual_scaled_mapping_version"] = 5
+    upgraded["feedback_mapping_version"] = int(
+        fingerprint.get("feedback_mapping_version", 3)
+    )
+    upgraded["urdf_config_crc"] = f"0x{int(expected_crc) & 0xFFFFFFFF:08X}"
+    upgraded["product_fingerprint"] = fingerprint
+    upgraded.pop("integrity", None)
+    return seal_snapshot(upgraded)
+
+
 class CalibrationSnapshotStore:
     """标定快照的唯一运行时读写门面。
 
@@ -56,10 +102,10 @@ class CalibrationSnapshotStore:
         return self.path.exists()
 
     def load(self) -> dict:
-        return read_snapshot(self.path)
+        return upgrade_snapshot_to_current(read_snapshot(self.path))
 
     def inspect(self, path: Path | str) -> dict:
-        return read_snapshot(path)
+        return upgrade_snapshot_to_current(read_snapshot(path))
 
     def activate(self, payload: dict) -> dict:
         with snapshot_write_transaction():
@@ -362,25 +408,34 @@ def validate_snapshot_for_load(
         try:
             result = results[joint_idx]
             urdf_min, urdf_max = get_spec(joint_idx).urdf_range_deg
-            # V4 契约只要求 LUT 的 angleMin/angleMax 等于静态 URDF Min/Max。
-            # 旧 JSON 里已删除的 currentMinDeg/currentMaxDeg 是多余字段，直接忽略。
-            values = (
-                float(result.get("angleMin")),
-                float(result.get("angleMax")),
-            )
+            angle_min = float(result.get("angleMin"))
+            angle_max = float(result.get("angleMax"))
+            angle_k = float(result.get("angleK"))
+            angle_b = float(result.get("angleB"))
+            span = angle_max - angle_min
+            nominal_span = urdf_max - urdf_min
+            lut_start = float(result.get("tendonLutAngleStartDeg", math.nan))
+            # V5: angleK/angleB 是拟合结果；端点允许偏离标称 URDF，但在 sanity 带内。
             if (
-                not all(math.isfinite(value) for value in values)
-                or abs(values[0] - urdf_min) > 0.01
-                or abs(values[1] - urdf_max) > 0.01
+                not all(math.isfinite(value) for value in (
+                    angle_min, angle_max, angle_k, angle_b, lut_start))
+                or angle_k <= 0.0
+                or angle_max <= angle_min
+                or abs(angle_min - angle_b) > 0.01
+                or abs(angle_min - urdf_min) > 5.0
+                or abs(angle_max - urdf_max) > 5.0
+                or span < 0.9 * nominal_span
+                or span > 1.1 * nominal_span
+                or abs(lut_start - angle_min) > 0.1
             ):
                 incompatible_ranges.append(joint_idx)
         except (OSError, TypeError, ValueError):
             incompatible_ranges.append(joint_idx)
     if incompatible_ranges:
         return (
-            "snapshot V4 range mismatch: "
+            "snapshot V5 endpoint mismatch: "
             + ",".join(f"J{int(idx):02d}" for idx in incompatible_ranges)
-            + "; re-run automatic calibration with the current firmware"
+            + "; check the contact calibration or re-run joint calibration"
         )
 
     missing_lut = [
