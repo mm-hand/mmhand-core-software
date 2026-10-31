@@ -13,6 +13,8 @@ import copy
 
 TURN_COUNTS = 4096
 ABS_COMMAND_LIMIT = 30715
+# 电机比锚点倒退几十个计数是编码器抖动，不是丢了一整圈；低于这个阈值不参与 //4096。
+TURN_ROUNDING_DEADBAND = 50
 
 _SERVO_ABS_FIELDS = ("startServoAbs", "tightServoAbs", "zeroServoAbs")
 
@@ -21,7 +23,10 @@ def turn_offset(anchor: int, current: int, shorten_sign: int) -> int:
     """断电后只沿放绳方向移动不足一圈，将标定平移到当前坐标。"""
     if shorten_sign not in (-1, 1):
         raise ValueError('invalid tendon direction')
-    return shorten_sign * (shorten_sign * (int(anchor) - int(current)) // TURN_COUNTS)
+    delta = shorten_sign * (int(anchor) - int(current))
+    if -TURN_ROUNDING_DEADBAND < delta < 0:
+        delta = 0
+    return shorten_sign * (delta // TURN_COUNTS)
 
 
 def shift_snapshot(snapshot: dict, offsets: dict[int, int]) -> dict:
