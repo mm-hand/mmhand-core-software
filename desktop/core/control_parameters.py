@@ -12,17 +12,15 @@ from __future__ import annotations
 import copy
 import json
 import math
-import os
-import tempfile
 import threading
 import struct
 import zlib
 from pathlib import Path
 
 from .generated_control_parameters import BOUNDS, RAMP_BOUNDS
+from desktop.paths import CONFIG_DIR, atomic_write_json
 
 
-CONFIG_DIR = Path(__file__).resolve().parents[1] / 'resources' / 'config'
 DEFAULT_PATH = CONFIG_DIR / 'control_parameters.default.json'
 CURRENT_PATH = CONFIG_DIR / 'control_parameters.json'
 
@@ -80,8 +78,8 @@ def configuration_payload(data: dict) -> bytes:
 
 def configuration_frame(data: dict) -> bytes:
     from .generated_upper_protocol import CMD_CONTROL_PARAMETERS_SET
-    payload = configuration_payload(data)
-    return bytes((254, len(payload) + 2, CMD_CONTROL_PARAMETERS_SET)) + payload + bytes((255,))
+    from .protocol import _build_command_frame
+    return _build_command_frame(CMD_CONTROL_PARAMETERS_SET, configuration_payload(data))
 
 
 def ramp_configuration_values(data: dict) -> bytes:
@@ -101,8 +99,8 @@ def ramp_configuration_payload(data: dict) -> bytes:
 
 def ramp_configuration_frame(data: dict) -> bytes:
     from .generated_upper_protocol import CMD_CONTROL_RAMP_PARAMETERS_SET
-    payload = ramp_configuration_payload(data)
-    return bytes((254, len(payload) + 2, CMD_CONTROL_RAMP_PARAMETERS_SET)) + payload + bytes((255,))
+    from .protocol import _build_command_frame
+    return _build_command_frame(CMD_CONTROL_RAMP_PARAMETERS_SET, ramp_configuration_payload(data))
 
 
 class ControlParameterStore:
@@ -149,14 +147,4 @@ class ControlParameterStore:
             return self.snapshot()
 
     def _write(self, data: dict):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        handle, name = tempfile.mkstemp(prefix='.control-parameters-', suffix='.json', dir=self.path.parent)
-        try:
-            with os.fdopen(handle, 'w', encoding='utf-8') as stream:
-                json.dump(data, stream, ensure_ascii=False, indent=2)
-                stream.write('\n')
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(name, self.path)
-        finally:
-            if os.path.exists(name): os.unlink(name)
+        atomic_write_json(self.path, data)

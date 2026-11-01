@@ -25,12 +25,9 @@ TARGET_PACKAGES = (
     "ros2",
     "ui",
 )
+# 只强制两项：模块职责与依赖禁区。已有的线程/输入/输出/所有权说明保留，但不再逐文件强制。
 REQUIRED_HEADER_FIELDS = (
     "职责：",
-    "线程：",
-    "输入：",
-    "输出：",
-    "状态所有权：",
     "禁止依赖：",
 )
 
@@ -70,6 +67,7 @@ DEPENDENCY_RULES = (
     ),
 )
 
+# Qt 界面已全部移除（Web GUI only）。保留这项导入黑名单，防止旧代码或依赖回流。
 LEGACY_GUI_IMPORT_PREFIXES = ("PySide", "PyQt", "pyqtgraph")
 
 

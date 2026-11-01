@@ -9,7 +9,7 @@
     "source_commit": "1539d2578e61e51c38a62efdd1a7e098d7798863",
     "source_urdf_path": "mmhand_urdf/urdf/mmhand.urdf",
     "resource_sha256": {
-      "mmhand_urdf/urdf/mmhand.urdf": "59c0a8b56204e86e5e293b753afdb80af94b6259027d1356f38aff302eca13a4"
+      "mmhand_urdf/urdf/mmhand.urdf": "8a8245c396ac977195dbabb38437039ee669461d6af0b29b61c58c2ed88db90e"
     },
     "package_path": "mmhand_urdf"
   },

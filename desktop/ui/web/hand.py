@@ -7,7 +7,6 @@
 状态所有权：不拥有设备状态，只缓存已显示的位姿和场景对象。
 禁止依赖：禁止直接操作协议、串口和控制器。
 """
-import json
 import math
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -16,6 +15,7 @@ import numpy as np
 from nicegui import app, ui
 
 from desktop.core.contact_calibration import active_origins
+from desktop.core.robot_model import manifest as robot_model_manifest
 from desktop.core.tactile_geometry import SENSOR_LINKS, module_points
 
 ROOT = Path(__file__).resolve().parents[2] / 'resources'
@@ -62,7 +62,7 @@ def build(hand):
     except RuntimeError:
         pass
     urdf = ET.parse(MODEL / 'urdf' / 'mmhand.urdf').getroot()
-    mapping = json.loads((ROOT / 'config' / 'robot_model.json').read_text())['manifest']['joints']
+    mapping = robot_model_manifest()['joints']
     indices = {j['urdf_joint_name']: j['joint_index'] for j in mapping}
     links = {e.attrib['name']: e for e in urdf.findall('link')}
     joints = urdf.findall('joint')

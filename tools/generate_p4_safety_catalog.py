@@ -35,17 +35,11 @@ FIRMWARE_HEADER = (
     / "generated"
     / "SafetyRuleCatalog.generated.h"
 )
-FIRMWARE_INDEX_JSON = (
-    ROOT
-    / "ESP32-P4"
-
-    / "src"
-    / "generated"
-    / "SafetyRuleIndex.generated.json"
-)
+# 调用索引只作为离线审计视图，不再提交到仓库；没有运行时消费者。
 OBSOLETE_FIRMWARE_INDEX_FILES = (
-    FIRMWARE_INDEX_JSON.with_suffix(".h"),
-    FIRMWARE_INDEX_JSON.with_suffix(".cpp"),
+    ROOT / "ESP32-P4/src/generated/SafetyRuleIndex.generated.json",
+    ROOT / "ESP32-P4/src/generated/SafetyRuleIndex.generated.h",
+    ROOT / "ESP32-P4/src/generated/SafetyRuleIndex.generated.cpp",
 )
 
 _ROW_RE = re.compile(r"^P4_SAFETY_RULE\((.*)\)\s*$")
@@ -352,78 +346,44 @@ def render_firmware_header() -> str:
     )
 
 
-def render_firmware_index_json() -> str:
-    """生成完整调用索引供 CI/审计使用，不进入 P4 固件镜像。"""
+def audit_rules(source_root: Path | None = None) -> list[str]:
+    """闭环审计：每条规则的 Policy/调用/上报/恢复探针必须真实存在。
 
-    items: list[dict] = []
-    for rule in load_rule_definitions():
+    只检查「文件里出现过这个词」是不够的；这里的探针必须是稳定符号名，
+    并且 Policy 位于 safety/、恢复入口不得指向通用框架代码。
+    """
+
+    source_root = source_root or (ROOT / "ESP32-P4" / "src")
+    runtime_sources = {
+        path.relative_to(source_root).as_posix(): path.read_text(encoding="utf-8")
+        for path in source_root.rglob("*")
+        if path.suffix in {".c", ".cpp", ".h"}
+        and "generated" not in path.relative_to(source_root).parts
+    }
+    rules = load_rule_definitions()
+    retired_rule_ids = {int(item["rule_id"]) for item in
+                        json.loads(ARCHIVE.read_text(encoding="utf-8"))["rules"]}
+    failures: list[str] = []
+    for rule in rules:
         contract = resolve_rule_binding(rule)
         if contract is None:
-            raise ValueError(f"missing safety binding for {rule['code']} {rule['name']}")
-        items.append(
-            {
-                "name": rule["name"],
-                "rule_id": rule["rule_id"],
-                "code": rule["code"],
-                "active": True,
-                "retired": False,
-                "policy": {
-                    "file": contract.policy.path,
-                    "symbol": contract.policy.token,
-                },
-                "caller": {
-                    "file": contract.caller.path,
-                    "symbol": contract.caller.token,
-                },
-                "event": {
-                    "file": contract.event.path,
-                    "symbol": contract.event.token,
-                },
-                "recovery": {
-                    "file": contract.recovery.path,
-                    "symbol": contract.recovery.token,
-                },
-                "registry_function": (
-                    contract.mapping.token if contract.mapping else ""
-                ),
-            }
-        )
-    payload = {
-        "schema_version": 1,
-        "description": "P4 安全规则调用索引；由生成器维护，仅供离线审计",
-        "_format_help": {
-            "notice": "标准 JSON 不支持 // 或 /* */ 注释；本对象是可被解析器安全忽略的格式说明。",
-            "generation": "本文件由 tools/generate_p4_safety_catalog.py 自动生成，禁止手工编辑。",
-            "rule_fields": {
-                "name": "C++ SafetyRuleId 枚举名称，用于源码内稳定引用规则。",
-                "rule_id": "规则的稳定整数编号；协议、日志和上位机按此编号关联。",
-                "code": "面向人员的规则编码；前缀表示规则所属模块，例如 ACT、CTL、SYS。",
-                "active": "是否仍存在固件运行调用链；false 表示仅保留历史日志编号。",
-                "retired": "旧固件自动标定规则已退役，不再存在 policy/caller/event/recovery 绑定。",
-                "policy": "规则判断实现位置；file 是源码路径，symbol 是判断函数或关键符号。",
-                "caller": "调用 Policy 的业务入口，说明该规则在哪条运行链路中真正执行。",
-                "event": "规则触发后提交诊断事件或故障证据的位置。",
-                "recovery": "规则解除、恢复或重新准入的代码入口。",
-                "registry_function": "业务拒绝原因映射到 SafetyRuleId 的函数；空字符串表示 Policy 直接返回规则 ID。"
-            },
-            "reference_fields": {
-                "file": "相对于 ESP32-P4/src 的源码路径。",
-                "symbol": "检查器在对应源码中核验的函数名、枚举值或关键符号。"
-            },
-            "code_prefixes": {
-                "ACT": "舵机执行、路由与目标边界规则。",
-                "CTL": "PID、碰撞、过载和闭环控制规则。",
-                "SYS": "系统状态机、E-STOP、运动所有权和租约规则。",
-                "CAL": "自动标定流程及标定结果规则。",
-                "RCV": "Pull Joint into Workspace、多圈、热插拔和恢复规则。",
-                "COM": "CAN、串口、协议和数据完整性规则。",
-                "RUN": "任务、队列、周期、栈和运行时资源规则。",
-                "WRN": "不阻断控制的诊断警告。"
-            }
-        },
-        "rules": items,
-    }
-    return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+            failures.append(f"{rule['code']} {rule['name']}: no binding")
+            continue
+        for label, probe in (("policy", contract.policy), ("caller", contract.caller),
+                             ("event", contract.event), ("recovery", contract.recovery)):
+            text = runtime_sources.get(probe.path)
+            if text is None or probe.token not in text:
+                failures.append(f"{rule['code']} {rule['name']}: {label} probe missing "
+                                f"({probe.path} :: {probe.token})")
+        if str(rule["recovery"]).strip() == "":
+            failures.append(f"{rule['code']} {rule['name']}: empty recovery text")
+        if contract.mapping is not None:
+            text = runtime_sources.get(contract.mapping.path, "")
+            if f"SafetyRuleId::{rule['name']}" not in text:
+                failures.append(f"{rule['code']} {rule['name']}: registry does not map it")
+    if retired_rule_ids & {int(rule["rule_id"]) for rule in rules}:
+        failures.append("reserved safety IDs reused by active rules")
+    return failures
 
 
 def main() -> int:
@@ -431,51 +391,40 @@ def main() -> int:
     parser.add_argument("--check", action="store_true", help="只检查生成文件是否最新")
     parser.add_argument(
         "--firmware-only", action="store_true",
-        help="只生成或检查 P4 目录头和调用索引，保留 Desktop 目录",
+        help="只生成或检查 P4 目录头和规则闭环，保留 Desktop 目录",
     )
     args = parser.parse_args()
-    expected = render()
-    expected_header = render_firmware_header()
-    expected_index_json = render_firmware_index_json()
     if args.check:
         stale = False
         if not args.firmware_only and (
-            not OUTPUT.exists() or OUTPUT.read_text(encoding="utf-8") != expected
+            not OUTPUT.exists() or OUTPUT.read_text(encoding="utf-8") != render()
         ):
             print(f"stale generated file: {OUTPUT}")
             stale = True
         if (
             not FIRMWARE_HEADER.exists()
-            or FIRMWARE_HEADER.read_text(encoding="utf-8") != expected_header
+            or FIRMWARE_HEADER.read_text(encoding="utf-8") != render_firmware_header()
         ):
             print(f"stale generated file: {FIRMWARE_HEADER}")
-            stale = True
-        if (
-            not FIRMWARE_INDEX_JSON.exists()
-            or FIRMWARE_INDEX_JSON.read_text(encoding="utf-8") != expected_index_json
-        ):
-            print(f"stale generated file: {FIRMWARE_INDEX_JSON}")
             stale = True
         for path in OBSOLETE_FIRMWARE_INDEX_FILES:
             if path.exists():
                 print(f"obsolete generated file: {path}")
                 stale = True
+        for failure in audit_rules():
+            print(f"unclosed safety rule: {failure}")
+            stale = True
         return 1 if stale else 0
+    header = render_firmware_header()
+    FIRMWARE_HEADER.parent.mkdir(parents=True, exist_ok=True)
+    FIRMWARE_HEADER.write_text(header, encoding="utf-8")
     if not args.firmware_only:
         OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-        OUTPUT.write_text(expected, encoding="utf-8")
-    FIRMWARE_HEADER.parent.mkdir(parents=True, exist_ok=True)
-    FIRMWARE_HEADER.write_text(expected_header, encoding="utf-8")
-    FIRMWARE_INDEX_JSON.write_text(expected_index_json, encoding="utf-8")
-    if not args.firmware_only:
+        OUTPUT.write_text(render(), encoding="utf-8")
         for path in OBSOLETE_FIRMWARE_INDEX_FILES:
             path.unlink(missing_ok=True)
-    if not args.firmware_only:
         print(f"generated {OUTPUT}")
     print(f"generated {FIRMWARE_HEADER}")
-    print(f"generated {FIRMWARE_INDEX_JSON}")
     return 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())

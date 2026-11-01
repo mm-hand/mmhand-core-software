@@ -378,7 +378,97 @@ def is_valid_port(port: str) -> bool:
     return normalize_serial_port_name(port) in available or port.strip() in available
 
 
-class TactileSerialComm:
+class _SerialSessionBase:
+    """P4/S3 串口会话共享的帧缓冲、触觉重组与连接判据。
+
+    只依赖子类 __init__ 定义的同名字段，不封装 transport 或协议语义。
+    """
+
+    def _accept_tactile_full_fragment(
+        self,
+        seq: int,
+        frag_idx: int,
+        frag_count: int,
+        chunk: bytes,
+        summary_seq: Optional[int] = None,
+        full_crc: Optional[int] = None,
+    ) -> Optional[tuple]:
+        now = time.time()
+        if self._tactile_full_started_ts and (now - self._tactile_full_started_ts) > 0.5:
+            self._tactile_full_dropped += 1
+            self._reset_tactile_full_reassembly()
+
+        if frag_count <= 0 or frag_count > 64 or frag_idx < 0 or frag_idx >= frag_count:
+            self._tactile_full_dropped += 1
+            return None
+
+        if (
+            self._tactile_full_seq != seq or
+            self._tactile_full_count != frag_count or
+            self._tactile_full_summary_seq != summary_seq or
+            self._tactile_full_crc16 != full_crc or
+            (frag_idx == 0 and self._tactile_full_fragments)
+        ):
+            self._tactile_full_seq = seq
+            self._tactile_full_count = frag_count
+            self._tactile_full_fragments = {}
+            self._tactile_full_summary_seq = summary_seq
+            self._tactile_full_crc16 = full_crc
+            self._tactile_full_started_ts = now
+
+        chunk_bytes = bytes(chunk)
+        existing = self._tactile_full_fragments.get(int(frag_idx))
+        if existing is not None and existing != chunk_bytes:
+            self._tactile_full_dropped += 1
+            self._reset_tactile_full_reassembly()
+            return None
+
+        self._tactile_full_fragments[int(frag_idx)] = chunk_bytes
+        if len(self._tactile_full_fragments) < frag_count:
+            return None
+        if any(idx not in self._tactile_full_fragments for idx in range(frag_count)):
+            return None
+
+        raw = b"".join(self._tactile_full_fragments[idx] for idx in range(frag_count))
+        accepted_summary_seq = self._tactile_full_summary_seq
+        accepted_crc = self._tactile_full_crc16
+        self._reset_tactile_full_reassembly()
+        if len(raw) != TACTILE_FULL_BYTES:
+            self._tactile_full_dropped += 1
+            return None
+        if accepted_crc is not None and crc16_ccitt(raw) != accepted_crc:
+            self._tactile_full_crc_errors += 1
+            return None
+        return raw, accepted_summary_seq, accepted_crc
+
+    def _append_firmware_log_byte(self, value: int) -> None:
+        if value in (9, 10, 13) or 32 <= value <= 126:
+            self._firmware_text_buffer.append(value)
+            if value in (10, 13):
+                self._flush_firmware_log_text()
+        elif self._firmware_text_buffer and self._firmware_text_buffer[-1] not in (10, 13, 32):
+            self._firmware_text_buffer.append(32)
+
+    @staticmethod
+    def _clear_queue(q: queue.Queue) -> None:
+        with q.mutex:
+            q.queue.clear()
+            q.unfinished_tasks = 0
+            q.not_full.notify_all()
+
+    def _reset_tactile_full_reassembly(self) -> None:
+        self._tactile_full_seq = None
+        self._tactile_full_count = 0
+        self._tactile_full_fragments = {}
+        self._tactile_full_summary_seq = None
+        self._tactile_full_crc16 = None
+        self._tactile_full_started_ts = 0.0
+
+    def is_connected(self) -> bool:
+        return bool(self.running and self._transport.is_open)
+
+
+class TactileSerialComm(_SerialSessionBase):
     """独立 S3 触觉串口；维护请求仅走这条直连链路。"""
 
     def __init__(self, port: str, baudrate: int = BAUDRATE):
@@ -506,9 +596,6 @@ class TactileSerialComm:
             latest = stale
         return latest
 
-    def is_connected(self) -> bool:
-        return bool(self.running and self._transport.is_open)
-
     def maintenance_request(self, op, selector=0xFF, model=0xFF, new_id=0xFF,
                             *, timeout=3.0, cancelled=lambda: False):
         if not self.is_connected():
@@ -575,11 +662,6 @@ class TactileSerialComm:
         model.tactile_module_last_rx_ts = list(self._tactile_module_last_rx_ts)
 
     @staticmethod
-    def _clear_queue(q: queue.Queue) -> None:
-        with q.mutex:
-            q.queue.clear()
-            q.unfinished_tasks = 0
-            q.not_full.notify_all()
 
     def _put_latest_model(self, model: HandModel) -> None:
         try:
@@ -596,71 +678,6 @@ class TactileSerialComm:
             self.rx_queue.put_nowait(model)
         except queue.Full:
             pass
-
-    def _reset_tactile_full_reassembly(self) -> None:
-        self._tactile_full_seq = None
-        self._tactile_full_count = 0
-        self._tactile_full_fragments = {}
-        self._tactile_full_summary_seq = None
-        self._tactile_full_crc16 = None
-        self._tactile_full_started_ts = 0.0
-
-    def _accept_tactile_full_fragment(
-        self,
-        seq: int,
-        frag_idx: int,
-        frag_count: int,
-        chunk: bytes,
-        summary_seq: Optional[int] = None,
-        full_crc: Optional[int] = None,
-    ) -> Optional[tuple]:
-        now = time.time()
-        if self._tactile_full_started_ts and (now - self._tactile_full_started_ts) > 0.5:
-            self._tactile_full_dropped += 1
-            self._reset_tactile_full_reassembly()
-
-        if frag_count <= 0 or frag_count > 64 or frag_idx < 0 or frag_idx >= frag_count:
-            self._tactile_full_dropped += 1
-            return None
-
-        if (
-            self._tactile_full_seq != seq or
-            self._tactile_full_count != frag_count or
-            self._tactile_full_summary_seq != summary_seq or
-            self._tactile_full_crc16 != full_crc or
-            (frag_idx == 0 and self._tactile_full_fragments)
-        ):
-            self._tactile_full_seq = seq
-            self._tactile_full_count = frag_count
-            self._tactile_full_fragments = {}
-            self._tactile_full_summary_seq = summary_seq
-            self._tactile_full_crc16 = full_crc
-            self._tactile_full_started_ts = now
-
-        chunk_bytes = bytes(chunk)
-        existing = self._tactile_full_fragments.get(int(frag_idx))
-        if existing is not None and existing != chunk_bytes:
-            self._tactile_full_dropped += 1
-            self._reset_tactile_full_reassembly()
-            return None
-
-        self._tactile_full_fragments[int(frag_idx)] = chunk_bytes
-        if len(self._tactile_full_fragments) < frag_count:
-            return None
-        if any(idx not in self._tactile_full_fragments for idx in range(frag_count)):
-            return None
-
-        raw = b"".join(self._tactile_full_fragments[idx] for idx in range(frag_count))
-        accepted_summary_seq = self._tactile_full_summary_seq
-        accepted_crc = self._tactile_full_crc16
-        self._reset_tactile_full_reassembly()
-        if len(raw) != TACTILE_FULL_BYTES:
-            self._tactile_full_dropped += 1
-            return None
-        if accepted_crc is not None and crc16_ccitt(raw) != accepted_crc:
-            self._tactile_full_crc_errors += 1
-            return None
-        return raw, accepted_summary_seq, accepted_crc
 
     def _rx_loop(self) -> None:
         while self.running and self._transport.is_open:
@@ -683,14 +700,6 @@ class TactileSerialComm:
                     log_session("TACTILE", f"RX error port={self.port}: {exc}")
                     print(f"Tactile RX error: {exc}")
                 self._mark_serial_offline()
-
-    def _append_firmware_log_byte(self, value: int) -> None:
-        if value in (9, 10, 13) or 32 <= value <= 126:
-            self._firmware_text_buffer.append(value)
-            if value in (10, 13):
-                self._flush_firmware_log_text()
-        elif self._firmware_text_buffer and self._firmware_text_buffer[-1] not in (10, 13, 32):
-            self._firmware_text_buffer.append(32)
 
     def _flush_firmware_log_text(self) -> None:
         text = bytes(self._firmware_text_buffer).decode('ascii', errors='replace').strip()
@@ -899,7 +908,7 @@ class TactileSerialComm:
 
 
 
-class LowerComputerComm:
+class LowerComputerComm(_SerialSessionBase):
     """P4 通信兼容门面。
 
     旧调用方仍通过本类连接设备、提交命令、等待 ACK 和取得 ``HandModel``。内部 RX
@@ -1055,13 +1064,6 @@ class LowerComputerComm:
             print(f"Connection failed: {exc}")
             return False
 
-    @staticmethod
-    def _clear_queue(q: queue.Queue) -> None:
-        with q.mutex:
-            q.queue.clear()
-            q.unfinished_tasks = 0
-            q.not_full.notify_all()
-
     def disconnect(self):
         self.running = False
         self._heartbeat_enabled = False
@@ -1082,9 +1084,6 @@ class LowerComputerComm:
     def feedback_history(self) -> TimestampedFeedbackHistory:
         """逐包 P4 时间戳反馈历史；独立于可被覆盖的 UI 状态邮箱。"""
         return self._state_reducer.feedback_history
-
-    def is_connected(self) -> bool:
-        return bool(self.running and self._transport.is_open)
 
     def _build_offline_model(self) -> HandModel:
         model = HandModel()
@@ -1190,71 +1189,6 @@ class LowerComputerComm:
         self._tx_diag_angle_live_cmds = 0
         self._tx_diag_bytes = 0
 
-    def _reset_tactile_full_reassembly(self) -> None:
-        self._tactile_full_seq = None
-        self._tactile_full_count = 0
-        self._tactile_full_fragments = {}
-        self._tactile_full_summary_seq = None
-        self._tactile_full_crc16 = None
-        self._tactile_full_started_ts = 0.0
-
-    def _accept_tactile_full_fragment(
-        self,
-        seq: int,
-        frag_idx: int,
-        frag_count: int,
-        chunk: bytes,
-        summary_seq: Optional[int] = None,
-        full_crc: Optional[int] = None,
-    ) -> Optional[tuple]:
-        now = time.time()
-        if self._tactile_full_started_ts and (now - self._tactile_full_started_ts) > 0.5:
-            self._tactile_full_dropped += 1
-            self._reset_tactile_full_reassembly()
-
-        if frag_count <= 0 or frag_count > 64 or frag_idx < 0 or frag_idx >= frag_count:
-            self._tactile_full_dropped += 1
-            return None
-
-        if (
-            self._tactile_full_seq != seq or
-            self._tactile_full_count != frag_count or
-            self._tactile_full_summary_seq != summary_seq or
-            self._tactile_full_crc16 != full_crc or
-            (frag_idx == 0 and self._tactile_full_fragments)
-        ):
-            self._tactile_full_seq = seq
-            self._tactile_full_count = frag_count
-            self._tactile_full_fragments = {}
-            self._tactile_full_summary_seq = summary_seq
-            self._tactile_full_crc16 = full_crc
-            self._tactile_full_started_ts = now
-
-        chunk_bytes = bytes(chunk)
-        existing = self._tactile_full_fragments.get(int(frag_idx))
-        if existing is not None and existing != chunk_bytes:
-            self._tactile_full_dropped += 1
-            self._reset_tactile_full_reassembly()
-            return None
-
-        self._tactile_full_fragments[int(frag_idx)] = chunk_bytes
-        if len(self._tactile_full_fragments) < frag_count:
-            return None
-        if any(idx not in self._tactile_full_fragments for idx in range(frag_count)):
-            return None
-
-        raw = b"".join(self._tactile_full_fragments[idx] for idx in range(frag_count))
-        accepted_summary_seq = self._tactile_full_summary_seq
-        accepted_crc = self._tactile_full_crc16
-        self._reset_tactile_full_reassembly()
-        if len(raw) != TACTILE_FULL_BYTES:
-            self._tactile_full_dropped += 1
-            return None
-        if accepted_crc is not None and crc16_ccitt(raw) != accepted_crc:
-            self._tactile_full_crc_errors += 1
-            return None
-        return raw, accepted_summary_seq, accepted_crc
-
     def _update_rx_diag(self, packets: List[tuple], chunk_len: int) -> None:
         self._rx_diag_bytes += int(chunk_len)
         self._rx_diag_total_packets += len(packets)
@@ -1334,14 +1268,6 @@ class LowerComputerComm:
                     protocol_compatible=self._protocol_compatible,
                     rx_thread_alive=bool(self._rx_thread and self._rx_thread.is_alive()),
                     tx_thread_alive=bool(self._tx_thread and self._tx_thread.is_alive()))
-
-    def _append_firmware_log_byte(self, value: int) -> None:
-        if value in (9, 10, 13) or 32 <= value <= 126:
-            self._firmware_text_buffer.append(value)
-            if value in (10, 13):
-                self._flush_firmware_log_text()
-        elif self._firmware_text_buffer and self._firmware_text_buffer[-1] not in (10, 13, 32):
-            self._firmware_text_buffer.append(32)
 
     def _flush_firmware_log_text(self) -> None:
         if not self._firmware_text_buffer:
@@ -1434,34 +1360,30 @@ class LowerComputerComm:
                 normal.append((kind, payload))
         return self._state_reducer.process_packets(self, normal)
 
-    def apply_control_parameters(self, data, *, cancelled=lambda: False, timeout=3.0):
-        from .control_parameters import (configuration_frame, configuration_crc,
-                                         ramp_configuration_frame, ramp_configuration_crc)
-        wanted = (0, data['revision'], configuration_crc(data))
+    def _sync_parameter_block(self, *, block: int, frame: bytes, wanted, attribute: str,
+                              label: str, cancelled, timeout):
+        """SET 一个参数组并独立读回；同一 revision 重发幂等，最多 3 次。"""
         # P4 在 RESET/状态过渡时会用 status=8（协议/运动模型契约暂时不匹配）
-        # 拒绝一次 SET；同一 revision 重发是安全且幂等的。最多 3 次，期间仍
-        # 保留 cancelled/断开检查，最终仍未应用才抛错。
+        # 拒绝一次 SET；期间仍然检查 cancelled 和连接状态。
         last_error: Optional[Exception] = None
         for attempt in range(1, 4):
             if cancelled():
-                raise InterruptedError('P4 parameter synchronization cancelled')
+                raise InterruptedError(f'{label} synchronization cancelled')
             with self._control_parameter_condition:
-                self._control_parameter_result = None
-            if not self.send_command(('maintenance_frame', configuration_frame(data))):
-                raise ConnectionError('P4 parameter transaction could not be queued')
+                setattr(self, attribute, None)
+            if not self.send_command(('maintenance_frame', frame)):
+                raise ConnectionError(f'{label} transaction could not be queued')
             deadline = time.monotonic() + timeout
             with self._control_parameter_condition:
-                while self._control_parameter_result is None:
+                while getattr(self, attribute) is None:
                     if cancelled() or not self.is_connected():
-                        raise InterruptedError('P4 parameter synchronization cancelled')
+                        raise InterruptedError(f'{label} synchronization cancelled')
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
-                        last_error = TimeoutError(
-                            f'P4 parameter application result timed out (attempt {attempt}/3)'
-                        )
+                        last_error = TimeoutError(f'{label} application result timed out')
                         break
                     self._control_parameter_condition.wait(min(remaining, 0.05))
-                actual = self._control_parameter_result
+                actual = getattr(self, attribute)
             if actual is None:
                 if attempt < 3:
                     time.sleep(0.2)
@@ -1470,77 +1392,41 @@ class LowerComputerComm:
                 last_error = None
                 break
             last_error = ValueError(
-                'P4 parameter revision/CRC not applied: '
-                f'{actual} (status={actual[0]}, attempt {attempt}/3)'
-            )
+                f'{label} revision/CRC not applied: {actual} (status={actual[0]}, attempt {attempt}/3)')
             if attempt < 3:
                 time.sleep(0.2)
         if last_error is not None:
             raise last_error
-        # Query separately so a queued ACK can never stand in for RAM readback.
+        # Query separately: a queued ACK must never stand in for a RAM readback.
         with self._control_parameter_condition:
-            self._control_parameter_result = None
-        query = bytes((254, 3, protocol_codec.CMD_PARAMETERS_QUERY, 0, 255))
+            setattr(self, attribute, None)
+        query = protocol_codec._build_command_frame(
+            protocol_codec.CMD_PARAMETERS_QUERY, bytes((block,)))
         if not self.send_command(('maintenance_frame', query)):
-            raise ConnectionError('P4 parameter readback could not be queued')
+            raise ConnectionError(f'{label} readback could not be queued')
         deadline = time.monotonic() + timeout
         with self._control_parameter_condition:
-            while self._control_parameter_result is None:
-                if cancelled() or not self.is_connected(): raise InterruptedError('Parameter readback cancelled')
-                remaining = deadline - time.monotonic()
-                if remaining <= 0: raise TimeoutError('P4 parameter readback timed out')
-                self._control_parameter_condition.wait(min(remaining, 0.05))
-            if self._control_parameter_result != wanted:
-                raise ValueError('P4 parameter readback differs from requested revision')
-        # Ramp group is a separate atomic frame; apply and read it back too.
-        ramp_wanted = (0, data['ramp_revision'], ramp_configuration_crc(data))
-        last_error = None
-        for attempt in range(1, 4):
-            if cancelled():
-                raise InterruptedError('P4 ramp parameter synchronization cancelled')
-            with self._control_parameter_condition:
-                self._control_ramp_parameter_result = None
-            if not self.send_command(('maintenance_frame', ramp_configuration_frame(data))):
-                raise ConnectionError('P4 ramp parameter transaction could not be queued')
-            deadline = time.monotonic() + timeout
-            with self._control_parameter_condition:
-                while self._control_ramp_parameter_result is None:
-                    if cancelled() or not self.is_connected():
-                        raise InterruptedError('P4 ramp parameter synchronization cancelled')
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        last_error = TimeoutError('P4 ramp parameter application result timed out')
-                        break
-                    self._control_parameter_condition.wait(min(remaining, 0.05))
-                actual = self._control_ramp_parameter_result
-            if actual is None:
-                if attempt < 3:
-                    time.sleep(0.2)
-                continue
-            if actual == ramp_wanted:
-                last_error = None
-                break
-            last_error = ValueError(f'P4 ramp parameter revision/CRC not applied: {actual}')
-            if attempt < 3:
-                time.sleep(0.2)
-        if last_error is not None:
-            raise last_error
-        with self._control_parameter_condition:
-            self._control_ramp_parameter_result = None
-        query = bytes((254, 3, protocol_codec.CMD_PARAMETERS_QUERY, 1, 255))
-        if not self.send_command(('maintenance_frame', query)):
-            raise ConnectionError('P4 ramp parameter readback could not be queued')
-        deadline = time.monotonic() + timeout
-        with self._control_parameter_condition:
-            while self._control_ramp_parameter_result is None:
+            while getattr(self, attribute) is None:
                 if cancelled() or not self.is_connected():
-                    raise InterruptedError('Ramp parameter readback cancelled')
+                    raise InterruptedError(f'{label} readback cancelled')
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise TimeoutError('P4 ramp parameter readback timed out')
+                    raise TimeoutError(f'{label} readback timed out')
                 self._control_parameter_condition.wait(min(remaining, 0.05))
-            if self._control_ramp_parameter_result != ramp_wanted:
-                raise ValueError('P4 ramp parameter readback differs from requested revision')
+            if getattr(self, attribute) != wanted:
+                raise ValueError(f'{label} readback differs from requested revision')
+
+    def apply_control_parameters(self, data, *, cancelled=lambda: False, timeout=3.0):
+        from .control_parameters import (configuration_frame, configuration_crc,
+                                         ramp_configuration_frame, ramp_configuration_crc)
+        wanted = (0, data['revision'], configuration_crc(data))
+        self._sync_parameter_block(block=0, frame=configuration_frame(data), wanted=wanted,
+                                   attribute='_control_parameter_result',
+                                   label='P4 parameter', cancelled=cancelled, timeout=timeout)
+        ramp_wanted = (0, data['ramp_revision'], ramp_configuration_crc(data))
+        self._sync_parameter_block(block=1, frame=ramp_configuration_frame(data),
+                                   wanted=ramp_wanted, attribute='_control_ramp_parameter_result',
+                                   label='P4 ramp parameter', cancelled=cancelled, timeout=timeout)
         return (*wanted[1:], *ramp_wanted[1:])
 
     def maintenance_request(self, session, operation, bus=0, old_id=0, new_id=0, **kwargs):

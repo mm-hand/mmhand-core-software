@@ -8,6 +8,7 @@
 #include <Arduino.h>
 
 #include "MotionControlService.h"
+#include "../../system/rtos/PeriodicDeadline.h"
 #include "../../system/time/Clock.h"
 #include "../../system/SystemRuntimeContext.h"
 #include "../../system/adapters/ServiceContextAdapter.h"
@@ -25,25 +26,30 @@ void motionControlTask(void* parameter)
 
     sharedData->motionControlWake.bind(xTaskGetCurrentTaskHandle());
     const TickType_t periodTicks = pdMS_TO_TICKS(10);
+    p4::platform::rtos::PeriodicDeadline deadline(periodTicks);
+    uint32_t wakeReasons = 0;
     for (;;) {
+        const TickType_t dispatchTicks = xTaskGetTickCount();
+        const bool periodicDue = deadline.due(dispatchTicks);
+        // 目标或授权变化会提前唤醒；没有业务事件时按绝对周期等待。
+        if (!periodicDue && wakeReasons == 0U) {
+            wakeReasons = sharedData->motionControlWake.wait(
+                deadline.remaining(dispatchTicks));
+            continue;
+        }
+        if (periodicDue) deadline.advancePast(dispatchTicks);
         const TickType_t loopBegin = xTaskGetTickCount();
         taskRuntimeMarkLoopStart(TASK_RUNTIME_MOTION_CONTROL);
+        taskRuntimeMarkCycle(TASK_RUNTIME_MOTION_CONTROL, periodicDue, wakeReasons != 0U);
+        wakeReasons = 0;
         const uint32_t nowMs = p4::platform::time::monotonicMillis();
         const ControlServiceInputSnapshot input =
             captureControlServiceInput(sharedData, nowMs);
         const ServiceOutputPort output =
             makeSystemServiceOutputPort(sharedData);
         stepMotionControlService(sharedData, input, output);
-        taskRuntimeMarkLoopEnd(TASK_RUNTIME_MOTION_CONTROL);
-
-        const bool periodOverrun =
-            (xTaskGetTickCount() - loopBegin) >= periodTicks;
-        taskRuntimeMarkPeriodResult(TASK_RUNTIME_MOTION_CONTROL, periodOverrun);
-        if (periodOverrun) {
-            vTaskDelay(1);
-        } else {
-            (void)sharedData->motionControlWake.wait(periodTicks);
-        }
+        taskRuntimeFinishCycle(TASK_RUNTIME_MOTION_CONTROL, periodicDue, loopBegin,
+                               periodTicks, deadline);
     }
     vTaskDelete(NULL);
 }

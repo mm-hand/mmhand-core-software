@@ -18,7 +18,7 @@ CAPABILITY, BEGIN, END, PROBE, RENAME = range(5)
 
 def command_frame(command, token, session, operation, bus=0, old_id=0, new_id=0):
     payload = struct.pack('>IIBBBB', token, session, operation, bus, old_id, new_id)
-    return bytes((254, len(payload) + 2, command)) + payload + b'\xff'
+    return protocol._build_command_frame(command, payload)
 
 
 class MaintenanceChannel:

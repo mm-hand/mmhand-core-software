@@ -9,10 +9,8 @@
 """
 from copy import deepcopy
 import json
-import os
-import time
 from uuid import uuid4
-from desktop.paths import DEVICE_STATE_DIR
+from desktop.paths import DEVICE_STATE_DIR, atomic_write_json
 from .id_protocol import CAPABILITY, BEGIN, END, PROBE, RENAME, plan_motor_ids, reconcile_motor_journal, motor_recovery_targets
 from .tactile_id_actions import TactileIdActions
 
@@ -59,12 +57,7 @@ class IdResetActions(TactileIdActions):
             raise RuntimeError(f"Device rejected ID operation: status={result['status']}, stage={result['stage']}")
         return result
 
-    @staticmethod
-    def _id_save(path, record):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix('.tmp')
-        temporary.write_text(json.dumps(record, indent=2), encoding='utf-8')
-        os.replace(temporary, path)
+    _id_save = staticmethod(atomic_write_json)
 
     def _id_begin(self, comm, kind, session, cancelled):
         self._id_update(kind, message='Entering maintenance…')
@@ -175,9 +168,7 @@ class IdResetActions(TactileIdActions):
                 journal['completed'] = reconcile_motor_journal(journal, state['rows'])
 
             def save():
-                temp = journal_path.with_suffix('.tmp')
-                temp.write_text(json.dumps(journal, indent=2), encoding='utf-8')
-                os.replace(temp, journal_path)
+                atomic_write_json(journal_path, journal)
 
             self._id_begin(comm, 'motor', session, cancelled)
             started = recovering

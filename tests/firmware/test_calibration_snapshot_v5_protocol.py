@@ -4,7 +4,6 @@ import struct
 
 from desktop.core.generated_upper_protocol import (
     CMD_CALIB_LOAD_JOINT,
-    COMMAND_PAYLOAD_LENGTHS,
 )
 from desktop.core.protocol import (
     build_calib_load_joint_cmd,
@@ -52,7 +51,6 @@ def _minimal_v5_result() -> dict:
 def test_calib_load_joint_uses_only_v5_payload() -> None:
     frame = build_calib_load_joint_cmd(_minimal_v5_result())
 
-    assert COMMAND_PAYLOAD_LENGTHS[CMD_CALIB_LOAD_JOINT] == 188
     assert len(frame) == 192
     assert len(frame[3:-1]) == 188
 

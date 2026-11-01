@@ -37,7 +37,6 @@ def test_missing_compiler_is_rejected(monkeypatch):
 def test_failed_required_command_refuses_commit(monkeypatch, failure):
     monkeypatch.setattr(gate, 'check_dependencies', lambda: None)
     monkeypatch.setattr(gate, 'compiler_environment', lambda: {})
-    monkeypatch.setattr(gate.shutil, 'which', lambda *_args: 'powershell')
     def fail(args, **kwargs):
         if (failure == 'generated' and any('generate_robot_model' in str(a) for a in args)) or (failure == 'pytest' and 'pytest' in args):
             raise subprocess.CalledProcessError(1, args)

@@ -4,10 +4,9 @@ from _clock_helpers import stamp
 import time
 import pytest
 from unittest.mock import Mock
-from test_application_actions import hand
+
 from desktop.core.id_protocol import CAPABILITY, BEGIN, END, PROBE, RENAME
 from desktop.core.protocol import HOST_PROTOCOL_VERSION
-
 
 def finish(hand, result):
     assert result.accepted, result.message
@@ -18,13 +17,11 @@ def finish(hand, result):
         time.sleep(.005)
     pytest.fail('ID operation did not finish')
 
-
 def test_motor_and_direct_s3_tactile_operations_are_available(hand):
     from desktop.core.comm_layer import TactileSerialComm
     assert set(hand.id_reset_snapshot()) == {'motor', 'tactile'}
     assert hasattr(hand, 'request_tactile_renumber')
     assert hasattr(TactileSerialComm, 'maintenance_request')
-
 
 def test_calibrating_badge_follows_current_joint_and_stop_clears_it(hand):
     from desktop.core.calibration_workflow import CalibrationWorkflowEvent
@@ -38,7 +35,6 @@ def test_calibrating_badge_follows_current_joint_and_stop_clears_it(hand):
     assert rows[1]['motor_quality']==['PENDING']
     hand.stop_motion()
     assert hand.application_snapshot()['joints'][0]['motor_quality']==['FAILED']
-
 
 class MotorDevice:
     def __init__(self, lose_result=False, locked=True):
@@ -66,7 +62,6 @@ class MotorDevice:
                 raise TimeoutError('lost result after EEPROM write')
         return reply
 
-
 def test_motor_scan_covers_only_zero_through_thirty_on_every_bus(hand, monkeypatch, tmp_path):
     from desktop.core import id_actions
     monkeypatch.setattr(id_actions, 'DEVICE_STATE_DIR', tmp_path)
@@ -77,7 +72,6 @@ def test_motor_scan_covers_only_zero_through_thirty_on_every_bus(hand, monkeypat
     assert device.probes == [(bus, identifier) for bus in range(4) for identifier in range(31)]
     assert hand.id_reset_snapshot()['motor']['rows'] == [dict(bus=0, id=0), dict(bus=1, id=30)]
     assert not device.writes
-
 
 @pytest.mark.parametrize('occupied', [(0, 31), (3, 31), (2, 253)])
 def test_motor_quick_scan_still_rejects_unscanned_target_or_temporary_conflict(hand, monkeypatch, tmp_path, occupied):
@@ -95,7 +89,6 @@ def test_motor_quick_scan_still_rejects_unscanned_target_or_temporary_conflict(h
     assert result['status'] == 'FAILED'
     assert 'occupied' in result['message']
     assert not device.writes
-
 
 @pytest.mark.parametrize('locked',[True,False])
 def test_motor_lost_result_resumes_after_scan_without_duplicate_write(hand,monkeypatch,tmp_path,locked):

@@ -438,7 +438,7 @@ S3维护等待者→独立USB发送      S3 RX→触觉解析/维护token匹配
 - UI真实页面树：`desktop/ui/browser_view.py`及`desktop/ui/web/`。
 - 上位机协议唯一schema：`desktop/resources/config/upper_protocol_schema.json`，生成器`tools/generate_upper_protocol.py`。
 - 上位机协议实现：`desktop/core/protocol.py`、`generated_upper_protocol.py`、`comm_layer.py`。
-- 主机参数：`desktop/resources/config/control_parameters.default.json`、`control_parameters.json`和schema；`desktop/core/control_parameters.py`。
+- 主机参数：`desktop/resources/config/control_parameters.default.json`（入库默认值）、`control_parameters.json`（本机运行态，不入库，首跑由默认值播种）和schema；`desktop/core/control_parameters.py`。
 - P4任务装配：`ESP32-P4/src/system/SystemAssembly.cpp`、`system/rtos/TaskFactory.cpp`和`config/TaskConfig.h`。
 - P4队列：`ESP32-P4/src/system/channels/InterTaskChannels.h`。
 - P4控制：`ESP32-P4/src/control/`、`tasks/motion_control/`、`safety/policies/CollisionSafetyPolicy.cpp`。

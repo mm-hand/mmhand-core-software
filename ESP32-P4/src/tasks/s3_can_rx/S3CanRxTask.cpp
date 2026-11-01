@@ -8,6 +8,7 @@
 #include <Arduino.h>
 
 #include "S3CanRxService.h"
+#include "../../system/rtos/PeriodicDeadline.h"
 #include "../../system/time/Clock.h"
 #include "../../system/SystemRuntimeContext.h"
 #include "../../system/TaskRuntimeMetrics.h"
@@ -21,17 +22,23 @@ void s3CanRxTask(void* parameter)
         vTaskDelete(NULL);
         return;
     }
+    const TickType_t periodTicks = pdMS_TO_TICKS(1);
+    p4::platform::rtos::PeriodicDeadline deadline(periodTicks);
     for (;;) {
-        const TickType_t loopStartTicks = xTaskGetTickCount();
+        const TickType_t dispatchTicks = xTaskGetTickCount();
+        const bool periodicDue = deadline.due(dispatchTicks);
+        if (!periodicDue) {
+            vTaskDelay(deadline.remaining(dispatchTicks));
+            continue;
+        }
+        deadline.advancePast(dispatchTicks);
+        const TickType_t loopBegin = xTaskGetTickCount();
         taskRuntimeMarkLoopStart(TASK_RUNTIME_S3_CAN_RX);
+        taskRuntimeMarkCycle(TASK_RUNTIME_S3_CAN_RX, true, false);
         stepS3CanRxService(sharedData,
                                  p4::platform::time::monotonicMillis());
-        taskRuntimeMarkLoopEnd(TASK_RUNTIME_S3_CAN_RX);
-        const bool periodOverrun =
-            (TickType_t)(xTaskGetTickCount() - loopStartTicks) >=
-            pdMS_TO_TICKS(1);
-        taskRuntimeMarkPeriodResult(TASK_RUNTIME_S3_CAN_RX, periodOverrun);
-        vTaskDelay(pdMS_TO_TICKS(1));
+        taskRuntimeFinishCycle(TASK_RUNTIME_S3_CAN_RX, true, loopBegin,
+                               periodTicks, deadline);
     }
     vTaskDelete(NULL);
 }

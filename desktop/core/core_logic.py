@@ -10,7 +10,6 @@
 # core_logic.py - 灵巧手控制器核心逻辑（关节角路数与协议 ENCODER_COUNT 一致，电机路数与 MOTOR_COUNT 一致）
 
 import math
-import json
 import hashlib
 import shutil
 from functools import lru_cache
@@ -44,7 +43,8 @@ from .device_state_store import (
     canonical_product_fingerprint,
 )
 from .motor_mapping import MOTOR_TO_JOINT_INDEX, motor_abs_after_tendon_action, motor_tendon_shorten_abs_sign
-from desktop.paths import CALIB_ACTIVE_SNAPSHOT_PATH, CONFIG_DIR
+from desktop.paths import CALIB_ACTIVE_SNAPSHOT_PATH
+from .robot_model import source as robot_model_source
 from .protocol import (
     ServoOnlineCheck,
     DIRECT_SERVO_SPEED,
@@ -115,8 +115,7 @@ MANUAL_PREPARE_TARGET_TOLERANCE_COUNTS = 80
 def _active_urdf_repo_path() -> str:
     """读取生成来源中的仓库内路径；缺失时不得恢复运动锚点。"""
     try:
-        source = json.loads((CONFIG_DIR / "robot_model.json").read_text(encoding="utf-8"))
-        return str((source.get("source") or {}).get("source_urdf_path", ""))
+        return str(robot_model_source().get("source_urdf_path", ""))
     except (OSError, ValueError):
         return ""
 

@@ -5,7 +5,7 @@ import threading
 import time
 from unittest.mock import ANY, Mock
 import pytest
-from test_application_actions import hand, wait_operation
+from _conftest_support import wait_operation
 from desktop.core.hand_backend import HandBackend
 from desktop.core.calibration_workflow import CalibrationWorkflowEvent
 from desktop.core.core_logic import ManualPrepareResult
@@ -15,7 +15,6 @@ from desktop.core.protocol import (
     ControlMode, CMD_CONTROL_RELEASE, SYSTEM_STATE_IDLE, SYSTEM_STATE_READY,
     SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK,
 )
-
 
 def test_s3_rx_newer_than_snapshot_clock_is_online_instead_of_no_valid_frames(hand, monkeypatch):
     monkeypatch.setattr(time, 'time', lambda: 1000.0)
@@ -28,7 +27,6 @@ def test_s3_rx_newer_than_snapshot_clock_is_online_instead_of_no_valid_frames(ha
     connection = hand.application_snapshot()['connections']['s3']
     assert connection['age_ms'] == 0
     assert connection['data_status'] == 'Online'
-
 
 def joint_preparation_device(hand, monkeypatch, *, ready_state=SYSTEM_STATE_READY,
                              fault=None, live_status=True):
@@ -124,7 +122,6 @@ def joint_preparation_device(hand, monkeypatch, *, ready_state=SYSTEM_STATE_READ
         monkeypatch.setattr(comm, 'status_feed', feed, raising=False)
     return comm, scope_writer
 
-
 def test_joint_enable_holds_current_pose_and_confirms_actual_motion_owner(hand, monkeypatch):
     comm, scope = joint_preparation_device(hand, monkeypatch)
     hand._selected_joints = (3,)
@@ -145,7 +142,6 @@ def test_joint_enable_holds_current_pose_and_confirms_actual_motion_owner(hand, 
     assert hand._controller.current_state.control_enabled
     assert hand._controller.current_state.servo_target_owner == 1
 
-
 @pytest.mark.parametrize('fault', [
     'old_status', 'wrong_motor_scope', 'wrong_joint_scope', 'no_can_feedback',
     'direct_mode', 'active_control', 'active_owner', 'missing_scope',
@@ -163,7 +159,6 @@ def test_joint_enable_does_not_confirm_old_or_mismatched_p4_status(hand, monkeyp
     assert 'not confirmed' in item['message']
     assert list(comm.tx_queue.queue) == ['start']
 
-
 def test_joint_enable_requires_parameter_application_before_sending_a_target(hand, monkeypatch):
     comm, _ = joint_preparation_device(hand, monkeypatch)
     monkeypatch.setattr(comm, 'apply_control_parameters', Mock(side_effect=ValueError('parameter CRC mismatch')))
@@ -172,7 +167,6 @@ def test_joint_enable_requires_parameter_application_before_sending_a_target(han
     assert 'parameter CRC mismatch' in item['message']
     assert not any(isinstance(c, tuple) and c[0] == 'joint_target_run_masked'
                    for c in comm.tx_queue.queue)
-
 
 @pytest.mark.parametrize('after_ack', ['moved', 'stale', 'invalid', 'stop'])
 def test_joint_enable_rechecks_current_pose_after_parameter_sync(hand, monkeypatch, after_ack):
@@ -203,7 +197,6 @@ def test_joint_enable_rechecks_current_pose_after_parameter_sync(hand, monkeypat
         assert item['status'] == 'FAILED'
         assert not targets
 
-
 def test_joint_enable_never_clamps_the_current_pose(hand, monkeypatch):
     comm, _ = joint_preparation_device(hand, monkeypatch)
     monkeypatch.setattr(hand, '_apply_joint_workspace_guard',
@@ -216,7 +209,6 @@ def test_joint_enable_never_clamps_the_current_pose(hand, monkeypatch):
     assert not any(isinstance(c, tuple) and c[0] == 'joint_target_run_masked'
                    for c in comm.tx_queue.queue)
 
-
 def test_joint_enable_waits_for_ready_not_idle(hand, monkeypatch):
     """P4 在 IDLE 与 JOINT_BEYOND_WORKSPACE 之间抖动时，主机不得把 IDLE 当成“已就绪”。"""
     comm, _ = joint_preparation_device(hand, monkeypatch, ready_state=SYSTEM_STATE_IDLE)
@@ -228,7 +220,6 @@ def test_joint_enable_waits_for_ready_not_idle(hand, monkeypatch):
     assert 'not confirmed' in item['message']
     assert not any(isinstance(c, tuple) and c[0] == 'joint_target_run_masked'
                    for c in comm.tx_queue.queue)
-
 
 @pytest.mark.parametrize('status_ms,sample_ms,age,expected', [
     (1000, 1200, 0.1, True), (1200, 1000, 0.1, True),
@@ -244,7 +235,6 @@ def test_mapped_angle_freshness_accepts_heartbeat_skew_and_clock_wrap(
     state.encoder_mapped_last_rx_ts = time.time() - age
     stamp(state, 'encoder_mapped_last_rx_ts')
     assert hand._mapped_feedback_fresh(state) is expected
-
 
 @pytest.mark.parametrize('p4_state,owner,enabled', [
     (SYSTEM_STATE_RUN_DIRECT, 1, True),
@@ -264,7 +254,6 @@ def test_joint_enable_hands_over_existing_normal_control_without_stop(hand, monk
     commands = list(comm.tx_queue.queue)
     assert 'control_release' in commands and 'stop' not in commands and 'reset' not in commands
     assert hand.get_control_mode() == ControlMode.JOINT_ANGLE
-
 
 def test_calibrate_selected_auto_releases_active_owner(hand, monkeypatch):
     comm, _scope = joint_preparation_device(hand, monkeypatch)
@@ -302,14 +291,12 @@ def test_joint_ready_requires_matching_persisted_pair(hand):
     hand._manual_saved_pairs[0] = (12000, 10999)
     assert hand.application_snapshot()['joints'][0]['joint_quality'] == ['UNKNOWN']
 
-
 def test_saved_manual_not_loaded_in_p4_is_distinguished_from_missing(hand):
     hand._manual_saved_pairs[11] = (12000, 11000)
     rows = hand.application_snapshot()['joints']
     assert rows[11]['persistence'] == 'Saved in JSON; not loaded in P4'
     assert not rows[11]['manual_valid']
     assert rows[10]['persistence'] == 'RAM / JSON unknown'
-
 
 def test_clear_manual_selected_passes_only_selected_json_scope(hand, monkeypatch):
     hand._selected_joints = (12, 13)
@@ -326,7 +313,6 @@ def test_clear_manual_selected_passes_only_selected_json_scope(hand, monkeypatch
     assert writer.call_args.args[0][11:14] == [100, 0, 0]
     assert writer.call_args.args[1][11:14] == [5000, 0, 0]
     assert hand._manual_saved_pairs[11] == (100, 5000)
-
 
 @pytest.mark.parametrize('faults', [0, 0x50, 0x51])
 def test_clear_faults_releases_host_stop_even_when_live_hardware_faults_recur(hand, monkeypatch, faults):
@@ -350,7 +336,6 @@ def test_clear_faults_releases_host_stop_even_when_live_hardware_faults_recur(ha
     assert list(comm.tx_queue.queue) == ['reset']
     if faults:
         assert f'0x{faults:08X}' in item['message']
-
 
 @pytest.mark.parametrize('failure', ['no_ack', 'rejected', 'old_status', 'new_stop'])
 def test_clear_faults_cannot_clear_stop_without_ack_and_fresh_stationary_status(hand, monkeypatch, failure):
@@ -377,7 +362,6 @@ def test_clear_faults_cannot_clear_stop_without_ack_and_fresh_stationary_status(
     assert item['status'] == 'FAILED'
     assert hand._estop_requested_at != 0
 
-
 def test_release_selected_tendons_freezes_only_selected_joint_motors(hand, monkeypatch):
     hand._selected_joints = (0, 7)
     mask = sum(1 << m for j in (0, 7) for m in joint_motors(j))
@@ -387,7 +371,6 @@ def test_release_selected_tendons_freezes_only_selected_joint_motors(hand, monke
     assert item['status'] == 'SUCCESS'
     writer.assert_called_once_with(motor_mask=mask, cancelled=ANY)
     assert set(hand._motor_transactions) == {0, 7}
-
 
 def test_backend_manual_prepare_combines_external_and_manual_cancellation(hand, monkeypatch):
     forwarded = {}
@@ -402,7 +385,6 @@ def test_backend_manual_prepare_combines_external_and_manual_cancellation(hand, 
     assert result.ok
     assert forwarded['cancelled']() is True
     external.assert_called_once_with()
-
 
 def test_release_selected_tendons_rejects_empty_selection_without_writing(hand, monkeypatch):
     hand._selected_joints = ()
@@ -651,7 +633,6 @@ def test_motor_workflow_failure_overrides_cached_success(hand):
     hand._application_calibration_event(CalibrationWorkflowEvent(1, 'phase_complete', False, 'readback failed', joint_mask=1))
     assert hand.application_snapshot()['joints'][0]['motor_quality'] == ['FAILED']
 
-
 @pytest.mark.parametrize('p4_state,expected', [
     (0, 'Stopped'), (1, 'Idle'), (5, 'Ready'), (8, 'Pull Joint into Workspace'), (9, 'Joint Beyond Workspace')])
 def test_system_label_reports_each_p4_state_instead_of_disabled(hand, monkeypatch, p4_state, expected):
@@ -670,7 +651,6 @@ def test_system_label_reports_each_p4_state_instead_of_disabled(hand, monkeypatc
     state.system_status_last_rx_ts = time.time()
     stamp(state, 'system_status_last_rx_ts')
     assert hand.application_snapshot()['device'] == expected
-
 
 def test_clear_faults_applicable_only_when_there_is_something_to_clear(hand, monkeypatch):
     state = hand._controller.current_state

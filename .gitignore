@@ -19,6 +19,8 @@ run_data/
 !tests/fixtures/calibration_bundle.mmcal.json
 # Atomic bundle writes leave this sibling behind if the process dies mid-save.
 desktop/resources/config/.*.mmcal.json.*.tmp
+# Live control parameters are local runtime state, seeded from .default.json.
+desktop/resources/config/control_parameters.json
 
 # Local firmware experiments and waveform captures
 ESP32-P4/debug.log

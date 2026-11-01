@@ -8,7 +8,9 @@
 禁止依赖：禁止导入 NiceGUI 控件或直接操作下位机通信。
 """
 
+import json
 import os
+import tempfile
 from pathlib import Path
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -34,6 +36,23 @@ def relative_display(path) -> str:
         return resolved.relative_to(PROJECT_ROOT).as_posix()
     except ValueError:
         return Path(os.path.relpath(resolved, PROJECT_ROOT)).as_posix()
+
+
+def atomic_write_json(path, payload, *, indent=2) -> None:
+    """同目录临时文件 + fsync + 原子替换，避免中断留下半份 JSON。"""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    handle, name = tempfile.mkstemp(prefix=f'.{target.name}.', suffix='.tmp', dir=target.parent)
+    try:
+        with os.fdopen(handle, 'w', encoding='utf-8', newline='\n') as stream:
+            json.dump(payload, stream, ensure_ascii=False, indent=indent)
+            stream.write('\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, target)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
 
 
 # Active calibration snapshot. There is no separate checked-in template: the

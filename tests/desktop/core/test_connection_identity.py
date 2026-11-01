@@ -10,12 +10,10 @@ import pytest
 
 from desktop.core.data_models import HandModel
 from desktop.core.protocol import HOST_PROTOCOL_VERSION, SYSTEM_STATE_READY
-from test_application_actions import hand, wait_operation
-
+from _conftest_support import wait_operation
 
 DEVICE_A = "000080F1B2D068EB"
 DEVICE_B = "000080F1B2D068EC"
-
 
 def publish_state(hand, device_id=None):
     """Publish through the real backend callback without opening a serial port."""
@@ -34,7 +32,6 @@ def publish_state(hand, device_id=None):
     hand._controller.current_state = state
     for callback in tuple(hand._controller.update_callbacks):
         callback(state)
-
 
 @pytest.mark.parametrize(
     "connections",
@@ -69,7 +66,6 @@ def test_connect_accepts_identity_received_during_initialization(
     ]
     disconnect.assert_not_called()
 
-
 @pytest.mark.parametrize("stop_after_identity", [False, True], ids=["before-id", "after-id"])
 def test_stop_during_connect_still_cancels_and_disconnects(
     hand, monkeypatch, stop_after_identity
@@ -103,7 +99,6 @@ def test_stop_during_connect_still_cancels_and_disconnects(
     assert operation["status"] == "FAILED"
     assert "cancelled" in operation["message"].lower()
     disconnect.assert_called_once_with(stop_lower=True)
-
 
 def test_device_change_outside_connect_cancels_operation_and_clears_drafts(
     hand, monkeypatch
@@ -143,7 +138,6 @@ def test_device_change_outside_connect_cancels_operation_and_clears_drafts(
     assert operation["status"] == "FAILED"
     assert "cancelled" in operation["message"].lower()
 
-
 @pytest.mark.parametrize("known_device", [False, True], ids=["new-id", "same-as-history"])
 @pytest.mark.parametrize("replacement", [DEVICE_B, None], ids=["other-device", "identity-lost"])
 def test_identity_change_after_confirmation_cancels_same_connect(
@@ -175,7 +169,6 @@ def test_identity_change_after_confirmation_cancels_same_connect(
     assert "cancelled" in operation["message"].lower()
     disconnect.assert_called_once_with(stop_lower=True)
 
-
 def test_stop_during_connect_cancels_and_disconnects(hand, monkeypatch):
     entered, release = threading.Event(), threading.Event()
 
@@ -201,7 +194,6 @@ def test_stop_during_connect_cancels_and_disconnects(hand, monkeypatch):
     assert operation["status"] == "FAILED"
     assert "cancelled" in operation["message"].lower()
     disconnect.assert_called_once_with(stop_lower=True)
-
 
 def test_identity_arriving_after_connect_cancels_next_device_operation_only(
     hand, monkeypatch
@@ -237,7 +229,6 @@ def test_identity_arriving_after_connect_cancels_next_device_operation_only(
     assert hand.get_state_snapshot().product_fingerprint["device_id"] == DEVICE_A
     disconnect.assert_not_called()
 
-
 def test_connect_exception_does_not_mask_next_connection_identity(hand, monkeypatch):
     def failed_initialize(port):
         publish_state(hand)
@@ -262,7 +253,6 @@ def test_connect_exception_does_not_mask_next_connection_identity(hand, monkeypa
     assert hand.get_state_snapshot().product_fingerprint["device_id"] == DEVICE_B
     disconnect.assert_not_called()
 
-
 def test_shutdown_allows_controller_callback_to_finish(hand, monkeypatch):
     hand.register_update_callback(lambda state: None)
     publish_state(hand, DEVICE_A)
@@ -281,7 +271,6 @@ def test_shutdown_allows_controller_callback_to_finish(hand, monkeypatch):
     finally:
         for worker in callback_threads:
             worker.join(1)
-
 
 @pytest.mark.parametrize("cancellation", ["stop", "device-change"])
 def test_connect_cancelled_during_snapshot_load_disconnects_once(

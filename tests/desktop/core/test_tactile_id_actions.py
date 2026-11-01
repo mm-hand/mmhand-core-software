@@ -1,8 +1,7 @@
 from copy import deepcopy
-from test_application_actions import hand
+
 from test_id_actions import finish
 from desktop.core.tactile_maintenance import SCAN, RENUMBER
-
 
 class SensorBus:
     port = 'COM_FAKE'
@@ -38,14 +37,12 @@ class SensorBus:
         response.update(old_valid=False,new_valid=True,write_sent=True,new_selector=location[0]*3+new_id)
         return response
 
-
 def setup_bus(hand,monkeypatch,tmp_path,lose_result=False):
     from desktop.core import tactile_id_actions
     monkeypatch.setattr(tactile_id_actions,'DEVICE_STATE_DIR',tmp_path)
     bus=SensorBus(lose_result)
     hand.tactile_comm=bus; hand.tactile_port=bus.port
     return bus
-
 
 def test_scan_discovers_multiple_fingers_and_batch_preserves_sensor_identity(hand,monkeypatch,tmp_path):
     bus=setup_bus(hand,monkeypatch,tmp_path)
@@ -58,7 +55,6 @@ def test_scan_discovers_multiple_fingers_and_batch_preserves_sensor_identity(han
     assert bus.inventory[(4,2)]==(2,25,13)
     assert len(hand.id_reset_snapshot()['tactile']['rows'])==3
 
-
 def test_lost_result_is_reconciled_by_rescan_without_duplicate_write(hand,monkeypatch,tmp_path):
     bus=setup_bus(hand,monkeypatch,tmp_path,True)
     finish(hand,hand.request_tactile_scan())
@@ -68,7 +64,6 @@ def test_lost_result_is_reconciled_by_rescan_without_duplicate_write(hand,monkey
     assert hand.id_reset_snapshot()['tactile']['recovering']
     assert finish(hand,hand.request_tactile_renumber({}))['status']=='SUCCESS'
     assert bus.writes==[(3,1,0),(4,1,2)]
-
 
 def test_interrupted_move_restores_preserved_model_route_without_another_id_write(hand,monkeypatch,tmp_path):
     from desktop.core.tactile_maintenance import RECONCILE

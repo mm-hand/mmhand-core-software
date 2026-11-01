@@ -4,9 +4,8 @@ from _clock_helpers import stamp
 import time
 from unittest.mock import Mock
 import pytest
-from test_application_actions import hand
-from desktop.core.data_models import HandModel
 
+from desktop.core.data_models import HandModel
 
 def test_p4_connection_age_uses_recent_packets_not_slow_system_status(hand):
     state = hand._controller.current_state
@@ -18,7 +17,6 @@ def test_p4_connection_age_uses_recent_packets_not_slow_system_status(hand):
     assert snapshot['connections']['p4']['age_ms'] < 100
     assert snapshot['diagnostics']['status_age_ms'] >= 500
 
-
 def test_unconnected_s3_does_not_display_p4_relay_clock(hand):
     state = hand._controller.current_state
     state.tactile_last_rx_ts = time.time()
@@ -26,7 +24,6 @@ def test_unconnected_s3_does_not_display_p4_relay_clock(hand):
     state.tactile_online = True
     assert hand.application_snapshot()['tactile']['age_ms'] is not None
     assert hand.application_snapshot()['connections']['s3']['age_ms'] is None
-
 
 def test_s3_merge_never_overwrites_p4_connection_clock(hand, monkeypatch):
     now = time.time()
@@ -43,7 +40,6 @@ def test_s3_merge_never_overwrites_p4_connection_clock(hand, monkeypatch):
     snapshot = hand.application_snapshot()
     assert snapshot['connections']['p4']['age_ms'] >= 400
     assert 50 <= snapshot['connections']['s3']['age_ms'] < 200
-
 
 @pytest.mark.parametrize('name', ['p4', 's3'])
 def test_disconnected_link_does_not_display_a_cached_clock(hand, monkeypatch, name):

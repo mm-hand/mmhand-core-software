@@ -1,9 +1,7 @@
 """Calibration completion retains final failure and warning details for the UI."""
 import pytest
 
-from test_application_actions import hand
 from desktop.core.calibration_workflow import CalibrationWorkflowEvent
-
 
 def begin_operation(hand, operation_id='calibration-1'):
     hand._calibration_operation_id = hand._application_busy = operation_id
@@ -13,11 +11,9 @@ def begin_operation(hand, operation_id='calibration-1'):
     hand._application_operations.append(item)
     return item
 
-
 def completion(hand, *, ok=True, message='all calibration joints completed', joint_mask=15, **details):
     hand._application_calibration_event(CalibrationWorkflowEvent(
         1, 'calibration_complete', ok, message, joint_mask=joint_mask, details=details))
-
 
 @pytest.mark.parametrize('terminal', ['FAILED', 'HOST_FAILED', 'HOST_ERROR'])
 def test_failed_calibration_keeps_actual_root_cause_and_failed_joints(hand, terminal):
@@ -37,7 +33,6 @@ def test_failed_calibration_keeps_actual_root_cause_and_failed_joints(hand, term
     assert hand._calibration_operation_id is None
     assert hand._application_busy is None
 
-
 def test_incomplete_selected_joints_are_not_reported_as_failed(hand):
     """准备/中断阶段没开始的关节不是“失败”，也不再列成长名单。"""
     item = begin_operation(hand)
@@ -48,7 +43,6 @@ def test_incomplete_selected_joints_are_not_reported_as_failed(hand):
     assert 'Failed joints' not in message
     assert 'Please try again.' not in message
     assert item['user_issue']['details']['original_message'] == 'calibration interrupted'
-
 
 def test_failure_includes_record_joint_and_retains_successful_joint_warning(hand):
     item = begin_operation(hand)
@@ -65,7 +59,6 @@ def test_failure_includes_record_joint_and_retains_successful_joint_warning(hand
     assert 'J00: excessive tendon friction' in message
     assert 'Phase 1/2' in message
 
-
 def test_warning_completion_aggregates_each_record_summary(hand):
     item = begin_operation(hand)
     records = [dict(status='WARN', joint_mask=1 << j, phase_index=i, phase_count=2,
@@ -80,7 +73,6 @@ def test_warning_completion_aggregates_each_record_summary(hand):
     for text in ('Phase 1/2', 'Phase 2/2', 'J00: excessive tendon friction', 'J20: excessive tendon friction'):
         assert text in alert['message']
 
-
 @pytest.mark.parametrize('terminal,records', [
     ('WARN', []),
     ('WARN', [dict(status='WARN', warning_summary=None)]),
@@ -93,14 +85,12 @@ def test_warning_still_alerts_when_summary_is_unavailable(hand, terminal, record
     assert alert['severity'] == 'warning'
     assert 'Calibration ended with warnings' in alert['message']
 
-
 def test_warning_summary_is_not_suppressed_by_success_terminal(hand):
     item = begin_operation(hand)
     completion(hand, terminal_status='SUCCESS', records=[dict(
         status='SUCCESS', warning_summary=dict(ready=True, message='J04: high friction'))])
     assert item['calibration_alert']['severity'] == 'warning'
     assert 'J04: high friction' in item['calibration_alert']['message']
-
 
 def test_alert_acknowledgement_is_idempotent_and_stored(hand):
     item = begin_operation(hand)
@@ -116,13 +106,11 @@ def test_alert_acknowledgement_is_idempotent_and_stored(hand):
     assert snapshot['alert_acknowledged'] is True
     assert snapshot['origin'] == 'Motor Calibration'
 
-
 def test_pure_successful_calibration_has_no_alert(hand):
     item = begin_operation(hand)
     completion(hand, terminal_status='SUCCESS', records=[dict(status='SUCCESS', joint_mask=15)])
     assert item['status'] == 'SUCCESS'
     assert 'calibration_alert' not in item
-
 
 def test_phase_warning_waits_for_completion_and_duplicate_terminal_is_ignored(hand):
     item = begin_operation(hand)
@@ -137,13 +125,11 @@ def test_phase_warning_waits_for_completion_and_duplicate_terminal_is_ignored(ha
     assert item['calibration_alert'] == alert
     assert item['status'] == 'SUCCESS'
 
-
 def test_alert_snapshot_cannot_mutate_stored_completion(hand):
     item = begin_operation(hand)
     completion(hand, terminal_status='WARN')
     hand.application_snapshot()['operations'][-1]['calibration_alert']['message'] = 'UI draft'
     assert item['calibration_alert']['message'] != 'UI draft'
-
 
 def test_cancelled_calibration_does_not_present_an_earlier_diagnostic_as_the_cancel_cause(hand):
     item = begin_operation(hand)

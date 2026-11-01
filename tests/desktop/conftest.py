@@ -5,6 +5,9 @@
 M02 限位和多圈锚点清掉了。这里的 autouse fixture 把标定包路径（及其
 ``backups/`` 兄弟目录）和标定下发日志目录都指向每用例的 tmp_path；
 用例自己再用 monkeypatch 指定路径时，以用例的设置为准。
+
+共享的 HandBackend 夹具位于 ``tests/desktop/core/_conftest_support.py``，
+由需要它的用例显式 import；这里不重复定义。
 """
 
 import importlib

@@ -13,14 +13,13 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from functools import lru_cache
 import json
-from pathlib import Path
 
-_CONFIG = Path(__file__).resolve().parents[1] / 'resources/config'
+from desktop.paths import CONFIG_DIR
 
 
 @lru_cache(maxsize=1)
 def guidance():
-    return json.loads((_CONFIG / 'safety_guidance.json').read_text(encoding='utf-8'))
+    return json.loads((CONFIG_DIR / 'safety_guidance.json').read_text(encoding='utf-8'))
 
 
 @dataclass(frozen=True)

@@ -8,6 +8,7 @@
 #include <Arduino.h>
 
 #include "RuntimeMonitorService.h"
+#include "../../system/rtos/PeriodicDeadline.h"
 #include "../../system/time/Clock.h"
 #include "../../config/RuntimeMonitorConfig.h"
 #include "../../system/TaskRuntimeMetrics.h"
@@ -15,20 +16,22 @@
 void runtimeMonitorTask(void* parameter)
 {
     (void)parameter;
-    TickType_t lastWakeTime = xTaskGetTickCount();
     const TickType_t periodTicks = pdMS_TO_TICKS(kTaskRuntimeWindowMs);
+    p4::platform::rtos::PeriodicDeadline deadline(periodTicks);
     for (;;) {
-        taskRuntimeMarkLoopStart(TASK_RUNTIME_MONITOR);
-        stepRuntimeMonitorService(p4::platform::time::monotonicMillis());
-        taskRuntimeMarkLoopEnd(TASK_RUNTIME_MONITOR);
-        const TickType_t nextWakeTime = lastWakeTime + periodTicks;
-        const bool periodOverrun =
-            (int32_t)(xTaskGetTickCount() - nextWakeTime) >= 0;
-        taskRuntimeMarkPeriodResult(TASK_RUNTIME_MONITOR, periodOverrun);
-        vTaskDelayUntil(&lastWakeTime, periodTicks);
-        if (periodOverrun) {
-            vTaskDelay(1);
+        const TickType_t dispatchTicks = xTaskGetTickCount();
+        const bool periodicDue = deadline.due(dispatchTicks);
+        if (!periodicDue) {
+            vTaskDelay(deadline.remaining(dispatchTicks));
+            continue;
         }
+        deadline.advancePast(dispatchTicks);
+        const TickType_t loopBegin = xTaskGetTickCount();
+        taskRuntimeMarkLoopStart(TASK_RUNTIME_MONITOR);
+        taskRuntimeMarkCycle(TASK_RUNTIME_MONITOR, true, false);
+        stepRuntimeMonitorService(p4::platform::time::monotonicMillis());
+        taskRuntimeFinishCycle(TASK_RUNTIME_MONITOR, true, loopBegin,
+                               periodTicks, deadline);
     }
     vTaskDelete(NULL);
 }

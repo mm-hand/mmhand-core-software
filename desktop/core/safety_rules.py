@@ -12,16 +12,12 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
-from pathlib import Path
 from typing import Dict, Mapping
 
+from desktop.paths import CONFIG_DIR
 
-_RULE_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "resources"
-    / "config"
-    / "p4_safety_rules.json"
-)
+
+_RULE_PATH = CONFIG_DIR / "p4_safety_rules.json"
 
 
 @lru_cache(maxsize=1)
@@ -40,7 +36,7 @@ def safety_rule_table() -> Mapping[int, dict]:
 @lru_cache(maxsize=1)
 def safety_rule_archive() -> Mapping[int, dict]:
     """Historical decode data is separate from the active firmware contract."""
-    data = json.loads((_RULE_PATH.parent / 'safety_rules.archive.json').read_text(encoding='utf-8'))
+    data = json.loads((CONFIG_DIR / 'safety_rules.archive.json').read_text(encoding='utf-8'))
     return {int(item['rule_id']): item for item in data['rules']}
 
 

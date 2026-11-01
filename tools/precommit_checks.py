@@ -11,7 +11,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE_SUFFIXES = {'.py', '.cpp', '.h', '.ino', '.json', '.ps1', '.sh', '.yaml', '.yml', '.toml', '.ini', '.txt'}
+SOURCE_SUFFIXES = {'.py', '.cpp', '.h', '.ino', '.json', '.sh', '.yaml', '.yml', '.toml', '.ini', '.txt'}
 
 
 def command(args, *, env=None):
@@ -79,10 +79,7 @@ def main(argv=None):
                        'generate_control_parameters.py'):
             command([sys.executable, str(ROOT / 'tools' / script), '--check'], env=env)
         command([sys.executable, str(ROOT / 'tools/check_desktop_architecture.py')], env=env)
-        shell = shutil.which('pwsh') or shutil.which('powershell')
-        if not shell:
-            raise RuntimeError('PowerShell is required for the P4 architecture check.')
-        command([shell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(ROOT / 'tools/p4_architecture/check_p4_architecture.ps1')], env=env)
+        command([sys.executable, str(ROOT / 'tools/p4_architecture/check_p4_architecture.py')], env=env)
         # Git hooks export repository-local paths; isolated test repos must not inherit them.
         for key in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_PREFIX'):
             env.pop(key, None)

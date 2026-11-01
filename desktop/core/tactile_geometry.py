@@ -15,11 +15,12 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
-from pathlib import Path
 
 import numpy as np
 
-GEOMETRY_PATH = Path(__file__).resolve().parents[1] / 'resources' / 'config' / 'tactile_geometry.json'
+from desktop.paths import CONFIG_DIR
+
+GEOMETRY_PATH = CONFIG_DIR / 'tactile_geometry.json'
 
 # 触觉模块 (finger, segment) -> URDF sensor link。finger 顺序为
 # Little/Ring/Middle/Index/Thumb；segment 0=tip(52 点)，1/2=pad(25 点)。

@@ -14,7 +14,6 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import os
 import struct
 import time
 from dataclasses import dataclass, field
@@ -22,10 +21,11 @@ from pathlib import Path
 
 import numpy as np
 
-from desktop.paths import CALIB_ACTIVE_SNAPSHOT_PATH, DATA_DIR, DEFAULT_URDF_PATH
+from desktop.paths import (CALIB_ACTIVE_SNAPSHOT_PATH, DATA_DIR, DEFAULT_URDF_PATH,
+                           atomic_write_json)
 
 from .angle_mapping import get_spec
-from .kinematics import SENSOR_LINKS, SENSOR_ORDER, Kinematics, decompose_origin
+from .kinematics import Kinematics, decompose_origin
 from .tactile_geometry import GEOMETRY_PATH, module_points
 
 CORRECTION_PATH = DATA_DIR / "contact_calibration.json"
@@ -408,12 +408,7 @@ def save_solution(path, solution, *, urdf_path=DEFAULT_URDF_PATH,
             for index, name in enumerate(solution["names"])
         },
     }
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-                         encoding="utf-8")
-    os.replace(temporary, target)
+    atomic_write_json(path, payload)
     return payload
 
 
