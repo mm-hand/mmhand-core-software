@@ -18,7 +18,7 @@
 - 三次正常后端重连，共30秒300/300新鲜状态，食指在线、触觉掩码0x2003、无默认选择、未自动使能。
 - S3 USB关闭/打开/关闭共约42秒，419/419采样点触觉有效、J08–J15在线。P4接收约250批磁编/秒；该区间CAN CRC、接收溢出和当前错误计数为0。
 - 最新S3 USB触觉采集约17秒：3321有效帧、685601字节，CRC/序号/分片丢失计数均为0。
-- 实物扫描15个触觉地址，得到Little ID1/IP25、Little ID2/DP52、Thumb ID1/IP25三个已登记安装。登记型号结合有效长度/CRC验证，不是读取到了独立硬件型号身份证。
+- 实物扫描15个触觉地址，曾得到3个已登记安装。**旧记录里的型号（IP25/DP52）和手指归属都按旧触觉组序标注，已随`kFingerChannelMap`修正与型号探测删除而失效，需重扫确认。**
 - 此前在一只IP传感器完成2→1改号和新旧地址核验；用户完全断电后，该位置仍可扫描到ID1。
 - 电机124地址快扫已实测；BUS0原先找到的15–19五台电机，84/85/86=254/254/0已写入并独立读回，**没有实际改过这些电机的ID**。
 - SVG已用52+25+25=102个真实测点输出验证。尚未完成逐点按压定位实物对照。
@@ -33,7 +33,6 @@
 | 实物碰撞 | 500ms武装和500ms检测窗口、q_slow速度、PID持续推进、两个方向阈值、换向重建、碰撞标签、后退解除。尚未以实际阻挡试验测触发时延与误报率。 |
 | 运动中故障注入 | 运动时拔P4 USB、断CAN、丢编码器、断舵机、制造超载、STOP到总线执行的延迟，以及恢复后不自动运动。现有软件测试不能代替这些实测。 |
 | 电机实际改号 | 多台旧→253→新、交换/循环、目标冲突、253占用、跨BUS同ID、改号中取消/断电/断线后恢复。已有算法测试；没有实物完整批次改号验收。 |
-| 触觉全覆盖改号 | 两种型号、5根手指、0/1/2各方向、两台交换、无空位三循环拒绝、批次中断与路由恢复、每种型号改后完全断电保存。仅上述单只IP已取得改号/保存证据。 |
 | 同ID硬件场景 | 同一BUS重复地址无法独立识别、不能承诺总能检测出重复；界面已有明确提示，尚未人为接入重复地址做实物试验。 |
 | 触觉图物理对应 | 两型号逐点压触验证测点索引、X/Y朝向、左右手安装旋转/镜像；P4摘要/直连S3全量切换、断开消失的交互组合。 |
 | Joint/Motor Calibration完整重做 | 当前参数恢复通过，但最新完整固件还没有重新跑全手标定、逐关节Set Min/Max及每个故障/取消分支。不能以软件回归替代实测。 |
@@ -109,9 +108,7 @@ C:/Users/73547/mmhand/
 │  │  ├─ control_parameters.py      默认/当前JSON、校验、修订和CRC
 │  │  ├─ teleop_input.py            One Euro与静止锚点滞回
 │  │  ├─ id_actions.py              电机批量改号会话/日志/恢复
-│  │  ├─ tactile_id_actions.py      五指触觉批量改号与恢复
 │  │  ├─ id_protocol.py             电机维护协议和规划器
-│  │  ├─ tactile_maintenance.py     S3维护协议和规划器
 │  │  ├─ tactile_geometry.py        厂商坐标→平面手形SVG
 │  │  ├─ console_snapshot.py        生成GUI只读快照和标签
 │  │  └─ data_recording/            分主题录制、包记录和写盘
@@ -246,19 +243,19 @@ CAN编码器数据帧自身没有每帧序号，使用末尾元数据及整批CR
 | 0x0A | 45字节合力、序号、15位有效mask |
 | 0x0E | 当前T2全触觉分片，1530字节阵列按约240字节切块，整帧CRC16/序号防混拼 |
 | 0x10 | SPI采集/CRC/失败等触觉诊断 |
-| 0x31 | 主机维护请求，负载12字节、版本2、token、op、selector、model、newID、保留及CRC16 |
-| 0x32 | S3维护结果，负载22字节、版本2、token、stage/status、新旧selector、型号/点数/有效性、写出标志、语义位置、S3时间、CRC16 |
 
-selector=`finger_bus×3+pageID`，共0–14；手指顺序Little/Ring/Middle/Index/Thumb。op0扫描、op1改号、op2核对中断事务并恢复已知语义/型号映射，op2不写传感器EEPROM。同一已缓存请求不会重复EEPROM写入；主机超时后先探测实际地址，不盲重写。
+selector=`finger_bus×3+pageID`，共0–14；手指顺序Little/Ring/Middle/Index/Thumb。op0扫描、op1改号、op2核对中断事务并恢复已知语义映射，op2不写传感器EEPROM。同一已缓存请求不会重复EEPROM写入；主机超时后先探测实际地址，不盲重写。
 
-当前片选号=页面ID+1，即0/1/2→1/2/3。同一指BUS内ID必须唯一，不同指允许重复；两地址交换需要第三个空地址；三个都占用的三循环会拒绝，不能从软件绕过物理地址限制。同一BUS有同ID多个器件时，扫描到有效响应也不能证明只有一个器件。
+当前片选号=页面ID+1，即0/1/2→1/2/3。selector的`bus`语义固定为bus 0=小指…bus 4=拇指，S3用`kFingerChannelMap={4,3,2,1,0}`把逻辑组换成译码器通道（连接器CLS-A/C-1=拇指…CLS-A/C-5=小指，两族编号相同）。同一指BUS内ID必须唯一，不同指允许重复；两地址交换需要第三个空地址；三个都占用的三循环会拒绝，不能从软件绕过物理地址限制。同一BUS有同ID多个器件时，扫描到有效响应也不能证明只有一个器件。
 
-注册的型号及Fingertip/Distal/Proximal语义独立保存，改号不会依据新ID猜型号。S3 NVS路由命名空间`pax-route-v2`；主机中断日志协助路由核对。
+扫描只报告地址是否存在及语义槽，不报告型号/点数：两类模块对156和75字节读取都返回CRC有效应答，没有任何回读能识别型号，改号只按地址进行、不因型号拒绝。Fingertip/Distal/Proximal语义槽独立保存，改号只移动安装路由。语义槽与页码缺省恒等（指尖=ID0、中段=ID1、近端=ID2）；S3 NVS路由命名空间`pax-route-v3`，旧v2排列不再读取。主机中断日志协助路由核对。
 
 ### 4.4 S3 ↔ 传感器、P4 ↔ 舵机
 
 - 磁编AS5047P：独立SPI，10MHz、14位角度0–16383，21路按五指译码/链路组织；校验与诊断状态机在HalEncoders。S3在raw源头统一方向：DIP（J03/J07/J11/J15/J19，掩码`0x88888`）透传，其余关节（含AA/CMC）取`(16384 - payload) & 0x3FFF`；P4/上位机看到的raw均随URDF正方向递增。左右手末端板均按此掩码验证。采样无效在CAN中编码成0xFFFF。
 - PaXini触觉：独立SPI，1MHz，功能码/两字节小端寄存器地址/两字节小端长度/数据/CRC8，厂商CRC初值FF。解锁`7A 01 00 01 00 A1 CE`，改号`7E 23 00 01 00 dest_id CRC8`。目标片选号1/2/3对应尾部`01 22`、`02 23`、`03 E3`。采集和改号在同一触觉任务两轮之间串行执行。
+- **触觉读取时序是硬约束**：一次读拆成“5字节命令→100µs→读状态+负载+CRC8”两段，中间这段间隔必须精确。TacTask与CanTask同为优先级5且都在Core0，系统节拍或长任务一旦落进该间隔就会把它拉长到毫秒级（2026-11-01实机抓到一次63145µs），模块随后给出的应答CRC8不成立，表现就是“某个触觉模块时有时无、扫描数目在变”。现在`HalTactile::readRegisters`用`vTaskSuspendAll`把“命令→间隔→启动响应”整段包住，且只能用`spi_device_polling_transmit`/`spi_device_queue_trans`（阻塞式事务会等信号量，挂起调度器时会死锁）；实测该跨度最大280µs、`crcFailLongGap=0`，CAN `encQueue/txFail`无回归。现场诊断入口：JTAG读`tactile._diag.maxResponseGapUs / lastResponseGapUs / crcFailLongGap / crcFailShortGap`（这几个字段只在`_diag`里，未进0x10包，帧格式不变）。
+- 2026-11-01实测：同一次上电内，“不回话”的地址会漂移（先后出现在0x07/0x01/0x0B/0x02等pattern），窗口约200ms，轮询同一地址表现为6~21次连续NONE。已排除：命令→响应间隔（已挂起保护）、SPI降到300kHz且片选200µs/响应200µs、2ms×3次重试、关掉每帧1530字节全量上传；同通道相邻page的模块100%正常。该残差属模块/片选走线一侧，S3读取时序无法补偿；确认办法是把可疑模块换到另一个地址，看故障是否跟随模块。
 - 两型号：DP-S2015-Elite PXSR-STDDP03G为指尖52测点；IP-S1610-Elite PXSR-STDIP03B为指腹25测点。满配5×(52+25+25)×3=1530字节，当前实物只读到3个模块，不是15个满配验收。
 - P4飞特总线：四路1Mbaud UART，RX={21,23,27,33}、TX={20,22,26,32}。由FeetechServoDriver封装飞特寄存器读写、同步读/写、校验、EEPROM解锁/重锁；不是把上位机FE帧直接透传到舵机。
 - 电机当前位置只使用原生有符号ABS，不再由P4或上位机展开圈数；标定包保存原生ABS恢复记录，圈内相位仅在需要时取模计算。
@@ -319,7 +316,7 @@ HandBackend + ApplicationActions（操作/授权/STOP门禁）
 HandController/Core Logic        主机状态归并
         ↓                             ↑
 P4 TX队列→SerialTransport    P4 RX→FrameDecoder→StateReducer
-S3维护等待者→独立USB发送      S3 RX→触觉解析/维护token匹配
+S3 RX→触觉解析与USB发送
 ```
 
 - NiceGUI负责控件和草稿，不直接写串口、不自行判定电机已经ENABLED。
@@ -346,7 +343,6 @@ S3维护等待者→独立USB发送      S3 RX→触觉解析/维护token匹配
 | Plot / Curves & Recordings | 最多5个不同关节曲线，实测/目标角；Clear Plot。另选一电机查看P/I/换向/配对恢复counts分量。记录状态、目录、时长、Full tactile data选项；保存总开关在顶栏，不在此重复设置。 |
 | Plot / Tactile | 平面手形、15个安装位置、X/Y/Z/Magnitude切换、手指/模块详情、Fx/Fy/Fz与新鲜度。S3直连FULL按厂商XY显示52或25测点；P4-only SUMMARY显示Σ合力；无新鲜传感器数据不伪造测点，位置灰/无有效数据。数值仍是设备raw单位，不是已标定的N或Pa。 |
 | Settings / Renumber Motor | Scan All Buses、Renumber All、BUS/Current ID/New ID输入表、完整等比电机ID示意图。P4有效连接门禁；文字说明同BUS同ID无法区分，上线检查统一配置84/85/86=254/254/0，改号流程不再操作这些参数。无逐行改号按钮，无新增Reset ID上层。 |
-| Settings / Renumber Tactile | Scan All Fingers、Renumber All，Thumb/Index/Middle/Ring/Little分组，每个传感器Current ID/New ID和已登记型号/点数；空输入不改，0/1/2，扫描与上次改号结果分别显示。必须直连S3，P4数据不能代替连接门禁。 |
 | Settings / Control Parameters | Save Parameters、Restore Defaults、revision/CRC/P4应用状态；Kp config/Ki config/Kd config（AA/MCP/PIP/DIP/CMC五组）、Ki组内共享积分限幅/噪声/确认时间、双腱恢复增益、编码器快慢窗、快速换向、碰撞阈值、最终输出约束、ROS2滤波分组折叠面板。Kp/Ki/Kd按关节类型共用，无每关节覆盖；恢复默认读本机默认JSON。 |
 | Settings / Diagnostics | Clear Faults、在线电机/编码器数量、owner和状态age；问题列表和详情、Operation History；可展开Task Runtime、Routes、Fingerprint、Raw Snapshot，任务统计按需订阅。 |
 
@@ -443,6 +439,5 @@ S3维护等待者→独立USB发送      S3 RX→触觉解析/维护token匹配
 - P4队列：`ESP32-P4/src/system/channels/InterTaskChannels.h`。
 - P4控制：`ESP32-P4/src/control/`、`tasks/motion_control/`、`safety/policies/CollisionSafetyPolicy.cpp`。
 - S3任务装配：`ESP32-S3/src/system/SystemTasks.cpp`和`src/config/Config.h`。
-- S3维护：`ESP32-S3/src/maintenance/TactileMaintenance.cpp`、`hal/HalTactile.cpp`及主机`tactile_maintenance.py`。
 - CAN：`ESP32-P4/src/config/protocol/S3SensorCanProtocol.h`与`ESP32-S3/src/hal/HalTWAI.h/.cpp`。
 - 本轮实测记录：`docs/debug/control-tuning.md`；对应原始证据在`.debug`，文内旧记录按时间保留，结论应以最新段落为准。

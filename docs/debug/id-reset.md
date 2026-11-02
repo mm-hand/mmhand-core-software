@@ -1,8 +1,14 @@
-# Settings: motor and PaXini tactile IDs
+# Settings: motor IDs
 
 The five main pages are Calibration, Control, Replay, Plot and Settings.
 Calibration / Joint Calibration opens by default. Settings contains Renumber
-Motor, Renumber Tactile, Control Parameters and Diagnostics.
+Motor, Control Parameters and Diagnostics.
+
+Tactile sensor renumbering was removed: the PaXini modules on this hand do not
+accept the documented SPI ID write (correct unlock/rename frames, 1 MHz and
+100 kHz, split and single CS session, unlock bytes A1-A3 — the address never
+changed, including after a power cycle). Tactile data still arrives over the
+direct S3 USB link; only the ID editor is gone.
 
 ## Motor inventory and renumbering
 
@@ -23,54 +29,6 @@ not change.
 
 **Multiple motors with the same ID on one bus cannot be identified or
 renumbered separately. Connect them separately before renumbering.**
-
-## Five-finger tactile inventory and renumbering
-
-Connect S3 directly by its USB Serial/JTAG port. P4 relayed tactile data does
-not authorize maintenance. Scan All Fingers probes15 reachable addresses:
-three IDs on each of Little, Ring, Middle, Index and Thumb. The editor groups
-results by finger; each row has Current ID and a New ID input. Blank means
-unchanged. Enter0,1 or2, then Renumber All. IDs may repeat across finger buses,
-but final IDs must be unique within each bus. The GUI lists Thumb first;
-physical bus0 is Little and bus4 is Thumb.
-
-Position convention: Fingertip0, Distal segment1, Proximal segment2; vendor
-selector values are respectively1,2,3. Known installed models are DP-S2015-Elite
-PXSR-STDDP03G (52 taxels, tip) and IP-S1610-Elite PXSR-STDIP03B (25 taxels, pad).
-S3 preserves the installation/model route independently of the new ID and
-validates full-data CRC with the registered model length. It does not claim to
-read a manufacturer model identifier. Unknown models cannot be renamed.
-
-**Multiple tactile sensors with the same ID on one finger bus cannot be
-identified or renumbered separately. Connect them separately before renumbering.**
-Identical simultaneous replies can look like one device; scanning cannot prove
-that no duplicate exists. This limitation applies to motors too.
-
-The desktop sends version2 maintenance requests directly to S3; P4 has no
-such command. The tactile task owns SPI and handles requests between acquisition
-rounds. Each write sends the manufacturer unlock7A01000100A1CE and rename
-7E23000100(dest_id)(CRC8), with dest_id=New ID+1. It sends once, checks a
-CRC-valid full read at the new selector and no reply at the old selector, then
-persists the model route. Page ID 0/1/2 maps to selector bits 01/10/11,
-exactly the manufacturer destination 1/2/3. The initial installation route
-remains tip=selector3, distal=selector2, proximal=selector1; changing an ID
-moves that installation route rather than changing its model. Route storage
-uses the current `pax-route-v2` namespace; the obsolete reversed index encoding
-is not read. No speculative save command is sent.
-
-Maintenance operation2 reconciles a journaled installation route without
-sending sensor unlock or ID writes. The host uses it only after the old ID is
-absent and the destination is present, preserving the recorded model and
-semantic slot. Live verification probes for up to1s after a single write;
-ambiguous results stop the batch.
-
-Moves to free addresses are ordered first. A two-sensor exchange can use the
-third reachable ID. With all three IDs occupied, a cycle requires disconnecting
-one sensor because no reachable temporary ID remains. Global STOP cancels
-subsequent steps. Interrupted batches are journaled against S3 USB identity;
-rescan before resuming. Success means live readback passed. Power-cycle the
-sensor and scan again to verify nonvolatile persistence; sending bytes alone
-never counts as a successful ID change.
 
 ## Control and calibration
 

@@ -71,7 +71,8 @@ def run_ui(*, ros2_enabled=True, backend=None, show=True, port=8080):
         bound_port = resolve_ui_port(preferred=port)
         if bound_port != port:
             print(f'[desktop] HTTP port {port} is occupied; serving on port {bound_port} instead')
-        ui.run(host='127.0.0.1', port=bound_port, show=show, reload=False, title='MM-Hand')
+        ui.run(host='127.0.0.1', port=bound_port, show=show, reload=False,
+               title='MM-Hand', favicon='🖐️')
     finally:
         stop_error = None
         for bridge in reversed(bridges):

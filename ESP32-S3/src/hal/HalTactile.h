@@ -43,6 +43,12 @@ struct TactileReadDiag {
     uint8_t lastFailStatus;    ///< 最近失败帧状态字节。
     uint8_t lastFailRecvCrc;   ///< 最近失败帧返回CRC8。
     uint8_t lastFailCalcCrc;   ///< 最近失败帧本地CRC8。
+    // “发命令→开始读响应”的实测跨度：正常约140µs。任务切换若落进这段窗口，
+    // 间隔会被拉长到毫秒级，模块应答CRC8随即不成立，所以单独统计长/短间隔失败。
+    uint32_t maxResponseGapUs; ///< 该跨度历史最大值。
+    uint32_t lastResponseGapUs;///< 最近一次该跨度。
+    uint16_t crcFailLongGap;   ///< 间隔>500µs时的CRC失败累计，饱和计数。
+    uint16_t crcFailShortGap;  ///< 间隔正常时的CRC失败累计，饱和计数。
 };
 
 /**
@@ -64,12 +70,6 @@ public:
     TactileData getData();
     /** @brief 返回最近一次采集诊断快照。 */
     TactileReadDiag getDiagnostics();
-    uint8_t inspectSensor(uint8_t physicalIndex, uint8_t* semanticIndex, uint8_t* model);
-    bool writeSensorId(uint8_t physicalIndex, uint8_t destinationId, bool* writeSent);
-    bool probePhysical(uint8_t physicalIndex);
-    bool verifyPhysicalModel(uint8_t physicalIndex, uint8_t model);
-    bool remapSensor(uint8_t semanticIndex, uint8_t newPhysicalIndex);
-
 private:
     struct SpiReadResult {
         TactileReadFailReason reason;
@@ -82,6 +82,7 @@ private:
     void setAllSelectPinsHigh();
     void setSelectorPattern(uint8_t pattern);
     bool readRegisters(uint8_t selectorPattern, uint16_t startAddr, uint8_t* payload, uint16_t payloadLen);
+    void noteResponseGap(uint32_t gapUs);
     bool readSensorSummary(uint8_t groupIndex, uint8_t sensorIndex, uint8_t* globalOut, uint8_t* rawOut);
     bool readSensorForces(uint8_t groupIndex, uint8_t sensorIndex, uint8_t* forcesOut, uint16_t forcesLen);
     static uint8_t crc8(const uint8_t* data, uint32_t len);
@@ -93,7 +94,10 @@ private:
     TactileReadDiag _diag;    ///< 最近采集诊断统计。
     SpiReadResult _lastReadResult; ///< 最近一次SPI读取结果，供分模块统计。
     uint8_t _lastReadAttempts;     ///< 最近一次模块读取实际尝试次数。
-    uint8_t _physicalRoute[TACTILE_GROUP_NUM][TACTILE_SENSOR_PER_GROUP];
+    uint32_t _maxGapUs = 0;        ///< 命令→响应跨度历史最大值（µs）。
+    uint32_t _lastGapUs = 0;       ///< 最近一次命令→响应跨度（µs）。
+    uint16_t _crcFailLongGap = 0;  ///< 长间隔下的CRC失败累计，饱和计数。
+    uint16_t _crcFailShortGap = 0; ///< 短间隔下的CRC失败累计，饱和计数。
 };
 
 // 全局单例对象，任务层直接调用。

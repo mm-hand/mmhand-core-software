@@ -12,7 +12,7 @@ import json
 from nicegui import core, ui
 from desktop.core.user_issues import issue_text, operation_issue
 from . import refresh_policy as policy
-from .web import renumber_motors, renumber_tactile, joint_calibration, motor_calibration, feedback_control, direct_control
+from .web import renumber_motors, joint_calibration, motor_calibration, feedback_control, direct_control
 from .web import replay, plots, diagnostics, control_parameters, hand as hand_view
 from .web import contact_calibration as contact_view
 from .web.common import show
@@ -22,7 +22,7 @@ SUBTABS = {
     'Calibration': ['Joint Calibration', 'Contact Calibration', 'Motor Calibration'],
     'Control': ['Feedback Control', 'Direct Control', 'Replay'],
     'Plot': ['Hand', 'Curves'],
-    'Settings': ['Renumber Motor', 'Renumber Tactile', 'Control Parameters', 'Diagnostics'],
+    'Settings': ['Renumber Motor', 'Control Parameters', 'Diagnostics'],
 }
 def status_background(value):
     """状态色卡：红=必须人工处理，黄=机器要自救/警告，蓝=正在动作，绿=可操作。"""
@@ -401,7 +401,6 @@ def build_page(hand):
                                         elif name == 'Hand': refreshers[name] = hand_view.build(hand)
                                         elif name == 'Curves': refreshers[name] = plots.build(hand, act)
                                         elif name == 'Renumber Motor': refreshers[name] = renumber_motors.build(hand, act)
-                                        elif name == 'Renumber Tactile': refreshers[name] = renumber_tactile.build(hand, act)
                                         elif name == 'Diagnostics': refreshers[name] = diagnostics.build(hand, act)
                                         elif name == 'Control Parameters': refreshers[name] = control_parameters.build(hand, act)
             with workspace.separator:

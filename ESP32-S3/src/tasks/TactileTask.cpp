@@ -4,7 +4,6 @@
 #include "../hal/HalTactile.h"
 #include "../hal/HalTWAI.h"
 #include "../system/FirmwareLog.h"
-#include "../maintenance/TactileMaintenance.h"
 
 #include <cstring>
 
@@ -246,8 +245,6 @@ void Task_Tactile(void* pvParameters) {
     Serial.println("[Task_Tactile] Started!");
 
     for (;;) {
-        // Maintenance owns SPI between acquisition rounds; no concurrent CS.
-        pollTactileMaintenance();
         // HAL先完成整轮采样，再取出一致快照供多种上报链路复用。
         tactile.update();
         const TactileData data = tactile.getData();

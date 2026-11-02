@@ -9,6 +9,7 @@
 """
 import math
 from pathlib import Path
+import tempfile
 import xml.etree.ElementTree as ET
 
 import numpy as np
@@ -17,6 +18,7 @@ from nicegui import app, ui
 from desktop.core.contact_calibration import active_origins
 from desktop.core.robot_model import manifest as robot_model_manifest
 from desktop.core.tactile_geometry import SENSOR_LINKS, module_points
+from desktop.core.tactile_heatmap import colormap, grid_coords, render_png
 
 ROOT = Path(__file__).resolve().parents[2] / 'resources'
 MODEL = ROOT / 'mmhand_urdf'
@@ -28,19 +30,33 @@ CAMERA = dict(x=-0.019, y=-0.4555, z=0.0917, look_at_x=-0.019,
               up_x=0.0, up_y=0.0, up_z=1.0)
 FOV = 42
 SCENE = dict(width=1200, height=620)
-ARROW_RADIUS = 0.0008
+ARROW_RADIUS = 0.0012
 ARROW_MIN = 5.0
+POINT_SIZE = 0.0032
+# 贴面热力图用 NiceGUI 的 texture 原语；关掉即退回放大后的点阵。
+HEATMAP = True
+# 贴图加载失败时仍能看见触觉：点阵默认保留。
+SHOW_POINTS = True
+_PLACEHOLDER_PNG = (b'\x89PNG\r\n\x1a\n' + bytes.fromhex(
+    '0000000d49484452000000010000000108060000001f15c4890000000a4944415478'
+    '9c6300010000050001' '0d0a2db40000000049454e44ae426082'))
+_FRAME_DIR: Path | None = None
+
+
+def _frame_dir() -> Path:
+    """贴图目录按进程共享：静态路由只能注册一次，每客户端各建目录会 404。"""
+    global _FRAME_DIR
+    if _FRAME_DIR is None:
+        _FRAME_DIR = Path(tempfile.mkdtemp(prefix='tactile-frames-'))
+        try:
+            app.add_static_files('/tactile-frames', str(_FRAME_DIR), max_cache_age=0)
+        except RuntimeError:
+            pass
+    return _FRAME_DIR
 
 
 def _vec(text, default):
     return tuple(float(v) for v in (text or default).split())
-
-
-def _colors(taxels):
-    values = np.asarray(taxels, float)[..., 2].reshape(-1)
-    levels = np.clip(values / 255.0, 0.0, 1.0)
-    return [[float(level), float(0.25 * (1.0 - level)), float(1.0 - level)]
-            for level in levels]
 
 
 def _rotation_from_force(force):
@@ -73,6 +89,8 @@ def build(hand):
         by_parent.setdefault(j.find('parent').attrib['link'], []).append(j)
     sensor_by_link = {link: key for key, link in SENSOR_LINKS.items()}
     corrections = active_origins()
+    frame_dir = _frame_dir()
+    frame_slot = {}
 
     with ui.row().classes('page-toolbar'):
         ui.label('Light gray: original URDF · Gray: contact-calibrated · Green: target').classes('text-sm')
@@ -88,14 +106,22 @@ def build(hand):
     poses, tactile = [], {}
 
     def add_marker(key, parent, points):
+        finger, segment = key
+        kind = 'tip' if segment == 0 else 'pad'
+        (frame_dir / f'{finger}-{segment}-0.png').write_bytes(_PLACEHOLDER_PNG)
         with parent:
             cloud = scene.point_cloud(points.tolist(),
-                                      colors=[[0.0, 0.0, 0.0]] * len(points),
-                                      point_size=0.0015)
-            cloud.visible(False)
+                                      colors=colormap(np.zeros(len(points))),
+                                      point_size=POINT_SIZE)
+            cloud.visible(SHOW_POINTS)
+            surface = scene.texture(f'/tactile-frames/{finger}-{segment}-0.png', grid_coords(kind))
+            surface.visible(False)
             arrow = scene.cylinder(ARROW_RADIUS, ARROW_RADIUS, 1.0, 8)
             arrow.visible(False)
-        tactile[key] = (cloud, arrow, points, points.mean(axis=0))
+            dot = scene.sphere(1.0)
+            dot.visible(False)
+        frame_slot[key] = [0, None, 0]
+        tactile[key] = (cloud, arrow, dot, surface, points, points.mean(axis=0))
 
     def add_link(name, motors, color, opacity, corrected, with_tactile):
         link = links[name]
@@ -177,22 +203,44 @@ def build(hand):
                                    [t * x * y + s * z, t * y * y + c, t * y * z - s * x],
                                    [t * x * z - s * y, t * y * z + s * x, t * z * z + c]])
         for module in tactile_state.get('modules') or []:
-            marker = tactile.get((module['finger'], module['module']))
+            key = (module['finger'], module['module'])
+            marker = tactile.get(key)
             if marker is None:
                 continue
-            cloud, arrow, points, center = marker
+            cloud, arrow, dot, surface, points, center = marker
             taxels = module.get('taxels')
-            if module.get('valid') and tactile_state.get('level') == 'FULL' and taxels:
-                cloud.set_points(points.tolist(), _colors(taxels))
-                cloud.visible(True)
-            else:
-                cloud.visible(False)
+            full = bool(module.get('valid') and tactile_state.get('level') == 'FULL' and taxels)
+            if full:
+                values = np.asarray(taxels, float)[..., 2].reshape(-1)
+                try:
+                    png = render_png('tip' if key[1] == 0 else 'pad', values)
+                except Exception:
+                    png = None
+                if png is not None:
+                    slot, previous, version = frame_slot[key]
+                    if png != previous:
+                        slot = 1 - slot
+                        version += 1
+                        frame_dir.joinpath(f'{key[0]}-{key[1]}-{slot}.png').write_bytes(png)
+                        # 带版本号查询串，避免浏览器复用上一个槽位的缓存。
+                        surface.set_url(f'/tactile-frames/{key[0]}-{key[1]}-{slot}.png?v={version}')
+                        frame_slot[key] = [slot, png, version]
+                if SHOW_POINTS:
+                    cloud.set_points(points.tolist(), colormap(values))
+            cloud.visible(SHOW_POINTS and full)
+            surface.visible(HEATMAP and full)
             force = module.get('force') if module.get('valid') else None
             rotation, magnitude = (None, 0.0) if force is None else _rotation_from_force(force)
+            if full or rotation is None or magnitude < ARROW_MIN:
+                dot.visible(False)
+            else:
+                radius = min(0.006, 0.0015 + 0.00006 * magnitude)
+                dot.move(*center).scale(radius, radius, radius).material('#ef4444')
+                dot.visible(True)
             if rotation is None or magnitude < ARROW_MIN:
                 arrow.visible(False)
                 continue
-            length = min(0.02, 0.004 + 0.00012 * magnitude)
+            length = min(0.02, 0.005 + 0.00012 * magnitude)
             direction = np.asarray(rotation, float)[:, 1]
             arrow.move(*(center + direction * length / 2.0)) \
                  .rotate_R(rotation).scale(1.0, length, 1.0).material('#ef4444')

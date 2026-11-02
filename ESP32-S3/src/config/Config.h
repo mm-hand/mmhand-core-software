@@ -103,14 +103,17 @@ struct TactileData {
 #define PIN_MUX_G       18
 
 // ===========================================
-// [磁编硬件] 138板CS译码拓扑
+// [硬件] 138板CS译码拓扑
 // ===========================================
-// 通道7没有连接有效磁编组，事务结束后切到该通道释放全部磁编CS。
+// 通道7没有连接有效组，事务结束后切到该通道释放全部CS。
 #define ENC_DEMUX_IDLE_CHANNEL 7
 
-// 磁编逻辑组顺序：group0小拇指、group1无名指、group2中指、
-// group3食指、group4拇指；分别映射J00~J20和PCB上的SPI5~SPI1。
-static constexpr uint8_t ENC_GROUP_CHANNEL_MAP[5] = {4, 3, 2, 1, 0};
+// 磁编与触觉共用同一指序：CLS-A/C-1=拇指 … CLS-A/C-5=小指，
+// 通道号0..4对应连接器号1..5；逻辑组序0=小指 … 4=拇指，故降序取值。
+static constexpr uint8_t kFingerChannelMap[5] = {4, 3, 2, 1, 0};
+static_assert(kFingerChannelMap[0] == 4 && kFingerChannelMap[4] == 0 &&
+              kFingerChannelMap[1] + kFingerChannelMap[3] == 4,
+              "finger channel map must be the reverse of the connector order");
 
 // ===========================================
 // [参数] SPI、触觉数据规模及任务配置
@@ -135,9 +138,6 @@ static constexpr uint8_t ENC_GROUP_CHANNEL_MAP[5] = {4, 3, 2, 1, 0};
 #ifndef ENABLE_TACTILE_CAN_FULL_DUMP
 #define ENABLE_TACTILE_CAN_FULL_DUMP 0
 #endif
-
-// 触觉逻辑组顺序与磁编保持一致：G0小拇指到G4拇指。
-static constexpr uint8_t TACTILE_GROUP_CHANNEL_MAP[TACTILE_GROUP_NUM] = {0, 1, 2, 3, 4};
 
 // FreeRTOS任务调度配置；SystemTasks创建任务时统一引用，避免配置与执行不一致。
 #define TASK_ENC_PRIO   10

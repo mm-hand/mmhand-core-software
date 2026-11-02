@@ -19,9 +19,9 @@ def finish(hand, result):
 
 def test_motor_and_direct_s3_tactile_operations_are_available(hand):
     from desktop.core.comm_layer import TactileSerialComm
-    assert set(hand.id_reset_snapshot()) == {'motor', 'tactile'}
-    assert hasattr(hand, 'request_tactile_renumber')
-    assert hasattr(TactileSerialComm, 'maintenance_request')
+    assert set(hand.id_reset_snapshot()) == {'motor'}
+    assert not hasattr(hand, 'request_tactile_renumber')
+    assert not hasattr(TactileSerialComm, 'maintenance_request')
 
 def test_calibrating_badge_follows_current_joint_and_stop_clears_it(hand):
     from desktop.core.calibration_workflow import CalibrationWorkflowEvent

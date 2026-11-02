@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from desktop.core.comm_layer import LowerComputerComm
+from desktop.core.comm_layer import LowerComputerComm, TactileSerialComm
 from desktop.core.communication import (
     AckTracker,
     EventChannel,
@@ -263,6 +263,15 @@ def test_lower_computer_comm_rx_queue_is_latest_value_mailbox() -> None:
 
     assert comm.rx_queue.qsize() == 1
     assert comm.rx_queue.get_nowait() is latest
+
+
+def test_tactile_serial_comm_publishes_to_its_own_rx_queue() -> None:
+    comm = TactileSerialComm("")
+    model = HandModel()
+
+    comm._put_latest_model(model)
+
+    assert comm.get_latest_model() is model
 
 
 def test_hand_backend_connection_uses_comm_health_api_without_legacy_serial_property() -> None:

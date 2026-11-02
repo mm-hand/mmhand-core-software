@@ -13,11 +13,11 @@ separate frontend project is used.
 Calibration / Joint Calibration is the default page. Main tabs are Calibration,
 Control, Plot and Settings. Calibration contains Joint, Contact and Motor
 Calibration; Control contains Feedback Control, Direct Control and Replay; Plot
-contains Hand and Curves; Settings contains Renumber Motor, Renumber Tactile,
-Control Parameters and Diagnostics. The tactile editor scans all five
-fingers, with per-sensor Current ID and New ID inputs and a batch Renumber All.
-Both editors warn that same-bus duplicate IDs cannot be distinguished or renamed
-separately. See `docs/debug/id-reset.md`.
+contains Hand and Curves; Settings contains Renumber Motor,
+Control Parameters and Diagnostics. The tactile editor was removed: the
+PaXini modules on this hand do not accept the documented SPI ID write.
+The motor editor warns that same-bus duplicate IDs cannot be distinguished or
+renamed separately. See `docs/debug/id-reset.md`.
 
 ROS2 receives only `/mmhand/joint_angle_deg`:21 degree values J00–J20. Control
 settings and defaults live in `desktop/resources/config`. Every connection

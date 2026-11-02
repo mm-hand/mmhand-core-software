@@ -112,7 +112,6 @@ from .protocol import (
     crc16_ccitt,
 )
 from .session_log import log_session
-from .tactile_maintenance import RESULT_TYPE as TACTILE_MAINTENANCE_RESULT, TactileMaintenanceChannel
 
 # String command / HandModel / tuple command.
 SendCmd = Union[str, HandModel, tuple]
@@ -167,9 +166,8 @@ FIRMWARE_LOG_ERROR_MARKERS = (
     "error",
 )
 
-# S3 tactile raw group order follows the physical SPI order:
-# G0=thumb(SPI1), G1=index(SPI2), G2=middle(SPI3), G3=ring(SPI4), G4=pinky(SPI5).
-# The UI/model order is also thumb, index, middle, ring, pinky.
+# S3 tactile raw group order is the logical finger order, matching the encoders:
+# G0=little, G1=ring, G2=middle, G3=index, G4=thumb (S3 kFingerChannelMap handles wiring).
 TACTILE_UI_GROUP_FROM_RAW = (0, 1, 2, 3, 4)
 TACTILE_SERIAL_FULL_PACKET_TYPES = (0x0E, PACKET_TYPE_TACTILE_FULL)
 TACTILE_SERIAL_DIAG_PACKET_TYPE = 0x10
@@ -489,7 +487,6 @@ class TactileSerialComm(_SerialSessionBase):
             log_byte_callback=self._append_firmware_log_byte,
             flush_log_callback=self._flush_firmware_log_text,
         )
-        self._maintenance = TactileMaintenanceChannel()
         self.rx_queue: queue.Queue = queue.Queue(maxsize=20)
         self.running = False
         self._rx_thread: Optional[threading.Thread] = None
@@ -542,7 +539,6 @@ class TactileSerialComm(_SerialSessionBase):
             with self._link_lock:
                 self._link = dict(last_valid_rx=0.0, opened_at=time.time(), bytes=0, frames=0)
             self._frame_decoder.reset()
-            self._maintenance = TactileMaintenanceChannel()
             self._firmware_text_buffer = bytearray()
             self._last_model = None
             self._clear_queue(self.rx_queue)
@@ -573,7 +569,6 @@ class TactileSerialComm(_SerialSessionBase):
 
     def disconnect(self) -> None:
         self.running = False
-        self._maintenance.close()
         try:
             self._transport.close()
         except Exception:
@@ -596,16 +591,8 @@ class TactileSerialComm(_SerialSessionBase):
             latest = stale
         return latest
 
-    def maintenance_request(self, op, selector=0xFF, model=0xFF, new_id=0xFF,
-                            *, timeout=3.0, cancelled=lambda: False):
-        if not self.is_connected():
-            raise ConnectionError('Connect S3 directly by USB before tactile maintenance')
-        return self._maintenance.request(self._transport.write, op, selector, model,
-                                         new_id, timeout, cancelled)
-
     def _mark_serial_offline(self) -> None:
         self.running = False
-        self._maintenance.close()
         try:
             self._transport.close()
         except Exception:
@@ -660,8 +647,6 @@ class TactileSerialComm(_SerialSessionBase):
             for module_index in range(TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP)
         ]
         model.tactile_module_last_rx_ts = list(self._tactile_module_last_rx_ts)
-
-    @staticmethod
 
     def _put_latest_model(self, model: HandModel) -> None:
         try:
@@ -735,10 +720,6 @@ class TactileSerialComm(_SerialSessionBase):
         emitted = False
 
         for pkt_type, payload in packets:
-            if pkt_type == TACTILE_MAINTENANCE_RESULT:
-                if self._maintenance.feed(payload):
-                    self._mark_valid_link_frame()
-                continue
             if pkt_type == PACKET_TYPE_TACTILE:
                 parsed = parse_tactile_packet(payload)
                 if parsed is None:

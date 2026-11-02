@@ -2,7 +2,6 @@
 #include "HalSensorSpi.h"
 
 #include <SPI.h>
-#include <Preferences.h>
 #include <cstring>
 
 namespace {
@@ -22,28 +21,16 @@ constexpr uint16_t kDelaySelectSettleUs = 80;
 constexpr uint8_t kSummaryReadAttempts = 2;
 constexpr uint8_t kFullReadAttempts = 1;
 constexpr uint16_t kRetryDelayUs = 200;
+// 命令→响应跨度正常约140µs（命令40µs+间隔100µs）；超过该阈值视为被任务切换拉长。
+constexpr uint32_t kLongGapUs = 500;
 // Page ID 0/1/2 is manufacturer selector 1/2/3, identical to dest_id.
+// 语义槽（指尖/中段/近端）与页码恒等：slot0=0x01、slot1=0x02、slot2=0x03。
 constexpr uint8_t kPhysicalSlotBits[3] = {0x01, 0x02, 0x03};
 
-struct SensorPattern {
-    bool enabled;  ///< 是否扫描该物理模块。
-    uint8_t pattern;///< GPIO17/14/13/6/7组成的五位路由编码。
-};
-
-/** @brief 合成“手指组高三位+组内触觉模块低两位”的选择器编码。 */
-constexpr uint8_t makeSelectorPattern(uint8_t group, uint8_t sensorBits) {
-    return (uint8_t)((TACTILE_GROUP_CHANNEL_MAP[group] << 2) | (sensorBits & 0x03));
+/** @brief 合成“手指组高三位+组内触觉模块低两位”的选择器编码，参数为地址位而非槽号。 */
+constexpr uint8_t makeSelectorPattern(uint8_t group, uint8_t bits) {
+    return (uint8_t)((kFingerChannelMap[group] << 2) | (bits & 0x03));
 }
-
-// 显式表保存实机调通得到的“逻辑手指×模块”到选择器编码映射。
-// CS_A/CS_B是组内地址位：S0指尖=11、S1中段=10、S2近端=01。
-constexpr SensorPattern kSensorPatterns[TACTILE_GROUP_NUM][TACTILE_SENSOR_PER_GROUP] = {
-    {{true, makeSelectorPattern(0, 0x03)}, {true, makeSelectorPattern(0, 0x02)}, {true, makeSelectorPattern(0, 0x01)}},
-    {{true, makeSelectorPattern(1, 0x03)}, {true, makeSelectorPattern(1, 0x02)}, {true, makeSelectorPattern(1, 0x01)}},
-    {{true, makeSelectorPattern(2, 0x03)}, {true, makeSelectorPattern(2, 0x02)}, {true, makeSelectorPattern(2, 0x01)}},
-    {{true, makeSelectorPattern(3, 0x03)}, {true, makeSelectorPattern(3, 0x02)}, {true, makeSelectorPattern(3, 0x01)}},
-    {{true, makeSelectorPattern(4, 0x03)}, {true, makeSelectorPattern(4, 0x02)}, {true, makeSelectorPattern(4, 0x01)}},
-};
 
 /** @brief 先启用内部上拉，再切成高电平输出，降低上电片选毛刺风险。 */
 void configureSelectPinHighWithPullup(int pin) {
@@ -153,9 +140,6 @@ HalTactile::HalTactile()
       _lastReadResult{TactileReadFailReason::None, 0, 0, 0},
       _lastReadAttempts(0) {
     memset(_data, 0, sizeof(TactileData));
-    for (uint8_t group = 0; group < TACTILE_GROUP_NUM; ++group)
-        for (uint8_t sensor = 0; sensor < TACTILE_SENSOR_PER_GROUP; ++sensor)
-            _physicalRoute[group][sensor] = kSensorPatterns[group][sensor].pattern;
 }
 
 /** @brief 在10秒启动等待前释放所有触觉路由，避免同时选中多个模块。 */
@@ -179,19 +163,6 @@ void HalTactile::prepareBootSelectPins() {
 void HalTactile::begin() {
     prepareBootSelectPins();
     _spiReady = setupSPI();
-    Preferences preferences;
-    if (preferences.begin("pax-route-v2", true)) {
-        for (uint8_t group = 0; group < TACTILE_GROUP_NUM; ++group) {
-            char key[4]; snprintf(key, sizeof(key), "g%u", group);
-            const uint8_t slots = preferences.getUChar(key, 0x06);
-            const uint8_t a = slots & 3, b = (slots >> 2) & 3, c = (slots >> 4) & 3;
-            if (a >= 3 || b >= 3 || c >= 3 || a == b || a == c || b == c) continue;
-            _physicalRoute[group][0] = makeSelectorPattern(group, kPhysicalSlotBits[a]);
-            _physicalRoute[group][1] = makeSelectorPattern(group, kPhysicalSlotBits[b]);
-            _physicalRoute[group][2] = makeSelectorPattern(group, kPhysicalSlotBits[c]);
-        }
-        preferences.end();
-    }
     if (!_spiReady) {
         Serial.println("[Tactile] SPI init failed");
     }
@@ -211,94 +182,6 @@ uint8_t HalTactile::crc8(const uint8_t* data, uint32_t len) {
         crc = kCrc8Table[crc ^ *data++];
     }
     return crc;
-}
-
-bool HalTactile::probePhysical(uint8_t physicalIndex) {
-    if (physicalIndex >= TACTILE_MODULE_NUM) return false;
-    const uint8_t group = physicalIndex / 3, slot = physicalIndex % 3;
-    uint8_t sample[3] = {};
-    return readRegisters(makeSelectorPattern(group, kPhysicalSlotBits[slot]),
-                         kForceSummaryAddr, sample, sizeof(sample));
-}
-
-bool HalTactile::verifyPhysicalModel(uint8_t physicalIndex, uint8_t model) {
-    if (physicalIndex >= TACTILE_MODULE_NUM || (model != 1 && model != 2)) return false;
-    uint8_t full[TACTILE_SENSOR0_TAXELS * TACTILE_AXIS_COUNT] = {};
-    return readRegisters(makeSelectorPattern(physicalIndex / 3, kPhysicalSlotBits[physicalIndex % 3]),
-                         kForceDistributionAddr, full, model == 1 ? 156 : 75);
-}
-
-uint8_t HalTactile::inspectSensor(uint8_t found, uint8_t* semanticIndex, uint8_t* model) {
-    if (found >= TACTILE_MODULE_NUM || !probePhysical(found)) return 0;
-    const uint8_t group = found / 3;
-    const uint8_t pattern = makeSelectorPattern(group, kPhysicalSlotBits[found % 3]);
-    uint8_t semantic = 0xFF;
-    for (uint8_t slot = 0; slot < 3; ++slot)
-        if (_physicalRoute[group][slot] == pattern) semantic = group * 3 + slot;
-    if (semantic == 0xFF) return 0xFF;
-    // The verified physical installation registry fixes the module model.
-    const uint8_t registeredModel = semantic % 3 == 0 ? 1 : 2;
-    if (!verifyPhysicalModel(found, registeredModel)) return 0xFF;
-    if (semanticIndex) *semanticIndex = semantic;
-    if (model) *model = registeredModel;
-    return 1;
-}
-
-bool HalTactile::writeSensorId(uint8_t physicalIndex, uint8_t destinationId, bool* writeSent) {
-    if (writeSent) *writeSent = false;
-    if (!_spiReady || !_spi || physicalIndex >= TACTILE_MODULE_NUM || destinationId < 1 || destinationId > 3)
-        return false;
-    const uint8_t group = physicalIndex / 3;
-    const uint8_t pattern = makeSelectorPattern(group, kPhysicalSlotBits[physicalIndex % 3]);
-    uint8_t unlock[7] = {0x7A, 0x01, 0x00, 0x01, 0x00, 0xA1, 0};
-    uint8_t rename[7] = {0x7E, 0x23, 0x00, 0x01, 0x00, destinationId, 0};
-    unlock[6] = crc8(unlock, 6);
-    rename[6] = crc8(rename, 6);
-    auto send = [&](uint8_t* frame) {
-        setAllSelectPinsHigh(); setSelectorPattern(pattern);
-        delayMicroseconds(kDelayCsHoldUs);
-        spi_transaction_t transaction = {};
-        transaction.length = 7 * 8U;
-        transaction.tx_buffer = frame;
-        const bool ok = spi_device_transmit(_spi, &transaction) == ESP_OK;
-        delayMicroseconds(kDelayCsHoldUs); setAllSelectPinsHigh();
-        return ok;
-    };
-    if (!send(unlock)) return false;
-    delay(2);
-    const bool sent = send(rename);
-    if (writeSent) *writeSent = sent;
-    return sent;
-}
-
-bool HalTactile::remapSensor(uint8_t semanticIndex, uint8_t newPhysicalIndex) {
-    if (semanticIndex >= TACTILE_MODULE_NUM || newPhysicalIndex >= TACTILE_MODULE_NUM ||
-        semanticIndex / 3 != newPhysicalIndex / 3) return false;
-    const uint8_t group = semanticIndex / 3, slot = semanticIndex % 3;
-    const uint8_t oldPattern = _physicalRoute[group][slot];
-    const uint8_t newPattern = makeSelectorPattern(group, kPhysicalSlotBits[newPhysicalIndex % 3]);
-    uint8_t displaced = slot;
-    for (uint8_t other = 0; other < 3; ++other)
-        if (_physicalRoute[group][other] == newPattern) displaced = other;
-    uint8_t proposed[3] = {_physicalRoute[group][0], _physicalRoute[group][1], _physicalRoute[group][2]};
-    proposed[slot] = newPattern;
-    proposed[displaced] = oldPattern;
-    uint8_t packed = 0;
-    for (uint8_t semantic = 0; semantic < 3; ++semantic) {
-        uint8_t physical = 0xFF;
-        for (uint8_t candidate = 0; candidate < 3; ++candidate)
-            if (proposed[semantic] == makeSelectorPattern(group, kPhysicalSlotBits[candidate]))
-                physical = candidate;
-        if (physical >= 3) return false;
-        packed |= physical << (2 * semantic);
-    }
-    Preferences preferences;
-    if (!preferences.begin("pax-route-v2", false)) return false;
-    char key[4]; snprintf(key, sizeof(key), "g%u", group);
-    const bool saved = preferences.putUChar(key, packed) == 1;
-    preferences.end();
-    if (saved) memcpy(_physicalRoute[group], proposed, sizeof(proposed));
-    return saved;
 }
 
 /** @brief 将所有地址/使能线恢复为非选中状态，并等待硬件稳定。 */
@@ -357,24 +240,36 @@ bool HalTactile::readRegisters(uint8_t selectorPattern, uint16_t startAddr, uint
     raw[3] = (uint8_t)(payloadLen & 0xFF);
     raw[4] = (uint8_t)(payloadLen >> 8);
 
+    const uint32_t selectStartUs = micros();
     setAllSelectPinsHigh();
     setSelectorPattern(selectorPattern);
     delayMicroseconds(kDelayCsHoldUs);
 
-    // 第一阶段只发送5字节读取命令。
+    // 第一阶段只发送5字节读取命令；第二阶段发送0填充时钟，同时接收状态+负载+CRC。
     spi_transaction_t commandTransaction = {};
     commandTransaction.length = kLenCmdHead * 8U;
     commandTransaction.tx_buffer = raw;
-    const bool commandOk = (spi_device_transmit(_spi, &commandTransaction) == ESP_OK);
-
-    delayMicroseconds(kDelayResponseUs);
-
-    // 第二阶段发送0填充时钟，同时接收状态+负载+CRC。
     spi_transaction_t responseTransaction = {};
     responseTransaction.length = responseLen * 8U;
     responseTransaction.tx_buffer = zeros;
     responseTransaction.rx_buffer = response;
-    const bool responseOk = (spi_device_transmit(_spi, &responseTransaction) == ESP_OK);
+
+    // “命令→100µs→响应”必须是一段不被任务切换打断的时序：TacTask 与 CanTask 同为
+    // 优先级5且都在Core0，1ms节拍或长任务一旦落进这个间隔就会把它拉长到毫秒级
+    // （实机抓到过63ms），模块随后给出的应答CRC8不成立。
+    // 调度器挂起期间只能用轮询/队列式事务；阻塞式事务会等信号量，在这里必然死锁。
+    vTaskSuspendAll();
+    const uint32_t gapStartUs = micros();
+    const bool commandOk = (spi_device_polling_transmit(_spi, &commandTransaction) == ESP_OK);
+    delayMicroseconds(kDelayResponseUs);
+    const uint32_t gapUs = micros() - gapStartUs;
+    const esp_err_t responseQueued = spi_device_queue_trans(_spi, &responseTransaction, 0);
+    xTaskResumeAll();
+    noteResponseGap(gapUs);
+
+    spi_transaction_t* finished = nullptr;
+    const bool responseOk = responseQueued == ESP_OK &&
+        (spi_device_get_trans_result(_spi, &finished, portMAX_DELAY) == ESP_OK);
 
     delayMicroseconds(kDelayCsHoldUs);
     setAllSelectPinsHigh();
@@ -397,6 +292,11 @@ bool HalTactile::readRegisters(uint8_t selectorPattern, uint16_t startAddr, uint
 
     if (recvCrc != calcCrc) {
         _lastReadResult.reason = TactileReadFailReason::CrcMismatch;
+        if (gapUs > kLongGapUs) {
+            if (_crcFailLongGap != UINT16_MAX) _crcFailLongGap++;
+        } else if (_crcFailShortGap != UINT16_MAX) {
+            _crcFailShortGap++;
+        }
         memset(payload, 0, payloadLen);
         return false;
     }
@@ -405,23 +305,20 @@ bool HalTactile::readRegisters(uint8_t selectorPattern, uint16_t startAddr, uint
     return true;
 }
 
+/** @brief 记录本次“命令→响应”跨度，供诊断区分任务切换与真实通信故障。 */
+void HalTactile::noteResponseGap(uint32_t gapUs) {
+    _lastGapUs = gapUs;
+    if (gapUs > _maxGapUs) _maxGapUs = gapUs;
+}
+
 /** @brief 读取单模块3字节摘要寄存器，失败时清零输出。 */
 bool HalTactile::readSensorSummary(uint8_t groupIndex, uint8_t sensorIndex, uint8_t* globalOut, uint8_t* rawOut) {
     if (!globalOut || groupIndex >= TACTILE_GROUP_NUM || sensorIndex >= TACTILE_SENSOR_PER_GROUP) {
         return false;
     }
 
-    const SensorPattern cfg = {kSensorPatterns[groupIndex][sensorIndex].enabled, _physicalRoute[groupIndex][sensorIndex]};
-    if (!cfg.enabled) {
-        memset(globalOut, 0, TACTILE_AXIS_COUNT);
-        if (rawOut) {
-            memset(rawOut, 0, kForceSummaryLen);
-        }
-        return false;
-    }
-
     uint8_t payload[kForceSummaryLen] = {0};
-    const uint8_t selectorPattern = cfg.pattern;
+    const uint8_t selectorPattern = makeSelectorPattern(groupIndex, kPhysicalSlotBits[sensorIndex]);
 
     bool ok = false;
     _lastReadAttempts = 0;
@@ -465,13 +362,7 @@ bool HalTactile::readSensorForces(uint8_t groupIndex, uint8_t sensorIndex, uint8
         return false;
     }
 
-    const SensorPattern cfg = {kSensorPatterns[groupIndex][sensorIndex].enabled, _physicalRoute[groupIndex][sensorIndex]};
-    if (!cfg.enabled) {
-        memset(forcesOut, 0, forcesLen);
-        return false;
-    }
-
-    const uint8_t selectorPattern = cfg.pattern;
+    const uint8_t selectorPattern = makeSelectorPattern(groupIndex, kPhysicalSlotBits[sensorIndex]);
     bool ok = false;
     _lastReadAttempts = 0;
     for (uint8_t attempt = 0; attempt < kFullReadAttempts; attempt++) {
@@ -546,8 +437,8 @@ void HalTactile::update() {
             default:
                 break;
         }
-        nextDiag.lastFailedPattern = _physicalRoute[moduleIndex / TACTILE_SENSOR_PER_GROUP]
-            [moduleIndex % TACTILE_SENSOR_PER_GROUP];
+        nextDiag.lastFailedPattern = makeSelectorPattern(moduleIndex / TACTILE_SENSOR_PER_GROUP,
+                                                         kPhysicalSlotBits[moduleIndex % TACTILE_SENSOR_PER_GROUP]);
         nextDiag.lastFailStatus = _lastReadResult.status;
         nextDiag.lastFailRecvCrc = _lastReadResult.recvCrc;
         nextDiag.lastFailCalcCrc = _lastReadResult.calcCrc;
@@ -573,12 +464,6 @@ void HalTactile::update() {
             };
             for (uint8_t s = 0; s < TACTILE_SENSOR_PER_GROUP; s++) {
                 const uint16_t forceLen = sensorForceLen(s);
-                if (!kSensorPatterns[g][s].enabled) {
-                    memset(globals[s], 0, TACTILE_AXIS_COUNT);
-                    memset(rawSummaries[s], 0, kForceSummaryLen);
-                    memset(forces[s], 0, forceLen);
-                    continue;
-                }
                 nextDiag.enabledMask |= (uint16_t)(1U << (g * TACTILE_SENSOR_PER_GROUP + s));
 
                 // [待确认是否优化] 摘要与全量分开读取；若确认deriveGlobalFromForces等价，可减少一半事务数。
@@ -609,6 +494,11 @@ void HalTactile::update() {
     } else {
         nextDiag.failedReads = TACTILE_GROUP_NUM * TACTILE_SENSOR_PER_GROUP;
     }
+
+    nextDiag.maxResponseGapUs = _maxGapUs;
+    nextDiag.lastResponseGapUs = _lastGapUs;
+    nextDiag.crcFailLongGap = _crcFailLongGap;
+    nextDiag.crcFailShortGap = _crcFailShortGap;
 
     // 先在局部next中构建完整帧，再在短临界区内一次替换，避免消费者读到半帧。
     if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(10))) {

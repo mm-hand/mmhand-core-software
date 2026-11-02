@@ -4,7 +4,7 @@ import pytest
 from nicegui import ui, Client
 from nicegui.events import GenericEventArguments
 from desktop.core.hand_backend import HandBackend
-from desktop.ui.web import renumber_motors, renumber_tactile, joint_calibration, motor_calibration, feedback_control, direct_control
+from desktop.ui.web import renumber_motors, joint_calibration, motor_calibration, feedback_control, direct_control
 from desktop.ui.web import replay, plots, diagnostics, control_parameters, hand as hand_view
 from desktop.ui.web import contact_calibration as contact_view
 from desktop.ui.web.common import FINGERS, selection
@@ -36,7 +36,6 @@ def test_every_native_page_builds_and_refreshes_unknown_feedback(page, name):
     act, load, confirm = Mock(), Mock(), Mock()
     builders = {
         'Renumber Motor': lambda: renumber_motors.build(hand, act),
-        'Renumber Tactile': lambda: renumber_tactile.build(hand, act),
         'Joint Calibration': lambda: joint_calibration.build(hand, act, load, confirm),
         'Contact Calibration': lambda: contact_view.build(hand, act),
         'Motor Calibration': lambda: motor_calibration.build(hand, act, load),
@@ -99,6 +98,25 @@ def test_hand_models_follow_feedback_and_control_state(page):
     assert not target.visible_ and measured.visible_
     assert [obj.R for obj in rotated] == previous
 
+def test_hand_view_paints_full_tactile_heatmap(page):
+    hand, client = page
+    refresh = hand_view.build(hand)
+    scene = next(element for element in client.elements.values() if isinstance(element, ui.scene))
+    init_handlers = [event.handler for event in scene._event_listeners.values() if event.type == 'init']
+    init_handlers[-1]()
+    surfaces = [obj for obj in scene.objects.values() if type(obj).__name__ == 'Texture']
+    assert len(surfaces) == 15 and not any(obj.visible_ for obj in surfaces)
+    taxels = [[0.0, 0.0, 120.0] for _ in range(52)]
+    snapshot = hand.application_snapshot()
+    snapshot['tactile'] = {'level': 'FULL', 'modules': [
+        {'finger': 0, 'module': 0, 'valid': True, 'force': [0, 0, 120], 'taxels': taxels},
+    ]}
+    refresh(snapshot)
+    shown = [obj for obj in scene.objects.values() if type(obj).__name__ == 'Texture' and obj.visible_]
+    assert len(shown) == 1
+    assert any(hand_view._FRAME_DIR.glob('0-0-*.png'))
+
+
 def test_adaptive_kp_is_one_expansion_after_kd_with_one_enable_button(page):
     hand, client = page
     hand.request_apply_control_parameters = Mock()
@@ -140,32 +158,6 @@ def test_feedback_refresh_keeps_native_number_and_slider_draft_without_send(page
     click = next(e for e in send._event_listeners.values() if e.type == 'click')
     click.handler(None)
     assert act.call_count == 1
-
-
-def test_tactile_batch_editor_groups_all_fingers_and_submits_each_new_id(page):
-    hand, client = page
-    act = Mock()
-    hand.request_tactile_renumber = Mock()
-    refresh = renumber_tactile.build(hand, act)
-    snapshot = hand.application_snapshot()
-    snapshot['id_reset']['tactile'].update(available=True, scanned=True, generation=1,
-        rows=[dict(bus=4,id=1,model=2,points=25),dict(bus=3,id=1,model=2,points=25)])
-    refresh(snapshot)
-    numbers = [element for element in client.elements.values() if isinstance(element, ui.number)]
-    assert len(numbers) == 2 and all(number.value is None for number in numbers)
-    numbers[0].set_value(2)
-    numbers[1].set_value(0)
-    labels = [element.text for element in client.elements.values() if isinstance(element, ui.label)]
-    assert all(finger in labels for finger in ('Thumb','Index','Middle','Ring','Little'))
-    assert any('same ID on one bus' in text for text in labels)
-    rename = next(element for element in client.elements.values()
-                  if isinstance(element, ui.button) and element.text == 'Renumber All')
-    next(event for event in rename._event_listeners.values() if event.type == 'click').handler(None)
-    act.call_args.args[0]()
-    hand.request_tactile_renumber.assert_called_once_with({(4,1):2,(3,1):0})
-    snapshot['id_reset']['tactile']['available'] = False
-    refresh(snapshot)
-    assert not rename.enabled and all(not number.enabled for number in numbers)
 
 
 def test_group_selection_refresh_updates_partial_state_without_selection_commands(page, monkeypatch):
@@ -307,7 +299,7 @@ def test_shell_has_one_stop_default_recording_and_exact_navigation(page):
     assert navigation.value == 'Calibration'
     panels = next(e for e in client.elements.values() if isinstance(e, ui.tab_panels))
     toolbars = [e for e in client.elements.values() if 'page-toolbar' in e.classes]
-    assert len(toolbars) == 12
+    assert len(toolbars) == 11
     workspace = next(e for e in client.elements.values() if isinstance(e, ui.splitter))
     assert panels.parent_slot is workspace.before
     assert all(isinstance(toolbar.parent_slot.parent, ui.tab_panel) for toolbar in toolbars)

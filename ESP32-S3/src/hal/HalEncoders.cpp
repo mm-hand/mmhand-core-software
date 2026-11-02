@@ -204,7 +204,7 @@ uint16_t HalEncoders::pickRegisterForState(int encoderId) const {
 /** @brief 返回当前逻辑手指组对应的138板CS译码通道。 */
 uint8_t HalEncoders::getGroupDemuxChannel(uint8_t groupIndex) const {
     if (groupIndex < GROUP_COUNT) {
-        return ENC_GROUP_CHANNEL_MAP[groupIndex];
+        return kFingerChannelMap[groupIndex];
     }
     return ENC_DEMUX_IDLE_CHANNEL;
 }

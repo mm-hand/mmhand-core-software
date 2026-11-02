@@ -12,19 +12,15 @@ import json
 from uuid import uuid4
 from desktop.paths import DEVICE_STATE_DIR, atomic_write_json
 from .id_protocol import CAPABILITY, BEGIN, END, PROBE, RENAME, plan_motor_ids, reconcile_motor_journal, motor_recovery_targets
-from .tactile_id_actions import TactileIdActions
 
 MOTOR_SCAN_ID_COUNT = 31
 MOTOR_BUS_COUNT = 4
 
 
-class IdResetActions(TactileIdActions):
+class IdResetActions:
     def _init_id_reset(self):
         self._id_reset = {
             'motor': dict(rows=[], message='Connect P4 and scan all buses.', generation=0, scanned=False, recovering=False),
-            'tactile': dict(rows=[], generation=0, recovering=False,
-                            message='Connect S3 directly and scan all fingers.', scanned=False,
-                            last_result=''),
         }
         self._id_scan_connections = {}
 
@@ -41,10 +37,6 @@ class IdResetActions(TactileIdActions):
         with self._application_lock:
             snapshot = deepcopy(self._id_reset)
         snapshot['motor']['available'] = fresh
-        tactile_comm = getattr(self, 'tactile_comm', None)
-        snapshot['tactile']['available'] = bool(tactile_comm and tactile_comm.is_connected())
-        if self._id_scan_connections.get('tactile') is not tactile_comm:
-            snapshot['tactile']['scanned'] = False
         if self._id_scan_connections.get('motor') != (self.comm, connection_generation):
             snapshot['motor']['scanned'] = False
         return snapshot
