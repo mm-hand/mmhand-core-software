@@ -81,7 +81,13 @@ private:
     bool setupSPI();
     void setAllSelectPinsHigh();
     void setSelectorPattern(uint8_t pattern);
-    bool readRegisters(uint8_t selectorPattern, uint16_t startAddr, uint8_t* payload, uint16_t payloadLen);
+    /** @brief 向指定模块发读命令并校验应答。 */
+    bool readRegisters(
+        uint8_t selectorPattern,
+        uint16_t startAddr,
+        uint8_t* payload,
+        uint16_t payloadLen
+    );
     void noteResponseGap(uint32_t gapUs);
     bool readSensorSummary(uint8_t groupIndex, uint8_t sensorIndex, uint8_t* globalOut, uint8_t* rawOut);
     bool readSensorForces(uint8_t groupIndex, uint8_t sensorIndex, uint8_t* forcesOut, uint16_t forcesLen);

@@ -689,9 +689,14 @@ class TactileSerialComm(_SerialSessionBase):
     def _flush_firmware_log_text(self) -> None:
         text = bytes(self._firmware_text_buffer).decode('ascii', errors='replace').strip()
         self._firmware_text_buffer.clear()
-        # Preserve the low-rate CAN health record; keep noisy raw SPI/debug text out.
+        # Preserve the low-rate CAN health record and the tactile CRC-failure
+        # probe; keep other noisy raw SPI/debug text out.
         if text.startswith('[S3 CAN] '):
             log_session('S3 CAN', text[len('[S3 CAN] '):][:240])
+        elif text.startswith('[TacRaw] '):
+            log_session('TACTILE_RAW', text[len('[TacRaw] '):][:400])
+        elif text.startswith('[TacOk] '):
+            log_session('TACTILE_OK', text[len('[TacOk] '):][:400])
 
     @staticmethod
     def _stabilize_tactile_groups(groups: List[List[List[int]]]) -> List[List[List[int]]]:

@@ -30,9 +30,10 @@ void startSystemTasks() {
     );
 
     // 触觉约33ms采样，固定在Core0；可通过编译开关关闭。
+    // 16KB：readRegisters每层约0.5KB栈，CRC失败探针（printf+慢重读嵌套）需要额外余量。
 #if ENABLE_TACTILE_TASK
     xTaskCreatePinnedToCore(
-        Task_Tactile, "TacTask", 8192, NULL, TASK_TAC_PRIO, &xTacTask, TASK_TAC_CORE
+        Task_Tactile, "TacTask", 16384, NULL, TASK_TAC_PRIO, &xTacTask, TASK_TAC_CORE
     );
 #else
     xTacTask = NULL;

@@ -215,7 +215,12 @@ void HalTactile::setSelectorPattern(uint8_t pattern) {
  * @brief 向指定模块发送寄存器读取命令，再读取状态、负载和CRC8。
  * @note 命令和响应拆成两次SPI事务，但在此期间保持同一物理路由被选中。
  */
-bool HalTactile::readRegisters(uint8_t selectorPattern, uint16_t startAddr, uint8_t* payload, uint16_t payloadLen) {
+bool HalTactile::readRegisters(
+    uint8_t selectorPattern,
+    uint16_t startAddr,
+    uint8_t* payload,
+    uint16_t payloadLen
+) {
     _lastReadResult = {TactileReadFailReason::None, 0, 0, 0};
     if (!payload || payloadLen == 0 || payloadLen > kForceDistributionMaxLen) {
         _lastReadResult.reason = TactileReadFailReason::InvalidArgument;
@@ -290,6 +295,26 @@ bool HalTactile::readRegisters(uint8_t selectorPattern, uint16_t startAddr, uint
     _lastReadResult.recvCrc = recvCrc;
     _lastReadResult.calcCrc = calcCrc;
 
+    // 诊断探针：把这一次事务线上收到的整帧（状态+数据+CRC）原样打出来。
+    // 按“选择器+寄存器”分别限流，保证同一模块的摘要读和全量读都能各看到一次。
+    // 确认根因后可删。
+    static uint32_t lastDumpMs[64] = {0};
+    static uint32_t lastFailMs[64] = {0};
+    const uint8_t dumpKey = (uint8_t)(selectorPattern |
+        ((startAddr == kForceDistributionAddr) ? 0x20 : 0x00));
+    auto dumpFrame = [&](const char* tag) {
+        Serial.printf("%s sel=%02X addr=%u len=%u gap=%lu ",
+                      tag,
+                      selectorPattern,
+                      (unsigned)startAddr,
+                      (unsigned)payloadLen,
+                      (unsigned long)gapUs);
+        for (uint16_t i = 0; i < responseLen; i++) {
+            Serial.printf("%02X", response[i]);
+        }
+        Serial.printf(" crc=%02X/%02X\n", recvCrc, calcCrc);
+    };
+
     if (recvCrc != calcCrc) {
         _lastReadResult.reason = TactileReadFailReason::CrcMismatch;
         if (gapUs > kLongGapUs) {
@@ -297,8 +322,19 @@ bool HalTactile::readRegisters(uint8_t selectorPattern, uint16_t startAddr, uint
         } else if (_crcFailShortGap != UINT16_MAX) {
             _crcFailShortGap++;
         }
+        lastFailMs[dumpKey] = millis();
+        if (millis() - lastDumpMs[dumpKey] >= 500) {
+            lastDumpMs[dumpKey] = millis();
+            dumpFrame("[TacRaw]");
+        }
         memset(payload, 0, payloadLen);
         return false;
+    }
+
+    // 该地址刚失败过，就补一条成功帧，方便和失败帧逐字节对比。
+    if (lastFailMs[dumpKey] != 0 && millis() - lastFailMs[dumpKey] < 3000) {
+        lastFailMs[dumpKey] = 0;
+        dumpFrame("[TacOk]");
     }
 
     memcpy(payload, raw + kLenCmdHead + kLenStatus, payloadLen);
