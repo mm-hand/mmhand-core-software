@@ -1,131 +1,303 @@
-"""V5 接触标定：合成恢复、采集规则、LUT 重标和结果 JSON。"""
+"""V6 手动接触标定：物理手指 link、二分类求解、标定包字段和 LUT 重标。"""
 
 import math
 
 import numpy as np
+import pytest
 
+from desktop.core import contact_calibration as contact_module
+from desktop.core.angle_mapping import get_spec
+from desktop.core.calibration_snapshot import (
+    _empty_v7_snapshot,
+    atomic_write_snapshot,
+    read_snapshot,
+    update_manual_snapshot,
+)
 from desktop.core.contact_calibration import (
-    CaptureConfig,
-    ContactRecorder,
-    _initial_mappings,
-    load_solution,
+    CONTACT_LINKS,
+    CONTACT_MARGIN_M,
+    CONTACT_PAIRS,
+    FINGER_JOINTS,
+    clear_contact,
+    contact_mappings,
+    counts_from_snapshot,
+    infer_pair,
+    initial_mappings,
+    model_angles,
     relabel_lut,
-    save_solution,
+    save_contact,
+    signed_counts,
     solve,
 )
-from desktop.core.kinematics import Kinematics, origin_matrix
+from desktop.core.kinematics import Kinematics
 from desktop.core.tactile_geometry import module_points
 from desktop.paths import DEFAULT_URDF_PATH
 
 
-def _synthetic(model, rng, truth=None):
-    mappings = _initial_mappings()
-    k0 = np.asarray([item["k"] for item in mappings])
-    b0 = np.asarray([item["b"] for item in mappings])
-    if truth is None:
-        k = k0 * (1.0 + rng.uniform(-0.005, 0.005, 21))
-        b = b0 + rng.uniform(-0.5, 0.5, 21)
-        translation = rng.uniform(-0.0005, 0.0005, (21, 3))
-        rotation = rng.uniform(-math.radians(0.3), math.radians(0.3), (21, 2))
-    else:
-        k, b, translation, rotation = truth
-    origins = {
-        name: model.correction_origin(name, translation[j], rotation[j, 0],
-                                      rotation[j, 1])
-        for j, name in enumerate(model.names)
-    }
-    pairs = ((0, 1), (0, 2), (0, 3), (0, 4), (1, 2),
-             (1, 3), (1, 4), (2, 3), (2, 4), (3, 4))
-    events = []
-    for _ in range(150):
-        finger_a, finger_b = pairs[int(rng.integers(len(pairs)))]
-        segment_a = int(rng.integers(3))
-        segment_b = int(rng.integers(3))
-        counts = rng.uniform(0.15, 0.85, 21) * 4000.0
-        q = counts * k + b
-        transforms = model.sensor_transforms(q[None], origins)[0]
-        index_a = finger_a * 3 + segment_a
-        index_b = finger_b * 3 + segment_b
-        points_a = module_points(segment_a)
-        point_a = points_a[int(rng.integers(len(points_a)))]
-        world = transforms[index_a] @ np.array([*point_a, 1.0])
-        point_b = (np.linalg.inv(transforms[index_b]) @ world)[:3]
-        events.append({
-            "c": counts.tolist(),
-            "a": {"finger": finger_a, "segment": segment_a,
-                  "point": point_a.tolist(), "force": 100.0},
-            "b": {"finger": finger_b, "segment": segment_b,
-                  "point": point_b.tolist(), "force": 100.0},
-        })
-    return events, (k, b, translation, rotation), mappings
+def _snapshot(with_manual=True):
+    return {'control_mode': 'IDLE', 'communication': 'Online', 'joints': [
+        {'raw': (1000 + joint * 7) % 16384, 'manual_min': 1000,
+         'manual_max': 5000, 'manual_valid': with_manual}
+        for joint in range(21)]}
 
 
-def test_synthetic_contact_data_recovers_kb_and_fits_held_out_contacts():
-    model = Kinematics(DEFAULT_URDF_PATH)
-    rng = np.random.default_rng(7)
-    events, truth, mappings = _synthetic(model, rng)
-    solution = solve(events, mappings, iterations=20)
-    k_true, b_true, translation_true, rotation_true = truth
-    params = np.asarray(solution["params"])
-    # k 在接触数据里可辨识；几何/ b 有一部分落在“无传感器中间 link”的规范零空间，
-    # 因此用 held-out 接触残差验证模型，而不是要求每个随机真值逐项还原。
-    assert np.max(np.abs(params[:, 5] / k_true - 1.0)) < 0.01
-    assert solution["rms_after_mm"] < 0.1
-
-    held_rng = np.random.default_rng(99)
-    held, _, _ = _synthetic(model, held_rng, truth)
-    recovered = {
-        name: origin_matrix(value["xyz"], value["rpy"])
-        for name, value in solution["origins"].items()
-    }
-    residuals = []
-    for event in held:
-        counts = np.asarray(event["c"], float)
-        angles = counts * np.asarray(solution["k"]) + np.asarray(solution["b"])
-        transforms = model.sensor_transforms(angles[None], recovered)[0]
-        index_a = event["a"]["finger"] * 3 + event["a"]["segment"]
-        index_b = event["b"]["finger"] * 3 + event["b"]["segment"]
-        pa = transforms[index_a] @ np.array([*event["a"]["point"], 1.0])
-        pb = transforms[index_b] @ np.array([*event["b"]["point"], 1.0])
-        residuals.append(np.linalg.norm((pa - pb)[:3]))
-    assert np.sqrt(np.mean(np.square(residuals))) * 1000.0 < 0.1
+def test_signed_counts_matches_the_p4_window_and_rejects_bad_manual():
+    assert signed_counts(1000, 1000, 5000) == 0
+    assert signed_counts(3000, 1000, 5000) == 2000
+    assert signed_counts(5000, 5000, 1000) == 0
+    assert signed_counts(4000, 5000, 1000) == -1000
+    assert signed_counts(1000, 5000, 1000) == 16384 - 4000
+    assert signed_counts(3000, 1000, 1000) is None
+    assert signed_counts(None, 1000, 5000) is None
+    assert signed_counts(3000, None, 5000) is None
 
 
-def _snapshot(with_contact=True):
-    rows = []
-    for joint in range(21):
-        rows.append({
-            "angle": 0.0, "raw": (1000 + joint * 7) % 16384,
-            "manual_min": 1000, "manual_max": 5000, "manual_valid": True,
-        })
-    modules = []
-    for finger, segment in ((0, 0), (1, 0)):
-        points = module_points(segment)
-        shape = (4, 13, 3) if segment == 0 else (5, 5, 3)
-        taxels = np.zeros(shape)
-        taxels.reshape(-1, 3)[0] = (60.0, 0.0, 0.0)
-        modules.append({
-            "finger": finger, "module": segment, "valid": True,
-            "force": [60.0, 0.0, 0.0] if with_contact else [0.0, 0.0, 0.0],
-            "taxels": taxels.tolist(),
-        })
-    return {"control_mode": "IDLE", "joints": rows,
-            "tactile": {"source": "S3_SERIAL", "level": "FULL",
-                        "modules": modules}}
-
-
-def test_recorder_requires_static_two_finger_full_contact():
-    recorder = ContactRecorder(CaptureConfig(force_min=10.0, weight_min=1.0))
+def test_counts_from_snapshot_names_the_missing_field():
+    counts, reason = counts_from_snapshot(_snapshot())
+    assert reason is None and len(counts) == 21
     snapshot = _snapshot()
-    recorder.observe(snapshot, now=1.0)
-    recorder.observe(snapshot, now=1.1)
-    recorder.observe(snapshot, now=1.2)
-    assert len(recorder.events) == 1
-    event = recorder.events[0]
-    assert event["a"]["finger"] != event["b"]["finger"]
-    assert len(event["c"]) == 21
-    recorder.observe(snapshot, now=2.0)
-    assert len(recorder.events) == 1  # 同姿态去重
+    snapshot['joints'][0]['raw'] = None
+    assert counts_from_snapshot(snapshot) == (None, 'encoder raw data is not fresh')
+    snapshot = _snapshot()
+    snapshot['joints'][0]['manual_valid'] = False
+    assert counts_from_snapshot(snapshot) == (None, 'a joint is missing Manual Min/Max')
+    snapshot = _snapshot()
+    snapshot['joints'][0]['manual_max'] = snapshot['joints'][0]['manual_min']
+    assert counts_from_snapshot(snapshot) == (None, "a joint's Manual Min/Max is invalid")
+    assert counts_from_snapshot({'joints': []})[1] == 'joint data is incomplete'
+
+
+def test_initial_mappings_use_manual_span():
+    mappings = initial_mappings([1000] * 21, [9000] * 21)
+    low, high = get_spec(1).urdf_range_deg
+    assert mappings[1] == {'k': (high - low) / 8000.0, 'b': low}
+    assert model_angles([0, 100], [2.0], [-10.0]).tolist() == [-10.0, 190.0]
+
+
+def test_contact_links_are_the_physical_finger_links():
+    assert CONTACT_LINKS[:3] == ('link_finger_tip_5', 'link_distal_phalanx_5',
+                                 'link_proximal_phalanx_5')
+    assert CONTACT_LINKS[12:] == ('link_finger_tip_1', 'link_distal_phalanx_1',
+                                  'link_proximal_phalanx_1')
+    assert not any(name.endswith('_sensor') for name in CONTACT_LINKS)
+
+
+def _clouds():
+    return contact_module._clouds(DEFAULT_URDF_PATH)
+
+
+def _pair_gap(frames, pair, clouds):
+    finger, other, segment = pair
+    tip = clouds[0] @ frames[finger * 3].T
+    target = clouds[segment] @ frames[other * 3 + segment].T
+    return float(np.linalg.norm(tip[:, None, :] - target[None, :, :],
+                                axis=-1).min())
+
+
+def _truth(model, rng):
+    mappings = initial_mappings()
+    k0 = np.asarray([item['k'] for item in mappings])
+    b0 = np.asarray([item['b'] for item in mappings])
+    k = k0 * (1.0 + rng.uniform(-0.02, 0.02, 21))
+    b = b0 + rng.uniform(-2.0, 2.0, 21)
+    translation = rng.uniform(-0.001, 0.001, (21, 3))
+    rotation = rng.uniform(-math.radians(1.0), math.radians(1.0), (21, 2))
+    origins = {
+        name: model.correction_origin(name, translation[joint],
+                                      rotation[joint, 0], rotation[joint, 1])
+        for joint, name in enumerate(model.names)}
+    return mappings, k, b, origins
+
+
+def _touching_events(model, origins, k, b, rng, contacts):
+    """用真值摆出真接触，再在同指同段上方 10% 量程处取“接近但未接触”。"""
+    clouds = _clouds()
+    events = []
+    for _attempt in range(400):
+        if sum(1 for event in events if event['y'] == 1) >= contacts:
+            break
+        counts = rng.uniform(0.1, 0.9, 21) * 4000.0
+        frames = model.link_transforms(
+            model_angles(counts, k, b), origins, CONTACT_LINKS)[0]
+        gaps = np.asarray([_pair_gap(frames, pair, clouds) for pair in CONTACT_PAIRS])
+        pair = CONTACT_PAIRS[int(np.argmin(gaps))]
+        joint = FINGER_JOINTS[pair[0]][1]
+        best_counts, best_gap = counts.copy(), float(gaps.min())
+        for value in np.linspace(0.0, 4000.0, 41):
+            trial = counts.copy()
+            trial[joint] = value
+            frames = model.link_transforms(
+                model_angles(trial, k, b), origins, CONTACT_LINKS)[0]
+            gap = _pair_gap(frames, pair, clouds)
+            if gap < best_gap:
+                best_gap, best_counts = gap, trial
+        step = 4000.0 / 40.0
+        for value in np.linspace(best_counts[joint] - step,
+                                 best_counts[joint] + step, 21):
+            trial = best_counts.copy()
+            trial[joint] = value
+            frames = model.link_transforms(
+                model_angles(trial, k, b), origins, CONTACT_LINKS)[0]
+            gap = _pair_gap(frames, pair, clouds)
+            if gap < best_gap:
+                best_gap, best_counts = gap, trial
+        if best_gap > CONTACT_MARGIN_M:
+            continue
+        events.append({'c': best_counts.tolist(), 'y': 1,
+                       'fingertip': pair[0], 'pair': pair})
+        close = best_counts.copy()
+        close[joint] = best_counts[joint] + 400.0
+        frames = model.link_transforms(
+            model_angles(close, k, b), origins, CONTACT_LINKS)[0]
+        if _pair_gap(frames, pair, clouds) > 2.0 * CONTACT_MARGIN_M:
+            events.append({'c': close.tolist(), 'y': 0,
+                           'fingertip': pair[0], 'pair': pair})
+    return events
+
+
+_SYNTHETIC = {}
+
+
+def _synthetic():
+    if not _SYNTHETIC:
+        model = Kinematics(DEFAULT_URDF_PATH)
+        rng = np.random.default_rng(7)
+        mappings, k, b, origins = _truth(model, rng)
+        events = _touching_events(model, origins, k, b, rng, contacts=12)
+        _SYNTHETIC.update(events=events, mappings=mappings)
+    return _SYNTHETIC['events'], _SYNTHETIC['mappings']
+
+
+def test_synthetic_contact_data_fits_the_two_class_model():
+    events, mappings = _synthetic()
+    assert sum(1 for event in events if event['y'] == 1) >= 8
+    assert sum(1 for event in events if event['y'] == 0) >= 4
+
+    solution = solve(events, mappings, iterations=4, optimize_geometry=True)
+    assert solution['base_k'] == [item['k'] for item in mappings]
+    assert solution['base_b'] == [item['b'] for item in mappings]
+    assert solution['optimized'] == {'kb': True, 'geometry': True}
+    assert solution['clearance_after_mm'] <= solution['clearance_before_mm']
+    assert solution['contact_pass'] + solution['negative_pass'] >= (
+        solution['contact_total'] + solution['negative_total']) // 2
+    for joint in range(21):
+        base_k, base_b = mappings[joint]['k'], mappings[joint]['b']
+        assert 0.9 * base_k <= solution['k'][joint] <= 1.1 * base_k
+        assert abs(solution['b'][joint] - base_b) <= 5.0 + 1e-9
+        params = solution['params'][joint]
+        assert np.linalg.norm(params[:3]) <= 0.005 + 1e-9
+        assert abs(params[3]) <= math.radians(3.0) + 1e-9
+        assert abs(params[4]) <= math.radians(3.0) + 1e-9
+
+
+def test_solve_kb_only_leaves_the_urdf_origins_alone():
+    events, mappings = _synthetic()
+    solution = solve(events, mappings, iterations=3, optimize_geometry=False)
+    assert solution['optimized'] == {'kb': True, 'geometry': False}
+    assert solution['origins'] == {}
+    assert all(not any(params[:5]) for params in solution['params'])
+    for joint in range(21):
+        base_k, base_b = mappings[joint]['k'], mappings[joint]['b']
+        assert 0.9 * base_k <= solution['k'][joint] <= 1.1 * base_k
+        assert abs(solution['b'][joint] - base_b) <= 5.0 + 1e-9
+
+
+def test_solve_geometry_only_keeps_the_base_kb():
+    events, mappings = _synthetic()
+    solution = solve(events, mappings, iterations=3, optimize_kb=False,
+                     optimize_geometry=True)
+    assert solution['optimized'] == {'kb': False, 'geometry': True}
+    assert solution['k'] == solution['base_k']
+    assert solution['b'] == solution['base_b']
+
+
+def test_solve_requires_at_least_one_correction_and_one_contact():
+    mappings = initial_mappings()
+    with pytest.raises(ValueError, match='select at least one'):
+        solve([{'c': [0.0] * 21, 'y': 1}], mappings,
+              optimize_kb=False, optimize_geometry=False)
+    with pytest.raises(ValueError, match='at least one contact'):
+        solve([{'c': [0.0] * 21, 'y': 0}], mappings)
+    with pytest.raises(ValueError, match='invalid contact events'):
+        solve([{'y': 1}], mappings)
+
+
+def _fist_counts():
+    mappings = initial_mappings()
+    k0 = np.asarray([item['k'] for item in mappings])
+    b0 = np.asarray([item['b'] for item in mappings])
+    angles = b0.copy()
+    for finger, joints in enumerate(FINGER_JOINTS):
+        if finger == 4:
+            angles[joints[0]] = -20.0
+            angles[joints[1]] = 45.0
+            angles[joints[4]] = 40.0
+        else:
+            angles[joints[1]] = 70.0
+            angles[joints[2]] = 75.0
+            angles[joints[3]] = 45.0
+    return (angles - b0) / k0, mappings
+
+
+def _base_frames(counts):
+    mappings = initial_mappings()
+    model = Kinematics(DEFAULT_URDF_PATH)
+    return model.link_transforms(
+        model_angles(counts, [item['k'] for item in mappings],
+                     [item['b'] for item in mappings]),
+        None, CONTACT_LINKS)[0]
+
+
+def test_infer_pair_is_limited_to_the_fingertip():
+    counts, mappings = _fist_counts()
+    finger, other, segment, clearance = infer_pair(counts, mappings, 0)
+    frames = _base_frames(counts)
+    clouds = _clouds()
+    expected = min((_pair_gap(frames, pair, clouds), pair)
+                   for pair in CONTACT_PAIRS if pair[0] == 0)
+    assert (finger, other, segment) == expected[1]
+    assert math.isclose(clearance, expected[0] * 1000.0, abs_tol=1e-9)
+
+
+def test_solve_uses_only_the_selected_fingertip():
+    counts, mappings = _fist_counts()
+    frames = _base_frames(counts)
+    clouds = _clouds()
+    global_gap = min(_pair_gap(frames, pair, clouds) for pair in CONTACT_PAIRS)
+    pinky_gap = min(_pair_gap(frames, pair, clouds)
+                    for pair in CONTACT_PAIRS if pair[0] == 0)
+    assert pinky_gap > global_gap  # 全局最近对不是小指，必须按 fingertip 收窄
+    tagged = solve([{'c': counts.tolist(), 'y': 1, 'fingertip': 0}],
+                   mappings, iterations=0)
+    untagged = solve([{'c': counts.tolist(), 'y': 1}], mappings, iterations=0)
+    assert math.isclose(tagged['clearance_before_mm'], pinky_gap * 1000.0,
+                        abs_tol=1e-9)
+    assert math.isclose(untagged['clearance_before_mm'], global_gap * 1000.0,
+                        abs_tol=1e-9)
+
+
+def test_solve_rejects_an_invalid_fingertip():
+    with pytest.raises(ValueError, match='invalid fingertip'):
+        solve([{'c': [0.0] * 21, 'y': 1, 'fingertip': 9}],
+              initial_mappings(), iterations=0)
+
+
+def test_physical_link_points_are_the_sensor_points():
+    model = Kinematics(DEFAULT_URDF_PATH)
+    mappings = initial_mappings()
+    counts = np.linspace(200.0, 3800.0, 21)
+    angles = model_angles(counts, [item['k'] for item in mappings],
+                          [item['b'] for item in mappings])
+    link_frames = model.link_transforms(angles, None, CONTACT_LINKS)
+    sensor_frames = model.sensor_transforms(angles)
+    clouds = _clouds()
+    for index in range(15):
+        segment = index % 3
+        sensor_points = np.column_stack([module_points(segment),
+                                         np.ones(len(module_points(segment)))])
+        assert np.allclose(clouds[segment] @ link_frames[0, index].T,
+                           sensor_points @ sensor_frames[0, index].T,
+                           atol=1e-12)
 
 
 def test_relabel_lut_keeps_motor_values_and_tracks_same_counts():
@@ -152,21 +324,36 @@ def test_relabel_lut_keeps_motor_values_and_tracks_same_counts():
                             abs_tol=1e-4)
 
 
-def test_solution_json_round_trips_and_rejects_changed_urdf(tmp_path):
-    model = Kinematics(DEFAULT_URDF_PATH)
-    names = list(model.names)
-    solution = {
-        "names": names, "k": [0.01] * 21, "b": [0.0] * 21, "origins": {},
-        "joint_events": [10] * 21, "weak": [], "rejected": [],
-        "events": 100, "rms_before_mm": 1.0, "rms_after_mm": 0.2,
-    }
-    path = tmp_path / "contact.json"
-    save_solution(path, solution, calibration_path=tmp_path / "missing.json")
-    payload, reason = load_solution(path, calibration_path=tmp_path / "missing.json")
-    assert reason is None and payload["events"] == 100
-    assert len(payload["joints"]) == 21
-    # 用不同的 URDF 哈希模拟模型变化。
-    payload2, reason2 = load_solution(
-        path, urdf_path=tmp_path / "other.urdf",
-        calibration_path=tmp_path / "missing.json")
-    assert payload2 is None and "urdf_sha256" in reason2
+def test_contact_solution_lives_in_the_calibration_bundle(tmp_path, monkeypatch):
+    path = tmp_path / "bundle.mmcal.json"
+    atomic_write_snapshot(path, _empty_v7_snapshot())
+    names = [get_spec(joint).urdf_joint_name for joint in range(21)]
+    solution = {"names": names, "k": [0.01] * 21, "b": [0.5] * 21,
+                "base_k": [0.02] * 21, "base_b": [0.4] * 21,
+                "origins": {names[3]: {"xyz": [0.001, 0.0, 0.0],
+                                       "rpy": [0.0, 0.0, 0.0]}}}
+    save_contact(path, solution)
+    payload = read_snapshot(path)
+    stored = contact_mappings(payload)
+    assert len(stored) == 21 and stored[names[3]] == (0.01, 0.5)
+    assert payload["contact_calibration"][names[3]]["base_k"] == 0.02
+    assert payload["contact_calibration"][names[3]]["base_b"] == 0.4
+    assert "xyz" not in payload["contact_calibration"][names[0]]
+    assert "rpy" not in payload["contact_calibration"][names[0]]
+    # contact 结果只写自己的字段，不动 Joint Calibration 结果。
+    assert payload["joint_calib_results"] == [None] * 21
+
+    monkeypatch.setattr(contact_module, "CALIB_ACTIVE_SNAPSHOT_PATH", path)
+    origins = contact_module.active_origins()
+    assert set(origins) == {names[3]}
+    assert origins[names[3]]["xyz"] == [0.001, 0.0, 0.0]
+
+    # 其它标定写入必须保留 contact 字段。
+    update_manual_snapshot(path, valid_mask=1 << 3, min_raw=[0] * 21,
+                           max_raw=[5000] * 21, updated_joint_mask=1 << 3)
+    assert contact_mappings(read_snapshot(path))[names[3]] == (0.01, 0.5)
+
+    clear_contact(path)
+    payload = read_snapshot(path)
+    assert contact_mappings(payload) == {}
+    assert payload["joint_calib_results"] == [None] * 21

@@ -19,7 +19,7 @@ from .web.common import show
 
 TABS = ['Calibration', 'Control', 'Plot', 'Settings']
 SUBTABS = {
-    'Calibration': ['Joint Calibration', 'Contact Calibration', 'Motor Calibration'],
+    'Calibration': ['Joint Calibration', 'Contact Calibration (optional)', 'Motor Calibration'],
     'Control': ['Feedback Control', 'Direct Control', 'Replay'],
     'Plot': ['Hand', 'Curves'],
     'Settings': ['Renumber Motor', 'Control Parameters', 'Diagnostics'],
@@ -393,7 +393,7 @@ def build_page(hand):
                                 for name in SUBTABS[group]:
                                     with ui.tab_panel(name):
                                         if name == 'Joint Calibration': refreshers[name] = joint_calibration.build(hand, act, open_import, confirm)
-                                        elif name == 'Contact Calibration': refreshers[name] = contact_view.build(hand, act)
+                                        elif name == 'Contact Calibration (optional)': refreshers[name] = contact_view.build(hand, act)
                                         elif name == 'Motor Calibration': refreshers[name] = motor_calibration.build(hand, act, open_import)
                                         elif name == 'Feedback Control': refreshers[name] = feedback_control.build(hand, act)
                                         elif name == 'Direct Control': refreshers[name] = direct_control.build(hand, act, confirm, leave_direct_control)

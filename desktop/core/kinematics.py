@@ -147,9 +147,8 @@ class Kinematics:
         self.by_name = {joint["name"]: joint for joint in self.joints}
         self.names = tuple(JOINT_SPECS[index].urdf_joint_name
                            for index in range(len(JOINT_SPECS)))
-        self.sensor_indices = np.asarray(
-            [link_index[SENSOR_LINKS[sensor]] for sensor in SENSOR_ORDER],
-            dtype=int)
+        self.link_index = link_index
+        self.sensor_names = tuple(SENSOR_LINKS[sensor] for sensor in SENSOR_ORDER)
 
     def correction_origin(self, joint_name, translation, alpha, beta):
         """由 3 平移 + 2 垂直轴旋转合成最终关节原点 T0·E。"""
@@ -164,8 +163,8 @@ class Kinematics:
         error[:3, 3] = np.asarray(translation, float)
         return joint["origin"] @ error
 
-    def sensor_transforms(self, q_deg, origins=None):
-        """返回 (E, 15, 4, 4)；q_deg 形状 (E, 21)。"""
+    def _forward(self, q_deg, origins=None):
+        """返回所有 link 的 (E, 4, 4) 位姿列表。"""
         q = np.asarray(q_deg, float)
         if q.ndim == 1:
             q = q[None]
@@ -186,4 +185,16 @@ class Kinematics:
                 motion[:, :3, :3] = _rodrigues_batch(joint["axis"], radians[:, index])
                 child = child @ motion
             transforms[joint["child"]] = child
-        return np.stack([transforms[index] for index in self.sensor_indices], axis=1)
+        return transforms
+
+    def sensor_transforms(self, q_deg, origins=None):
+        """返回 (E, 15, 4, 4)；q_deg 形状 (E, 21)。"""
+        transforms = self._forward(q_deg, origins)
+        return np.stack([transforms[self.link_index[name]]
+                         for name in self.sensor_names], axis=1)
+
+    def link_transforms(self, q_deg, origins=None, link_names=None):
+        """返回指定 URDF link 名的 (E, N, 4, 4)，给接触标定等使用。"""
+        transforms = self._forward(q_deg, origins)
+        return np.stack([transforms[self.link_index[name]]
+                         for name in (link_names or self.sensor_names)], axis=1)

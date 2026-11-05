@@ -31,7 +31,7 @@ from .math import (
     forward_encoder_delta, wrap_encoder_count, encoder_for_positive_travel,
     signed_encoder_delta, round_to_int32, f32,
     build_calibration_result, build_tendon_lut, tendon_motor_abs_range,
-    tendon_motor_abs_limits,
+    tendon_motor_abs_limits, apply_contact_refinement,
 )
 from .time_alignment import TimeAlignmentError
 
@@ -227,6 +227,7 @@ def _finish_release(ctx, io, params, targets, current_raw, encoder, actual,
               p.CALIB_DIAG_PHASE_RELEASE, a=ctx.fit_samples.count,
               b=result["encoderSpan"], c=result.get("tendonLutCount", 0))
         return
+    apply_contact_refinement(io, ctx.joint, result)
     envelope = tendon_motor_abs_range(result, 0)
     if result["tendonLutMotor"][0] != ctx.motor or envelope is None:
         _fail(ctx, io, "single tendon LUT range invalid", p.CALIB_DIAG_REASON_RESULT_BUILD_FAILED,

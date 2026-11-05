@@ -103,6 +103,29 @@ def apply_manual_scaled_mapping(io, joint: int, result: dict,
     return True
 
 
+def apply_contact_refinement(io, joint: int, result: dict) -> bool:
+    """把 contact calibration 的修正 k/b 合进已建好 LUT 的 result。"""
+    lookup = getattr(io, "contact_kb", None)
+    refined = lookup(joint) if callable(lookup) else None
+    if not refined:
+        return False
+    from ..contact_calibration import relabel_lut
+
+    old_k = float(result.get("angleK", 0.0) or 0.0)
+    old_b = float(result.get("angleB", 0.0) or 0.0)
+    new_k, new_b = (float(value) for value in refined)
+    span = int(result.get("manualSpanCounts", 0) or 0)
+    urdf_min, urdf_max = (float(value) for value in io.urdf_limits(joint))
+    if (old_k <= 0.0 or span <= 0 or not math.isfinite(new_k) or new_k <= 0.0
+            or not math.isfinite(new_b)
+            or abs(new_k / old_k - 1.0) > 0.10 or abs(new_b - old_b) > 5.0
+            or abs(new_b - urdf_min) > 5.0
+            or abs(new_k * span + new_b - urdf_max) > 5.0):
+        return False
+    result.update(relabel_lut(result, old_k, old_b, new_k, new_b))
+    return True
+
+
 def map_manual_scaled_encoder_to_urdf(io, joint: int, result: dict,
                                     raw: int) -> dict | None:
     """原 mapManualScaledEncoderToUrdf；Auto 不参与反馈角比例。"""

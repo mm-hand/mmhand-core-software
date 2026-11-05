@@ -37,7 +37,7 @@ def test_every_native_page_builds_and_refreshes_unknown_feedback(page, name):
     builders = {
         'Renumber Motor': lambda: renumber_motors.build(hand, act),
         'Joint Calibration': lambda: joint_calibration.build(hand, act, load, confirm),
-        'Contact Calibration': lambda: contact_view.build(hand, act),
+        'Contact Calibration (optional)': lambda: contact_view.build(hand, act),
         'Motor Calibration': lambda: motor_calibration.build(hand, act, load),
         'Feedback Control': lambda: feedback_control.build(hand, act),
         'Direct Control': lambda: direct_control.build(hand, act, confirm),
@@ -51,6 +51,23 @@ def test_every_native_page_builds_and_refreshes_unknown_feedback(page, name):
     act.assert_not_called()
     confirm.assert_not_called()
     assert client.elements
+
+def test_curves_plot_window_is_last_ten_seconds(page):
+    hand, client = page
+    refresh = plots.build(hand, Mock())
+    snapshot = hand.application_snapshot()
+    base = 1000.0
+    snapshot['curves'] = [dict(host_time=base + i, p4_time_ms=(base + i) * 1000,
+                               angles=[0.0] * 21, targets=[0.0] * 21) for i in range(20)]
+    snapshot['control_components'] = [dict(host_time=base + i, p4_time_ms=(base + i) * 1000,
+        components={'proportional_counts': [0] * 27, 'integral_counts': [0] * 27,
+                    'reversal_counts': [0] * 27},
+        detail={'servo_valid_mask': 1, 'recovery_counts': [0] * 27}) for i in range(20)]
+    refresh(snapshot)
+    charts = [element for element in client.elements.values() if isinstance(element, ui.echart)]
+    joint_axis, component_axis = (chart.options['xAxis'] for chart in charts[:2])
+    assert (joint_axis['min'], joint_axis['max']) == (9.0, 19.0)
+    assert (component_axis['min'], component_axis['max']) == (1009.0, 1019.0)
 
 @pytest.mark.parametrize('name', ['Joint Calibration', 'Motor Calibration', 'Feedback Control', 'Replay'])
 def test_finger_joint_labels_and_order(page, name):
@@ -75,11 +92,11 @@ def test_hand_models_follow_feedback_and_control_state(page):
     init_handlers = [event.handler for event in scene._event_listeners.values() if event.type == 'init']
     init_handlers[-1]()
     models = [obj for obj in scene.objects.values() if obj.parent.id == 'scene']
-    assert len(models) == 3
-    original, measured, target = models
+    assert len(models) == 2
+    measured, target = models
     snapshot = hand.application_snapshot()
     refresh(snapshot)
-    assert original.visible_ and measured.visible_ and not target.visible_
+    assert measured.visible_ and not target.visible_
     assert all(obj.visible_ for obj in scene.objects.values()
                if measured in obj.ancestors and type(obj).__name__ == 'Stl')
 
@@ -289,6 +306,7 @@ def test_shell_has_one_stop_default_recording_and_exact_navigation(page):
     tabs = [e._props['name'] for e in client.elements.values() if isinstance(e, ui.tab)]
     buttons = [e for e in client.elements.values() if isinstance(e, ui.button)]
     assert TABS == ['Calibration', 'Control', 'Plot', 'Settings']
+    assert SUBTABS['Calibration'] == ['Joint Calibration', 'Contact Calibration (optional)', 'Motor Calibration']
     assert tabs == [*TABS, *SUBTABS['Calibration'], *SUBTABS['Control'], *SUBTABS['Plot'], *SUBTABS['Settings']]
     assert sum('STOP' in e.text for e in buttons) == 1
     # The top button turns into Clear Faults and only enables with fresh P4 status.
@@ -594,3 +612,99 @@ def test_firmware_error_popup_is_global_and_once_per_online_session(page):
     snapshot['motor_firmware_alerts'] = [dict(motor=2, generation=2, version='3.9', bus=0)]
     tick.callback()
     assert dialog.value
+
+
+def test_contact_calibration_preconditions_need_idle_and_manual_endpoints():
+    rows = [dict(raw=1000, manual_min=1000, manual_max=5000, manual_valid=True)
+            for _ in range(21)]
+    snapshot = dict(communication='Online', control_mode='IDLE', busy=False, joints=rows)
+    assert all(ok for _, ok in contact_view._preconditions(snapshot))
+    rows[0]['manual_valid'] = False
+    assert not dict(contact_view._preconditions(snapshot))['21/21 Manual']
+    snapshot['control_mode'] = 'FEEDBACK'
+    assert not dict(contact_view._preconditions(snapshot))['IDLE']
+
+
+def test_contact_page_has_manual_controls_and_short_instructions(page):
+    hand, client = page
+    contact_view.build(hand, Mock())
+    buttons = [element.text for element in client.elements.values()
+               if isinstance(element, ui.button)]
+    assert buttons[:6] == ['Record Contact', 'Record Close (no contact)',
+                           'Delete Last Sample', 'Solve',
+                           'Save Contact Calibration', 'Clear Contact Calibration']
+    checkboxes = [element for element in client.elements.values()
+                  if isinstance(element, ui.checkbox)]
+    assert [element.text for element in checkboxes] == [
+        'Encoder correction (k/b)', 'Joint axis translation & rotation']
+    assert checkboxes[0].value is True and checkboxes[1].value is False
+    selects = [element for element in client.elements.values()
+               if isinstance(element, ui.select)]
+    assert len(selects) == 1 and selects[0].props.get('label') == 'Fingertip'
+    assert selects[0].value is None
+    texts = ' '.join(element.text for element in client.elements.values()
+                     if isinstance(element, ui.label) and isinstance(element.text, str))
+    assert 'Select the fingertip' in texts
+    assert 'Gray: Joint Calibration pose · Blue: corrected pose' in texts
+    assert 'Finger contact/close:' in texts
+    assert '\n' not in contact_view.INSTRUCTIONS
+
+
+def test_contact_gap_text_is_human_readable():
+    text = contact_view._gap_text({'clearance_before_mm': 7.1,
+                                   'clearance_after_mm': 1.7})
+    assert text == ('Average gap between touching fingers: '
+                    '7.1 mm before, 1.7 mm after.')
+
+
+def test_contact_page_delete_last_sample_restores_counts(page):
+    hand, client = page
+    contact_view.build(hand, Mock())
+    snapshot = hand.application_snapshot(include_curves=False)
+    snapshot.update(communication='Online', control_mode='IDLE', busy=False)
+    for row in snapshot['joints']:
+        row.update(raw=1000, manual_min=1000, manual_max=5000, manual_valid=True)
+    hand.application_snapshot = lambda **_: snapshot
+    select = next(element for element in client.elements.values()
+                  if isinstance(element, ui.select))
+    select.set_value(0)  # Pinky
+    click(button(client, 'Record Close (no contact)'))
+    labels = [element.text for element in client.elements.values()
+              if isinstance(element, ui.label) and isinstance(element.text, str)]
+    text = next(text for text in labels
+                if text.startswith('Finger contact/close:'))
+    assert 'Pinky 0/1' in text
+    assert text.count('/1') == 2  # 选中的指尖 + 推断出的目标指
+    click(button(client, 'Delete Last Sample'))
+    labels = [element.text for element in client.elements.values()
+              if isinstance(element, ui.label) and isinstance(element.text, str)]
+    text = next(text for text in labels
+                if text.startswith('Finger contact/close:'))
+    assert '/1' not in text and 'Pinky 0/0' in text
+
+
+def test_contact_page_rejects_a_sample_without_a_fingertip(page):
+    hand, client = page
+    contact_view.build(hand, Mock())
+    snapshot = hand.application_snapshot(include_curves=False)
+    snapshot.update(communication='Online', control_mode='IDLE', busy=False)
+    for row in snapshot['joints']:
+        row.update(raw=1000, manual_min=1000, manual_max=5000, manual_valid=True)
+    hand.application_snapshot = lambda **_: snapshot
+    click(button(client, 'Record Close (no contact)'))
+    labels = [element.text for element in client.elements.values()
+              if isinstance(element, ui.label) and isinstance(element.text, str)]
+    assert 'Select the fingertip first.' in labels
+    assert any(text.startswith('Finger contact/close:')
+               and '/1' not in text for text in labels)
+
+
+def test_contact_page_builds_gray_and_blue_models(page):
+    hand, client = page
+    contact_view.build(hand, Mock())
+    scene = next(element for element in client.elements.values() if isinstance(element, ui.scene))
+    init_handlers = [event.handler for event in scene._event_listeners.values() if event.type == 'init']
+    init_handlers[-1]()
+    models = [obj for obj in scene.objects.values() if obj.parent.id == 'scene']
+    assert len(models) == 2
+    assert models[0].visible_ and not models[1].visible_

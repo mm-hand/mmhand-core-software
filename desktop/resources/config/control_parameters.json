@@ -1,7 +1,7 @@
 {
   "schema_version": 7,
-  "revision": 561,
-  "ramp_revision": 140,
+  "revision": 565,
+  "ramp_revision": 144,
   "joint_kp": {
     "aa": 0.45,
     "mcp": 1.0,
@@ -74,8 +74,8 @@
     "takeup_timeout_ms": 600
   },
   "collision": {
-    "arm_velocity_flex_deg_s": 8.0,
-    "arm_velocity_extend_deg_s": 8.0,
+    "arm_velocity_flex_deg_s": 100.0,
+    "arm_velocity_extend_deg_s": 100.0,
     "stall_velocity_flex_deg_s": 1.0,
     "stall_velocity_extend_deg_s": 1.0,
     "min_error_deg": 4.0,

@@ -45,9 +45,18 @@ class CalibrationSnapshotError(ValueError):
 
 def upgrade_snapshot_to_current(payload: dict) -> dict:
     """V4 -> V5：补 angleK/angleB、新 CRC/指纹并重新封存；不重做物理标定。"""
-    if int(payload.get("manual_scaled_mapping_version", 0) or 0) == 5:
+    version = int(payload.get("manual_scaled_mapping_version", 0) or 0)
+    if version == 0:
+        # 由空快照重建的 bundle 只在 product_fingerprint 里留有映射版本；
+        # 补回顶层字段并重新封存，否则本机自己的 bundle 无法再被导入。
+        fingerprint = payload.get("product_fingerprint")
+        version = int(fingerprint.get("manual_scaled_mapping_version", 0) or 0) \
+            if isinstance(fingerprint, dict) else 0
+        if version:
+            payload = seal_snapshot(dict(payload, manual_scaled_mapping_version=version))
+    if version == 5:
         return payload
-    if int(payload.get("manual_scaled_mapping_version", 0) or 0) != 4:
+    if version != 4:
         raise CalibrationSnapshotError("unsupported manual-scaled mapping version")
 
     from desktop.paths import PRODUCT_FINGERPRINT_PATH
@@ -545,9 +554,14 @@ def multiturn_anchor_fields(payload: dict) -> tuple[int, list[int], list[int]]:
 
 def _empty_v7_snapshot() -> dict:
     """建立新的 V7 空快照。"""
+    from .angle_mapping import urdf_manual_scaled_mapping_metadata
+
+    # 导入/加载按映射版本分派；空快照也必须带上，否则重建过的 bundle 无法再导入。
+    mapping_version, _crc = urdf_manual_scaled_mapping_metadata()
     return {
         # 导入契约要求快照自带 hand_profile；缺失的文件无法通过 Inspect。
         "hand_profile": HAND_PROFILE,
+        "manual_scaled_mapping_version": int(mapping_version),
         "joint_calib_results": [None] * ENCODER_COUNT,
         "motor_abs_limit_min": [0] * MOTOR_COUNT,
         "motor_abs_limit_max": [0] * MOTOR_COUNT,

@@ -15,6 +15,8 @@ from desktop.core.calibration_snapshot import (
     parse_mask,
     read_snapshot,
     seal_snapshot,
+    snapshot_sha256,
+    upgrade_snapshot_to_current,
     update_manual_snapshot,
     update_snapshot_multiturn_anchors,
     validate_snapshot_for_load,
@@ -461,3 +463,19 @@ def test_activating_an_anchorless_import_keeps_this_machine_anchors(tmp_path):
     mask, absolute, _raw = multiturn_anchor_fields(read_snapshot(path))
     assert mask == (1 << MOTOR_COUNT) - 1
     assert absolute[:3] == [1000, 1001, 1002]
+
+
+def test_empty_snapshot_carries_mapping_version_and_rebuilt_bundle_heals():
+    from desktop.core.angle_mapping import urdf_manual_scaled_mapping_metadata
+
+    payload = seal_snapshot(_empty_v7_snapshot())
+    assert payload["manual_scaled_mapping_version"] == urdf_manual_scaled_mapping_metadata()[0]
+    assert upgrade_snapshot_to_current(payload) is payload
+
+    # 空快照重建的 bundle 只在 product_fingerprint 里留了映射版本。
+    legacy = {key: value for key, value in payload.items()
+              if key != "manual_scaled_mapping_version"}
+    legacy["product_fingerprint"] = {"manual_scaled_mapping_version": 5}
+    healed = upgrade_snapshot_to_current(seal_snapshot(legacy))
+    assert healed["manual_scaled_mapping_version"] == 5
+    assert healed["integrity"]["digest"] == snapshot_sha256(healed)

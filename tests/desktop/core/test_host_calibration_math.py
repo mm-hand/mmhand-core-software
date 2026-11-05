@@ -10,8 +10,8 @@ from desktop.core.host_calibration.config import (
     AutoCalibrationParams, kTendonRawSampleCapacity,
 )
 from desktop.core.host_calibration.math import (
-    TendonRawFitBuffer, build_calibration_result, build_tendon_lut,
-    encoder_count_to_deg, f32,
+    TendonRawFitBuffer, apply_contact_refinement, build_calibration_result,
+    build_tendon_lut, encoder_count_to_deg, f32,
     forward_encoder_delta, manual_entry_crc, map_manual_scaled_encoder_to_urdf,
     round_to_int32, tendon_lut_sample_angle, tendon_motor_abs_limits,
     wrap_encoder_delta,
@@ -91,6 +91,35 @@ def test_full_manual_mapping_preserved_and_auto_endpoints_do_not_rescale():
     assert above["urdf_deg"] == f32(f32(per_count * f32(4394)) + f32(0.0))
     io.reference["maxRaw"] = 4001
     assert map_manual_scaled_encoder_to_urdf(io, 1, result, 4000) is None
+
+
+def test_contact_refinement_relabels_lut_and_respects_band():
+    io = MathIO(limits=(0.0, 83.0), endpoints=(16000, 4000))
+    result = build_calibration_result(io, 1, 16000, 0, 4000, 0, 1000, 2000)
+    result.update(tendonLutAngleStartDeg=0.0, tendonLutAngleStepDeg=5.0)
+    old_k, old_b = result["angleK"], result["angleB"]
+    io.contact_kb = lambda joint: (old_k * 1.05, old_b + 0.5)
+    assert apply_contact_refinement(io, 1, result)
+    assert result["angleK"] == old_k * 1.05 and result["angleB"] == old_b + 0.5
+    assert math.isclose(result["tendonLutAngleStartDeg"], 0.5, abs_tol=1e-6)
+
+    io.contact_kb = lambda joint: (old_k * 1.2, old_b)  # 超出 ±10% 带
+    assert not apply_contact_refinement(io, 1, result)
+    assert result["angleK"] == old_k * 1.05
+
+    assert not apply_contact_refinement(MathIO(limits=(0.0, 83.0)), 1, result)
+
+
+def test_cleared_contact_keeps_a_fresh_motor_result_on_joint_calibration_kb():
+    io = MathIO(limits=(0.0, 83.0), endpoints=(16000, 4000))
+    result = build_calibration_result(io, 1, 16000, 0, 4000, 0, 1000, 2000)
+    urdf_min, urdf_max = io.urdf_limits(1)
+    assert result["angleK"] == f32(f32(urdf_max - urdf_min) / f32(result["manualSpanCounts"]))
+    assert result["angleB"] == urdf_min
+    result.update(tendonLutAngleStartDeg=urdf_min, tendonLutAngleStepDeg=5.0)
+    before = dict(result)
+    assert not apply_contact_refinement(io, 1, result)
+    assert result == before
 
 
 def test_buffer_capacity_sampling_threshold_and_duplicate_order():

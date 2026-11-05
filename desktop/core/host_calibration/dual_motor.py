@@ -23,6 +23,7 @@ from .math import (
     extend_motor_abs_limits,
     tendon_motor_abs_limits,
     TendonRawFitBuffer,
+    apply_contact_refinement,
     build_calibration_result,
     build_tendon_lut,
     deg_to_encoder_count,
@@ -698,6 +699,8 @@ class _DualMachine:
             return None
         # Match firmware: lutBuilt is logged; valid mapping/result governs commit.
         lut_built = build_tendon_lut(self.io, self.joint, result, primary, secondary, 2, fit)
+        if lut_built:
+            apply_contact_refinement(self.io, self.joint, result)
         ready_map = map_manual_scaled_encoder_to_urdf(self.io, self.joint, result,
                                                      ready_raw)
         if not ready_map or not ready_map["valid"]:

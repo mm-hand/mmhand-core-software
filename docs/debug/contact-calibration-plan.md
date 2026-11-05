@@ -1,89 +1,101 @@
-# 触觉接触标定 V5：实现与使用说明
+# 接触标定 V6：手动接触点击 + 二分类（物理手指 link）
 
-> 本文替换旧的 V4/147 参数计划。当前实现以 **counts 为安全域、`θ = k·c + b` 为唯一角度解释**。
+> 弃用触觉采集与触觉 sensor link。人工点两个按钮标注“接触 / 接近但未接触”，
+> 用 Joint Calibration 的 k/b + URDF 物理手指 link 推断接触部位，
+> 二分类拟合每关节 `k/b`（可选再加 3 平移 + 2 旋转）。
 
-## 1. 公式与数据
+## 1. 公式与接触体
 
 ```
-c  = signedDirectedCoordinateFromWindowStart(m_lo, raw, S)
-θ  = k·c + b
-k0 = (U_hi − U_lo) / S ,  b0 = U_lo        # joint calibration 初值
+c_j = signedDirectedCoordinateFromWindowStart(m_lo, raw, S)   # 与 P4 一致
+θ_j = k_j·c_j + b_j
+k0_j = (U_hi − U_lo) / S_j,  b0_j = U_lo                      # Joint Calibration 基值
+
+O_j = O_j^URDF · E(t_j, α_j, β_j),  E = [[R(a₁α_j+a₂β_j), t_j], [0,1]]
 ```
 
-- `JointCalibrationResult` 新增 `angleK/angleB`（两 float）。
-- `angleMin/angleMax` 仍存在，恒为派生端点 `[b, kS+b]`；用于目标钳位/LUT/兼容。
-- `k/b` 由上位机算好，通过 `CMD_CALIB_LOAD_JOINT` 下发；**payload 仍是 188 字节**：
-  原先闲置的 `currentMinDeg/currentMaxDeg` 两个 float 槽改为承载 k/b。上行
-  calibration snapshot 的 201 字节同理。
-- `mappingVersion = 5`。旧 v4 bundle 在 `CalibrationSnapshotStore.load/inspect` 时自动迁移：
-  按 `(angleMax−angleMin)/manualSpanCounts` 补 k0、`angleMin` 补 b0，更新 CRC/指纹后
-  重新 load 到 P4；不需要重做 joint/motor 标定。
-- **counts 安全域完全不变**：`m_lo/m_hi/manualSpan/outsideCounts/READY/Pull into Workspace`
-  仍由 counts 决定。k/b 只解释角度。
-- 运行时角度端点来自每关节 result：`angleMin/angleMax`；静态 URDF 只是标称模型/
-  初始值。`resolve_joint_workspace_range`、snapshot 行、ROS2 校验、request_pose、
-  replay 都使用活动端点。
+15 个接触体是物理手指 link（不是 `*_skeleton_sensor`）：
 
-## 2. 标定求解
-
-`desktop/core/contact_calibration.py`：
-
-- 采集：S3 直连 `FULL`、15 模块 valid、`control_mode == IDLE`、静止
-  (`max|Δθ| ≤ 0.1°`)、恰好 2 个不同指模块、同姿态去重 + 0.5 s 冷却。
-- 事件只存 `c`（counts）+ 模块局部接触点 + 合力。
-- 未知量：每关节 5 个几何（3 平移 + 2 垂直轴旋转）+ k + b = 147。
-- 数值中心差分 Jacobian + 列归一化 LM；朝初值的 ridge 取最小修正解。
-- 输出几何原点（`xyz/rpy`）、k/b、RMS、每关节事件数、weak/rejected。
-
-**可辨识性（重要）**：无触觉模块的中间 link（AA/CMC 链）上的相邻关节原点存在规范
-自由度；实测 147 参数接触 Jacobian 的秩约 129。因此：
-
-- 数据能唯一确定的是“sensor 位姿 + 可观测的 k/b/几何组合”；
-- 规范零空间分量用 ridge 保持在 joint calibration 的 k/b 和零几何；
-- 验收以 **held-out 接触残差**（<0.1 mm）和 k 的可观测误差（<1%）为准，
-  不再要求逐项还原随机真值。
-
-## 3. 保存与应用
-
-Contact 页 Solve 后 Save & Apply：
-
-1. 用 `relabel_lut` 把当前 result 的 LUT 角度轴重标（`A=k/k0, B=b−A·b0`），
-   motor 表不变；更新 `angleK/B/angleMin/Max`。
-2. `build_updated_bundle` 更新活动 bundle 的 21 个 result 并重新封存。
-3. 用现有 calibration import 流程（preview → import）把 bundle 写入 P4；
-   ACK 成功后写 `DATA_DIR/contact_calibration.json`（几何 + 哈希）。
-4. 页面刷新后 Hand 页显示修正模型；设备遥测角度来自新 k/b。
-
-`Clear` 只删除本地几何 JSON；设备端的 k/b/LUT 需用 joint calibration 的
-“Load Joint & Motor Calibration” 恢复为初始结果（后续可以补一个“回滚到 k0/b0”按钮）。
-
-## 4. Hand 页
-
-`desktop/ui/web/hand.py` 显示三只手：
-
-| 模型 | origin | 角度 | 可见 |
+| 手指 | 指尖 | 远节 | 近节 |
 |---|---|---|---|
-| 浅灰 | 原始 URDF | 当前 angle | 始终 |
-| 灰 | contact 几何修正 | 当前 angle | 始终 |
-| 绿 | contact 几何修正 | target | FEEDBACK/DIRECT + Online |
+| Pinky | `link_finger_tip_5` | `link_distal_phalanx_5` | `link_proximal_phalanx_5` |
+| Ring | `link_finger_tip_4` | `link_distal_phalanx_4` | `link_proximal_phalanx_4` |
+| Middle | `link_finger_tip_3` | `link_distal_phalanx_3` | `link_proximal_phalanx_3` |
+| Index | `link_finger_tip_2` | `link_distal_phalanx_2` | `link_proximal_phalanx_2` |
+| Thumb | `link_finger_tip_1` | `link_distal_phalanx_1` | `link_proximal_phalanx_1` |
 
-- 触觉只挂灰模：每模块 `PointCloud`（真实测点，按 taxel 法向 z 着色；非 FULL 隐藏）
-  + 一根合力箭头；不显示数值。
-- 22 个 STL 文件浏览器只下一份；三棵模型树共 66 个 mesh。
+- 表面点：现有模块测点用 URDF 里 sensor fixed joint 的原点（纯平移）换到物理 link 坐标系；
+  世界坐标与 sensor link 计算完全一致。不读触觉数据。
+- 页面先选移动的指尖 f；每个样本只在 f 对另外 4 指 × 3 段（12 对）里推断目标指和段。
+  不用全局 60 对：手蜷起来时相邻手指（如中指/无名指）在名义模型里只差 2–3 mm，
+  会把真实的小指-拇指接触抢走。
+- 位姿间隙 = 两段点云最近点对的距离；12 对里最近的那一对就是推断出的接触部位。
+- 手掌不建模；指尖按掌心不会被识别为手掌接触。
 
-## 5. 使用步骤（实机）
+```
+s_e = (δ − d_e)/τ,  p_e = σ(s_e),  δ = 0.8 mm, τ = 0.4 mm
+loss = Σ_e BCE(p_e, y_e) + ½·Σ (ξ/σ_ξ)²
+σ_ξ: 平移 2 mm, 旋转 1°, k 2%, b 2°
+```
 
-1. S3 直连 USB，P4 正常连接；确认 Contact 页前置条件全绿。
-2. 手摆姿势让两指触觉相碰，每个姿势保持约 0.5 s；覆盖所有 10 个指对，至少 150 个事件。
-3. Solve；看 before/after RMS、rejected/weak。
-4. Save & Apply；进度显示导入完成后刷新页面。
-5. Hand 页对比浅灰/灰两只手；灰手应更贴近实机。
+求解：全部内存事件 → 记录时推断的 `(指尖, 目标指, 段)`（测试/旧数据按 fingertip 分组）→
+物理 link FK 与最近点 → 数值中心差分 Jacobian + 列归一化 LM 最小化
+`[sqrt(2·BCE), 先验]`；初值 = 零几何 + k0/b0。
+`optimize_kb` / `optimize_geometry` 控制自由参数子集，默认只拟合 k/b。
+越界关节（±5 mm、±3°、±10% k、±5° b）整组回退并记入 `rejected`。
 
-## 6. 不做 / 后续
+## 2. 页面
 
-- 不改 P4 控制环/LUT 代码（LUT 只在保存时重标角度轴）。
-- 不生成第二份标定 URDF；几何修正存运行时 JSON。
-- 不加 Teleop 页；Replay 已移入 Control。
-- 后续若要让 P4 自己拥有 k/b（外部控制器/多上位机），需把 k/b 进 calibration result
-  的正式字段并定 mappingVersion 契约；当前用保留槽已足够单上位机场景。
-- `Clear` 的设备端回滚、Contact 页的实时点云预览可以再补。
+工具栏 6 个按钮：
+
+| 按钮 | 行为 |
+|---|---|
+| `Record Contact` | 记录当前 counts 为接触样本，不自动求解 |
+| `Record Close (no contact)` | 记录为接近但未接触样本 |
+| `Delete Last Sample` | 删除最后一条样本；已有解则标记需要重新 Solve |
+| `Solve` | 按勾选项后台求解一次 |
+| `Save Contact Calibration` | 写标定包 |
+| `Clear Contact Calibration` | 删除标定包 contact 字段并清空会话 |
+
+- `Fingertip` 下拉框：记录前必须选（Thumb/Index/Middle/Ring/Pinky）；没选时两个记录按钮禁用。
+- 勾选框：`Encoder correction (k/b)`（默认选）、`Joint axis translation & rotation`（默认不选）。
+- 计数累加两类手指：所选指尖 + 推断出的目标指，各 +1。
+  例：选 Thumb、碰 Pinky → `Finger contact/close: Thumb 1/0 … Pinky 1/0`。
+  目标指只在所选指尖的 12 个候选里推断，不会出现与所选指尖无关的假计数。
+  记录时把 `(指尖, 目标指, 段)` 存进事件，求解器直接用这一对。
+- 样本只追加：`Solve` 后继续 `Record` 会提示重新 `Solve`，下一次 `Solve` 用全部样本；
+  `Delete Last Sample` 删最后一条，`Clear` 清空会话。
+- 3D：灰 = Joint Calibration 位姿（URDF 原点 + k0/b0）；蓝 = 最新解。
+- Solve 后状态只显示一句：
+  `Average gap between touching fingers: 7.1 mm before, 1.7 mm after.`
+
+## 3. 保存与下发
+
+活动标定包（`calibration_bundle.mmcal.json`）新增：
+
+```json
+"contact_calibration": {
+  "index_mcp_fe_joint": {
+    "k": 0.0143, "b": -14.0,
+    "base_k": 0.0140, "base_b": -14.2,
+    "xyz": [0, 0, 0], "rpy": [0, 0, 0]
+  }
+}
+```
+
+- `xyz/rpy` 只对真正有几何修正的关节存在；未修正关节没有这两个键。
+- `save_contact` 只写这个字段，不改 `joint_calib_results`。
+- Motor Calibration 生成每个关节 result 后调用 `apply_contact_refinement` → `relabel_lut`，
+  修正 k/b 随 LUT/限位一起下发 P4；超带则保持 Joint Calibration 值。
+- `Clear Contact Calibration` 只删字段。之后重做 Motor Calibration 会从 Manual 端点
+  重新计算 k0/b0，不读旧 contact 值，可正常下发 P4。
+- Plot→Hand：灰 = 最新修正当前位姿（无 contact 修正时即 Joint Calibration）、红 = 目标；
+  每次刷新重读活动标定包的几何修正，缺失关节回退 URDF 原点。
+
+## 4. 限制
+
+- 只建模“指尖 → 另一指三段”；目标指仍按 12 对最近表面推断，模型误差大时可能推到相邻手指。
+  计数只依赖所选指尖，所以不会出现假计数；目标指要是老错，再加目标指下拉框。
+- 点云离散化使分辨率约 1 mm；`δ` 是补偿旋钮。
+- 先验限制 k/b 修正幅度；接触覆盖不足的关节保持 Joint Calibration 值。
+- 几何修正只影响上位机显示；P4 控制只使用 k/b。

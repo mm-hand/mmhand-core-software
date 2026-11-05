@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[3]
-HAND = ROOT / 'desktop' / 'ui' / 'web' / 'hand.py'
+HAND = ROOT / 'desktop' / 'ui' / 'web' / 'hand_scene.py'
 MODEL = ROOT / 'desktop' / 'resources' / 'mmhand_urdf'
 
 
@@ -17,7 +17,7 @@ def _constant(name):
             if isinstance(node.value, ast.Call):
                 return {kw.arg: ast.literal_eval(kw.value) for kw in node.value.keywords}
             return ast.literal_eval(node.value)
-    raise AssertionError(f'{name} missing from hand.py')
+    raise AssertionError(f'{name} missing from hand_scene.py')
 
 
 def _origin(element):

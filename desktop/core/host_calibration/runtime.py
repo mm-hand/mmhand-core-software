@@ -115,6 +115,7 @@ class HostCalibrationIO:
         self._target_token = None
         self._session_finished = False
         self._saved_mode = controller.get_control_mode()
+        self._contact_kb = None
 
     def lut_margins(self):
         if not isinstance(self._output_margins, tuple) or len(self._output_margins) != 2:
@@ -344,6 +345,16 @@ class HostCalibrationIO:
 
     def urdf_limits(self, joint):
         return get_spec(joint).urdf_range_deg
+
+    def contact_kb(self, joint):
+        """Contact calibration 的修正 k/b；本会话首次调用时读一次标定包。"""
+        if self._contact_kb is None:
+            from ..contact_calibration import contact_mappings
+            try:
+                self._contact_kb = contact_mappings(self.snapshot_store.load())
+            except (OSError, ValueError):
+                self._contact_kb = {}
+        return self._contact_kb.get(get_spec(joint).urdf_joint_name)
 
     def _aa_midpoint_tolerance(self, aa):
         """AA 中点容差(度):关节量程的固定比例,到达和保持共用。"""
