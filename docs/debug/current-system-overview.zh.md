@@ -2,7 +2,7 @@
 
 2026-10-25 原生ABS改动见[电机坐标与恢复](native-motor-abs.zh.md)。下文历史实机证据仍对应当时固件；新协议为6，需要配套更新上位机和P4。
 
-核对日期：2026-10-16。根目录：`C:/Users/73547/mmhand`。
+核对日期：2026-10-16。根目录：`C:/Users/73547/mmhand-core-software`。
 依据当前工作区源码和 `docs/debug/control-tuning.md` 的最新结果；不是根据旧版 AI README 推断。本次只做代码检查与统计，没有新增硬件运动测试，也没有修改生成的 AI README/HTML。
 
 ## 1. 哪些已经验证，哪些还没有
@@ -66,7 +66,7 @@ P4+S3+上位机业务代码共48,719行；其余是测试、工具和AI文档构
 ## 3. 文件结构和职责
 
 ```text
-C:/Users/73547/mmhand/
+C:/Users/73547/mmhand-core-software/
 ├─ ESP32-P4/
 │  ├─ ESP32-P4.ino                   Arduino入口
 │  └─ src/
