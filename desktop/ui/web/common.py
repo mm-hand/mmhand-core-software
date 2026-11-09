@@ -39,6 +39,14 @@ def quality_name(value):
         return 'NEED CALIBRATION'
     return value
 
+
+ENCODER_BADGES = {
+    'can_error': ('CAN ERROR', 'CAN link is down; no encoder data'),
+    'open': ('ENCODER OPEN', 'finger chain not connected or broken'),
+    'short': ('ENCODER SHORT', 'MISO shorted or held'),
+    'error': ('ENCODER ERROR', 'no valid raw from this sensor while CAN works'),
+}
+
 def control_active(snapshot):
     """True while P4 owns a joint or direct control mode (new snapshot field first)."""
     mode = snapshot.get('control_mode')
@@ -129,6 +137,22 @@ def quality():
                 with ui.badge(quality_name(value), color=color):
                     if tooltip:
                         ui.tooltip(tooltip)
+    return refresh
+
+def encoder_badge():
+    """Only shows a red badge for a faulty encoder; normal joints add nothing."""
+    container, previous = ui.row().classes('gap-1 items-center'), [None]
+    def refresh(state, joint):
+        if previous[0] == (state, joint):
+            return
+        previous[0] = (state, joint)
+        container.clear()
+        entry = ENCODER_BADGES.get(state)
+        if entry is None:
+            return
+        with container:
+            with ui.badge(entry[0], color='negative'):
+                ui.tooltip(f'J{int(joint):02d} encoder: {entry[1]}')
     return refresh
 
 def select_all_and_request(hand, key, request):

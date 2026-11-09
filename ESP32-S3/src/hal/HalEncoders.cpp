@@ -31,7 +31,7 @@ HalEncoders::HalEncoders() : _spi(nullptr) {
     }
 }
 
-/** @brief 初始化138板CS译码地址脚及底层SPI。 */
+/** @brief 初始化138板CS译码地址脚及底层SPI，并在任务启动前做一次接线自检。 */
 void HalEncoders::begin() {
     pinMode(PIN_MUX_A, OUTPUT);
     pinMode(PIN_MUX_B, OUTPUT);
@@ -39,6 +39,14 @@ void HalEncoders::begin() {
     // 7号通道未连接到有效磁编组，用作所有组的非选中空闲态。
     setDemuxChannel(ENC_DEMUX_IDLE_CHANNEL);
     setupSPI();
+    _wire.seq = 1;
+    probeWires(_wire);
+    _wireLastMs = millis();
+}
+
+/** @brief 选手指：-1=全不选；下一代 MISO 数据选择器也在这里切换。 */
+void HalEncoders::selectFinger(int8_t finger) {
+    setDemuxChannel(finger < 0 ? ENC_DEMUX_IDLE_CHANNEL : getGroupDemuxChannel((uint8_t)finger));
 }
 
 /** @brief 通过公共SPI初始化模块取得磁编设备句柄。 */
@@ -58,7 +66,7 @@ void HalEncoders::setDemuxChannel(uint8_t ch) {
  * @brief 选中一组磁编并完成一次count×16位同步SPI事务。
  * @note SPI驱动返回ESP_OK只代表控制器事务完成，不代表每颗AS5047P真实在线。
  */
-bool HalEncoders::transferOnce(uint8_t demuxChannel, uint8_t count, const uint16_t *txBuf, uint16_t *rxBuf) {
+bool HalEncoders::transferOnce(int8_t finger, uint8_t count, const uint16_t *txBuf, uint16_t *rxBuf) {
     if (count == 0 || count > MAX_GROUP_SIZE || txBuf == nullptr || rxBuf == nullptr) {
         return false;
     }
@@ -70,8 +78,7 @@ bool HalEncoders::transferOnce(uint8_t demuxChannel, uint8_t count, const uint16
         return false;
     }
 
-    // 138板磁编使用独立SPI3及GPIO2/4/5译码地址，不与触觉SPI2选路线共享资源。
-    setDemuxChannel(demuxChannel);
+    selectFinger(finger);
 
     // DMA缓冲按4字节对齐；协议线上采用高字节在前。
     uint8_t txBytes[MAX_GROUP_SIZE * 2] __attribute__((aligned(4))) = {0};
@@ -96,7 +103,7 @@ bool HalEncoders::transferOnce(uint8_t demuxChannel, uint8_t count, const uint16
     }
 
     // 事务结束立即切回空闲通道，避免未选中器件继续驱动公共线。
-    setDemuxChannel(ENC_DEMUX_IDLE_CHANNEL);
+    selectFinger(-1);
     return ok;
 }
 
@@ -310,8 +317,7 @@ void HalEncoders::collectGroup138(uint8_t groupIndex, int groupStart, uint8_t co
         txBuf[k] = frame;
     }
 
-    const uint8_t demuxChannel = getGroupDemuxChannel(groupIndex);
-    const bool transferOk = transferOnce(demuxChannel, count, txBuf, rxBuf);
+    const bool transferOk = transferOnce((int8_t)groupIndex, count, txBuf, rxBuf);
 
     for (uint8_t k = 0; k < count; k++) {
         const int id = mapGlobalEncoderIndex(groupStart, count, k);
@@ -358,9 +364,73 @@ void HalEncoders::getData(EncoderData &outData) {
 
         collectGroup138(grp, globalIdx, count, outData);
 
+        // 自检判为无驱动/短路的手指：整组写分类哨兵并置无效，不许浮空值冒充角度。
+        if (_wire.seq != 0 && _wire.finger[grp] != 'O') {
+            const uint16_t sentinel = _wire.finger[grp] == 'N' ? ENCODER_OPEN_RAW : ENCODER_SHORT_RAW;
+            for (uint8_t k = 0; k < count; k++) {
+                const int id = globalIdx + k;
+                outData.rawAngles[id] = sentinel;
+                outData.errorFlags[id] = 1;
+                _latchedErrorCodes[id] = ERR_CODE_LINK_LOST;
+            }
+        }
+
         globalIdx += count;
     }
 
     // 最后统一复制锁存表，确保调用者得到与本轮扫描一致的错误详情。
     memcpy(outData.latchedErrors, _latchedErrorCodes, sizeof(_latchedErrorCodes));
+}
+
+/** @brief 设置 MISO 内部上下拉；0=无，1=上拉，2=下拉。 */
+void HalEncoders::setMisoPull(uint8_t mode) {
+    gpio_set_pull_mode((gpio_num_t)PIN_ENC_MISO,
+        mode == 1 ? GPIO_PULLUP_ONLY : mode == 2 ? GPIO_PULLDOWN_ONLY : GPIO_FLOATING);
+    delayMicroseconds(5);
+}
+
+/** @brief 选中一根手指、在指定拉电平下读回整链；不解释响应，只用于驱动判定。 */
+bool HalEncoders::probeFinger(uint8_t finger, bool pullUp, uint16_t* rxBuf) {
+    uint16_t txBuf[MAX_GROUP_SIZE] = {0};
+    const uint16_t command = build_command_frame(AS5047P_REG_ANGLECOM, true);
+    for (uint8_t i = 0; i < group_sizes_[finger]; i++) {
+        txBuf[i] = command;
+    }
+    setMisoPull(pullUp ? 1 : 2);
+    const bool ok = transferOnce((int8_t)finger, group_sizes_[finger], txBuf, rxBuf);
+    setMisoPull(0);
+    return ok;
+}
+
+/**
+ * @brief 逐指接线自检：同一位置字在上拉/下拉各读一次，得到 O/N/S/H。
+ * @note 探测命令固定为 ANGLE，结束后复位 FSM/流水线，避免诊断读打乱正常扫描。
+ */
+void HalEncoders::probeWires(EncoderWireResult& out) {
+    const uint32_t seq = out.seq;
+    out = {};
+    out.seq = seq;
+    for (uint8_t finger = 0; finger < GROUP_COUNT; finger++) {
+        uint16_t up[MAX_GROUP_SIZE] = {0};
+        uint16_t down[MAX_GROUP_SIZE] = {0};
+        probeFinger(finger, true, up);
+        probeFinger(finger, false, down);
+        out.finger[finger] = wireFingerChar(up, down, group_sizes_[finger]);
+        out.up[finger] = up[0];
+        out.down[finger] = down[0];
+    }
+    for (int i = 0; i < ENCODER_TOTAL_NUM; i++) {
+        _fsmStates[i] = FSM_READ_ANGLE;
+        _cmdPipeline[i] = AS5047P_REG_ANGLECOM;
+    }
+}
+
+/** @brief 节流执行自检；开机已测一次，之后每 10 s 一次。 */
+void HalEncoders::serviceWireProbe(uint32_t nowMs) {
+    if (_wireLastMs != 0 && (uint32_t)(nowMs - _wireLastMs) < ENCODER_WIRE_PROBE_PERIOD_MS) {
+        return;
+    }
+    _wireLastMs = nowMs;
+    _wire.seq++;
+    probeWires(_wire);
 }

@@ -21,6 +21,9 @@ inline constexpr float kPeriodSec = 0.010f;
 /** 14 bit 磁编码器一圈的原始计数。 */
 inline constexpr int32_t kEncoderModulo = 16384;
 inline constexpr uint16_t kEncoderDisconnectRaw = 0xFFFF;
+/** S3 接线自检分类哨兵（均超出 14 位角度范围）：0x7FFE=开路，0x7FFD=短路。 */
+inline constexpr uint16_t kEncoderOpenRaw = 0x7FFE;
+inline constexpr uint16_t kEncoderShortRaw = 0x7FFD;
 
 inline constexpr uint32_t kCanBusOfflineTimeoutMs = 1000;
 inline constexpr uint32_t kServoTelemetryTimeoutMs = 500;

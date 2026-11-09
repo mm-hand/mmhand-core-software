@@ -1,7 +1,7 @@
 """状态色卡：红=必须人工处理，黄=需要恢复，蓝=正在动作，绿=可操作，灰=中性。"""
 import pytest
 
-from desktop.ui.browser_view import status_background
+from desktop.ui.browser_view import can_background, status_background
 
 
 @pytest.mark.parametrize('label,color', [
@@ -19,3 +19,9 @@ from desktop.ui.browser_view import status_background
     ('UNKNOWN', '#e2e8f0')])
 def test_state_colors_tell_the_operator_what_to_do(label, color):
     assert status_background(label) == color
+
+
+def test_can_colors_are_green_red_or_grey():
+    assert can_background('ok') == '#bbf7d0'
+    assert can_background('can_error') == '#fecaca'
+    assert can_background('unknown') == '#e2e8f0'

@@ -12,7 +12,7 @@ MODEL = ROOT / 'desktop' / 'resources' / 'mmhand_urdf'
 
 
 def _constant(name):
-    for node in ast.parse(HAND.read_text()).body:
+    for node in ast.parse(HAND.read_text(encoding='utf-8')).body:
         if isinstance(node, ast.Assign) and getattr(node.targets[0], 'id', '') == name:
             if isinstance(node.value, ast.Call):
                 return {kw.arg: ast.literal_eval(kw.value) for kw in node.value.keywords}

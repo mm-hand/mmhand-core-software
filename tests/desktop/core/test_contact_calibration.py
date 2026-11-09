@@ -1,4 +1,4 @@
-"""V6 手动接触标定：物理手指 link、二分类求解、标定包字段和 LUT 重标。"""
+"""V7 滑动轨迹接触标定：自动指尖、抽稀、non-contact、连续性和标定包字段。"""
 
 import math
 
@@ -18,6 +18,9 @@ from desktop.core.contact_calibration import (
     CONTACT_MARGIN_M,
     CONTACT_PAIRS,
     FINGER_JOINTS,
+    NONCONTACT_MIN_GAP_M,
+    add_non_contact_samples,
+    build_trajectory,
     clear_contact,
     contact_mappings,
     counts_from_snapshot,
@@ -28,6 +31,9 @@ from desktop.core.contact_calibration import (
     save_contact,
     signed_counts,
     solve,
+    solve_contact,
+    tip_travel,
+    trajectory_events,
 )
 from desktop.core.kinematics import Kinematics
 from desktop.core.tactile_geometry import module_points
@@ -178,8 +184,8 @@ def test_synthetic_contact_data_fits_the_two_class_model():
     assert solution['base_b'] == [item['b'] for item in mappings]
     assert solution['optimized'] == {'kb': True, 'geometry': True}
     assert solution['clearance_after_mm'] <= solution['clearance_before_mm']
-    assert solution['contact_pass'] + solution['negative_pass'] >= (
-        solution['contact_total'] + solution['negative_total']) // 2
+    assert solution['contact_pass'] + solution['noncontact_pass'] >= (
+        solution['contact_total'] + solution['noncontact_total']) // 2
     for joint in range(21):
         base_k, base_b = mappings[joint]['k'], mappings[joint]['b']
         assert 0.9 * base_k <= solution['k'][joint] <= 1.1 * base_k
@@ -357,3 +363,111 @@ def test_contact_solution_lives_in_the_calibration_bundle(tmp_path, monkeypatch)
     payload = read_snapshot(path)
     assert contact_mappings(payload) == {}
     assert payload["joint_calib_results"] == [None] * 21
+
+
+# ---- V7 滑动轨迹 / 非接触样本 ----
+
+_SLIDE_PAIR = (3, 4, 0)
+_SLIDE_BASE = np.array([
+    703, 1384, 2484, 2981, 2099, 2602, 3008, 2815, 1948, 3339, 2285,
+    2291, 3221, 2557, 2776, 675, 1367, 2309, 1012, 2658, 1832], float)
+_MANUAL_MIN = [1000] * 21
+_MANUAL_MAX = [5000] * 21
+
+
+def _synthetic_slide(seed=0, steps=30):
+    """真值模型下让食指指尖沿拇指滑动，返回 raw 帧和标定上下文。"""
+    model = Kinematics(DEFAULT_URDF_PATH)
+    clouds = _clouds()
+    rng = np.random.default_rng(seed)
+    mappings, k, b, origins = _truth(model, rng)
+    dips = np.linspace(300.0, 1600.0, 41)
+    frames = []
+    for step in range(steps):
+        t = step / max(1, steps - 1)
+        counts = _SLIDE_BASE.copy()
+        counts[12] += (t - 0.5) * 500.0
+        counts[13] += (t - 0.5) * 400.0
+        candidates = np.repeat(counts[None, :], len(dips), axis=0)
+        candidates[:, 15] = dips
+        poses = model.link_transforms(
+            model_angles(candidates, k, b), origins, CONTACT_LINKS)
+        gaps = np.array([_pair_gap(poses[i], _SLIDE_PAIR, clouds)
+                         for i in range(len(candidates))])
+        best = int(np.argmin(gaps))
+        if gaps[best] > CONTACT_MARGIN_M:
+            continue
+        frames.append((step * 10, tuple(
+            ((candidates[best] + 1000) % 16384).astype(int).tolist())))
+    return model, clouds, mappings, frames
+
+
+def test_trajectory_events_selects_the_moving_fingertip_and_decimates():
+    _model, _clouds_, _mappings, frames = _synthetic_slide()
+    events, info = trajectory_events(frames, _MANUAL_MIN, _MANUAL_MAX, 0)
+    assert info["fingertip"] == 3
+    assert info["contacts"] == len(events) >= 5
+    assert info["frames"] == len(frames)
+    assert all(event["y"] == 1 and event["pair"][0] == 3 for event in events)
+    assert all(event["traj"] == 0 for event in events)
+
+
+def test_non_contact_samples_have_a_clear_model_gap():
+    model, clouds, mappings, frames = _synthetic_slide()
+    contacts, _info = trajectory_events(frames, _MANUAL_MIN, _MANUAL_MAX, 0)
+    events, info = add_non_contact_samples(
+        contacts, mappings, _MANUAL_MIN, _MANUAL_MAX)
+    negatives = [event for event in events if event["y"] == 0]
+    assert negatives and info["noncontacts"] == len(negatives)
+    geometry = contact_module._geometry_from_mappings(mappings)
+    for event in negatives:
+        gap = contact_module._pair_gap(
+            model, clouds, geometry, event["c"], event["pair"])
+        assert gap >= NONCONTACT_MIN_GAP_M - 1e-9
+
+
+def test_build_trajectory_end_to_end_returns_finite_metrics():
+    _model, _clouds_, mappings, frames = _synthetic_slide()
+    result = build_trajectory(frames, _MANUAL_MIN, _MANUAL_MAX, 2)
+    events, info = result["events"], result["info"]
+    assert info["contacts"] >= 5
+    assert info["noncontacts"] >= 1
+    assert sum(1 for event in events if event["y"] == 1) == info["contacts"]
+    assert all(event["traj"] == 2 for event in events)
+    solution = solve(events, mappings)
+    assert solution["iterations_used"] <= contact_module.SOLVE_ITERATIONS
+    assert math.isfinite(solution["continuity_before_mm"])
+    assert math.isfinite(solution["continuity_after_mm"])
+    assert solution["contact_total"] == info["contacts"]
+    assert solution["noncontact_total"] == info["noncontacts"]
+
+
+def test_continuity_pairs_stay_inside_one_trajectory():
+    event = {"c": [0.0] * 21, "y": 1, "pair": _SLIDE_PAIR}
+    pairs = contact_module._continuity_pairs([
+        dict(event, traj=0), dict(event, traj=0), dict(event, traj=1)])
+    assert pairs.tolist() == [[0, 1]]
+
+
+def test_tip_travel_selects_the_moving_finger():
+    counts = np.full((3, 21), 2000.0)
+    for offset, joint in enumerate(FINGER_JOINTS[3]):
+        counts[1, joint] += 120.0 + 40.0 * offset
+        counts[2, joint] += 240.0 + 80.0 * offset
+    travel = tip_travel(counts, initial_mappings())
+    assert int(np.argmax(travel)) == 3
+
+
+def test_trajectory_rejects_a_recording_without_motion():
+    frames = [(index * 10, tuple([2000] * 21)) for index in range(10)]
+    with pytest.raises(ValueError, match="sliding motion is too short"):
+        trajectory_events(frames, _MANUAL_MIN, _MANUAL_MAX, 0)
+
+
+def test_solve_contact_refreshes_correspondences_in_an_outer_loop():
+    events, mappings = _synthetic()
+    result = solve_contact(events, mappings, outer=2, inner=2)
+    assert result["iterations_used"] <= 2
+    assert math.isfinite(result["clearance_after_mm"])
+    assert math.isfinite(result["continuity_after_mm"])
+    assert result["contact_total"] >= 1

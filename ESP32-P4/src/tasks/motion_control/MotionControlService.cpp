@@ -479,7 +479,9 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                 const uint32_t bit = (1UL << i);
                 if (((encoderOnlineMask & bit) == 0) ||
                     ((encoderFaultMask & bit) != 0) ||
-                    sensorData.encoderValues[i] == kEncoderDisconnectRaw) {
+                    sensorData.encoderValues[i] == kEncoderDisconnectRaw ||
+                    sensorData.encoderValues[i] == kEncoderOpenRaw ||
+                    sensorData.encoderValues[i] == kEncoderShortRaw) {
                     mappedData.validFlags[i] = 0;
                     magAngles[i] = 0.0f;
                     upperWorkspaceHighCount[i] = 0;

@@ -8,7 +8,7 @@
 禁止依赖：禁止直接操作协议、串口和控制器。
 """
 from nicegui import ui
-from .common import FINGERS, finger_cards, selection, target_editor, label, show, quality, control_note, select_all_and_request, joint_label, display_joints
+from .common import FINGERS, finger_cards, selection, target_editor, label, show, quality, control_note, select_all_and_request, joint_label, display_joints, encoder_badge
 
 def build(hand, act):
     drafts, refreshers, syncing = {}, [], [False]
@@ -33,6 +33,7 @@ def build(hand, act):
                         with ui.row().classes('items-center'):
                             refreshers.append(selection(hand, 'selected_joints', [j], joint_label(j)))
                             control = quality()
+                            elec = encoder_badge()
                             feedback = label()
                         drafts[j], number, slider = target_editor(
                             max(row['min'], min(row['max'], row['target'])), row['min'], row['max'],
@@ -40,7 +41,7 @@ def build(hand, act):
                         with ui.row().classes('items-center'):
                             limits = label()
                             ui.button('Send', on_click=lambda j=j: act(lambda: hand.request_targets({j: drafts[j]['value']}))).props('dense outline')
-                    def refresh(snapshot, j=j, feedback=feedback, limits=limits, control=control):
+                    def refresh(snapshot, j=j, feedback=feedback, limits=limits, control=control, elec=elec):
                         row = snapshot['joints'][j]
                         statuses = [row['feedback_control_status']]
                         if row.get('collision_detected'):
@@ -50,6 +51,7 @@ def build(hand, act):
                         if any(snapshot['motors'][m].get('motor_beyond_workspace') for m in row['motors']):
                             statuses.append('MOTOR BEYOND WORKSPACE')
                         control(statuses, 'P4-confirmed feedback control, per-joint collision, joint-angle and motor workspace state.')
+                        elec(row.get('encoder_state'), j)
                         control_abs = ' / '.join(show(snapshot['motors'][m]['abs']) for m in row['motors'])
                         feedback.set_text(f"Enc: {row['encoder']}   Current: {show(row['angle'], '°')}   ROS2 Target: {show(row['ros_target'], '°')}\nRaw: {show(row['raw'])}   Control ABS: {control_abs}")
                         limits.set_text(f"Min: {show(row['min'], '°')}   Max: {show(row['max'], '°')}")

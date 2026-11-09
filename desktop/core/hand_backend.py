@@ -21,6 +21,10 @@ from .calibration_workflow import (
 )
 from .calibration_workflow import CalibrationWorkflowService
 from .comm_layer import TactileSerialComm, list_ports as _list_ports
+from .communication.feedback_history import (
+    FeedbackHistoryError,
+    TimestampedFeedbackHistory,
+)
 from .core_logic import HandController, ManualPrepareResult
 from .data_models import HandModel, clone_hand_model, resolve_joint_workspace_range
 from .protocol import ControlMode, ENCODER_COUNT, READY_WORKSPACE_TOLERANCE_DEG
@@ -113,6 +117,7 @@ class HandBackend(ApplicationActions):
     ) -> None:
         self._controller = controller or HandController()
         self._last_reported_device_id = ""
+        self._contact_capture = None
         self._port_scan_ts = float("-inf")
         self._port_scan_cache: tuple = ()
         self._calibration_workflow = CalibrationWorkflowService(self._controller)
@@ -146,6 +151,7 @@ class HandBackend(ApplicationActions):
         except (OSError, TypeError, ValueError):
             self._workspace_mapping_version, self._workspace_urdf_crc = 0, 0
         self._joint_target_callback_lock = threading.Lock()
+        self._connected_at_monotonic = 0.0
         self._init_application_actions()
         self._update_input_filter()
         self._ensure_controller_callback_registered()
@@ -173,6 +179,73 @@ class HandBackend(ApplicationActions):
         except CalibrationSnapshotError:
             # Only the file-dialog starting directory; active persistence never falls back.
             return CALIB_ACTIVE_SNAPSHOT_PATH
+
+    def begin_contact_capture(self):
+        """Start a V7 contact trajectory capture on the P4 feedback history."""
+        mask = (1 << ENCODER_COUNT) - 1
+        history = getattr(self.comm, 'feedback_history', None)
+        state = self.get_state_snapshot()
+        if not isinstance(history, TimestampedFeedbackHistory):
+            return {'ok': False, 'message': 'P4 is not connected'}
+        if (not state.has_encoder_raw_data or
+                not 0.0 <= time.time() - state.encoder_raw_last_rx_ts <= 0.3):
+            return {'ok': False, 'message': 'Encoder raw data is not fresh'}
+        if state.manual_reference_valid_bitmap & mask != mask:
+            return {'ok': False, 'message': 'Manual Min/Max is missing for some joints'}
+        manual_min = [int(value) for value in
+                      state.manual_reference_min_raw[:ENCODER_COUNT]]
+        manual_max = [int(value) for value in
+                      state.manual_reference_max_raw[:ENCODER_COUNT]]
+        for joint, (low, high) in enumerate(zip(manual_min, manual_max)):
+            if not 0 < (high - low) % 16384 < 16384:
+                return {'ok': False,
+                        'message': f'Manual Min/Max is invalid on J{joint:02d}'}
+        with self._application_lock:
+            if self._contact_capture is not None:
+                return {'ok': False, 'message': 'A contact recording is already active'}
+            if (self._application_busy or
+                    self._calibration_workflow.is_host_calibration_active()):
+                return {'ok': False, 'message': 'Wait for the current operation to finish'}
+            self._contact_capture = {
+                'history': history,
+                'cursor': history.mark(),
+                'manual_min': manual_min,
+                'manual_max': manual_max,
+                'started_at': time.time(),
+                'started_monotonic': time.monotonic(),
+            }
+        return {'ok': True, 'message': '', 'manual_min': manual_min,
+                'manual_max': manual_max}
+
+    def end_contact_capture(self):
+        """Stop the active capture and return valid encoder_raw frames."""
+        with self._application_lock:
+            capture = self._contact_capture
+            self._contact_capture = None
+        if capture is None:
+            return {'ok': False, 'message': 'No contact recording is active'}
+        try:
+            frames = capture['history'].read(capture['cursor'])
+        except FeedbackHistoryError as exc:
+            return {'ok': False, 'message': f'Recording was invalidated: {exc}'}
+        mask = (1 << ENCODER_COUNT) - 1
+        rows = []
+        for frame in frames:
+            if frame.kind != 'encoder_raw':
+                continue
+            if frame.valid_mask & mask != mask or len(frame.values) < ENCODER_COUNT:
+                continue
+            if frame.received_at < capture['started_at'] - 0.25:
+                continue
+            rows.append((int(frame.p4_time_ms),
+                         tuple(int(value) for value in frame.values[:ENCODER_COUNT])))
+        if not rows:
+            return {'ok': False, 'message': 'No fresh encoder frames were captured'}
+        return {'ok': True, 'message': '', 'frames': rows,
+                'manual_min': list(capture['manual_min']),
+                'manual_max': list(capture['manual_max']),
+                'duration_s': round(
+                    time.monotonic() - capture['started_monotonic'], 2)}
 
     def _ensure_controller_callback_registered(self) -> None:
         callbacks = getattr(self._controller, "update_callbacks", None)
@@ -260,13 +333,16 @@ class HandBackend(ApplicationActions):
         self._ensure_controller_callback_registered()
         self._requested_active_joint_mask = None
         self._requested_active_scope = None
-        return bool(self._controller.initialize(str(port)))
+        connected = bool(self._controller.initialize(str(port)))
+        self._connected_at_monotonic = time.monotonic() if connected else 0.0
+        return connected
 
     def initialize(self, port: str) -> bool:
         return self.connect(port)
 
     def shutdown(self, stop_lower: bool = False) -> None:
         """关闭上位机链路；默认交由 P4 租约 Hold，显式急停才下发 STOP。"""
+        self._connected_at_monotonic = 0.0
         self.cancel_replay_motion("shutdown")
         self._calibration_workflow.cancel()
         self._manual_cancel.set()

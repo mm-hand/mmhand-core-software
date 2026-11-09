@@ -1,10 +1,10 @@
-"""contact_calibration.py - V6 手动接触标定。
+"""contact_calibration.py - V7 滑动轨迹接触标定。
 
-职责：用人工标注的“接触 / 接近但未接触”位姿，二分类拟合每关节 k/b + 5 个原点修正；
-把结果写进活动标定包的 contact_calibration 字段（Motor Calibration 下发）。
-线程：采集由 UI 刷新线程调用；solve 为纯函数，可在 worker 进程运行。
-输入：application_snapshot 字典、21 关节 k/b 基值、URDF。
-输出：k/b、关节原点修正、分类统计与标定包字段。
+职责：把“指尖贴着另一指滑动”的连续轨迹抽稀成接触样本，自动生成 non-contact 样本，
+二分类拟合每关节 k/b（可选 5 个原点修正），并把结果写进活动标定包（Motor Calibration 下发）。
+线程：采集由 UI 刷新线程调用；trajectory/add_non_contact/solve 为纯函数，可在 worker 进程运行。
+输入：P4 encoder_raw 帧、21 关节 Manual 端点、k/b 基值、URDF。
+输出：contact/non-contact 事件、k/b、关节原点修正、分类统计与标定包字段。
 状态所有权：调用方持有事件和结果；本模块只读资源文件。
 禁止依赖：禁止导入 UI、通信、协议或直接操作设备。
 """
@@ -44,7 +44,22 @@ CLAMP_TRANSLATION_M = 0.005
 CLAMP_ROTATION_RAD = math.radians(3.0)
 CLAMP_K_REL = 0.10
 CLAMP_B_DEG = 5.0
-SOLVE_ITERATIONS = 6
+SOLVE_ITERATIONS = 12
+
+# V7 轨迹：按指尖空间位移抽稀；连续性允许量约 3 个采样步长（仿真 E3 选值）。
+STEP_M = 0.002
+CONTINUITY_ALLOWANCE_M = 0.006
+CONTINUITY_SIGMA_M = 0.003
+# 程序生成的 non-contact 样本目标间隙；必须明显大于接触 margin。
+NONCONTACT_GAP_M = 0.003
+NONCONTACT_MIN_GAP_M = 2.0 * CONTACT_MARGIN_M
+# 一次轨迹至少保留的接触样本数。
+MIN_SAMPLES = 5
+# 生成 non-contact 时求间隙梯度的计数差分步长；扰动最多 5°。
+GRAD_STEP_COUNTS = 50.0
+NONCONTACT_MAX_PERTURB_DEG = 5.0
+# 直接间隙损失（可选）：接触样本拉向 0，non-contact 推到至少 NONCONTACT_MIN_GAP_M。
+GAP_SIGMA_M = 0.0005
 
 # finger 顺序 G0..G4 = 小指/无名指/中指/食指/拇指。
 FINGER_JOINTS = ((0, 1, 2, 3), (4, 5, 6, 7), (8, 9, 10, 11),
@@ -159,6 +174,13 @@ def _clouds(urdf_path):
                  for segment in range(3))
 
 
+def _geometry_from_mappings(mappings):
+    geometry = np.zeros((21, 7))
+    geometry[:, 5] = [float(item["k"]) for item in mappings]
+    geometry[:, 6] = [float(item["b"]) for item in mappings]
+    return geometry
+
+
 def _transforms(model, geometry, counts):
     angles = model_angles(counts, geometry[:, 5], geometry[:, 6])
     origins = {}
@@ -263,14 +285,226 @@ def infer_pair(counts, mappings, fingertip, *, urdf_path=DEFAULT_URDF_PATH):
     if not 0 <= fingertip < 5:
         raise ValueError("invalid fingertip")
     model = Kinematics(urdf_path)
-    geometry = np.zeros((21, 7))
-    geometry[:, 5] = [float(item["k"]) for item in mappings]
-    geometry[:, 6] = [float(item["b"]) for item in mappings]
-    transforms = _transforms(model, geometry, values[None, :])
+    transforms = _transforms(model, _geometry_from_mappings(mappings),
+                             values[None, :])
     gaps, pairs, _point_a, _point_b = _scan_pairs(
         transforms, _clouds(urdf_path), _fingertip_candidates(fingertip))
     return (int(pairs[0, 0]), int(pairs[0, 1]), int(pairs[0, 2]),
             float(gaps[0]) * 1000.0)
+
+
+def _tip_positions(clouds, frames):
+    """(E, 5, 3) 指尖点云质心在手掌系的位置。"""
+    centroid = clouds[0].mean(axis=0)
+    return np.stack(
+        [np.einsum("nij,j->ni", frames[:, finger * 3], centroid)[:, :3]
+         for finger in range(5)], axis=1)
+
+
+def tip_travel(counts, mappings, *, urdf_path=DEFAULT_URDF_PATH):
+    """5 根手指的指尖质心路径长度（米）；UI 在线判定和离线抽稀共用。"""
+    if len(mappings) != 21:
+        raise ValueError("need 21 k/b mappings")
+    values = np.asarray(counts, float)
+    if values.ndim != 2 or values.shape[1] != 21 or len(values) < 2:
+        raise ValueError("need at least two 21-count frames")
+    if not np.isfinite(values).all():
+        raise ValueError("invalid counts")
+    model = Kinematics(urdf_path)
+    frames = _transforms(model, _geometry_from_mappings(mappings), values)
+    positions = _tip_positions(_clouds(urdf_path), frames)
+    return [float(np.linalg.norm(np.diff(positions[:, finger], axis=0), axis=1).sum())
+            for finger in range(5)]
+
+
+def _checked_manual(manual_min, manual_max):
+    if len(manual_min) != 21 or len(manual_max) != 21:
+        raise ValueError("need 21 Manual Min/Max endpoints")
+    checked = []
+    for joint, (low, high) in enumerate(zip(manual_min, manual_max)):
+        try:
+            span = (int(high) - int(low)) % ENCODER_MODULO
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid Manual Min/Max on J{joint:02d}") from exc
+        if not 0 < span < ENCODER_MODULO:
+            raise ValueError(f"invalid Manual Min/Max on J{joint:02d}")
+        checked.append((int(low), int(high)))
+    return checked
+
+
+def trajectory_events(frames, manual_min, manual_max, traj_id=0, *,
+                      step_m=STEP_M, min_samples=MIN_SAMPLES,
+                      urdf_path=DEFAULT_URDF_PATH):
+    """P4 encoder_raw 帧 -> 抽稀后的接触事件；自动选移动指尖。
+
+    frames: [(p4_time_ms, raw_0..raw_20)]，按接收顺序。
+    每个事件 {"c": 21 counts, "y": 1, "pair": (f, o, seg), "traj": traj_id}。
+    """
+    manual = _checked_manual(manual_min, manual_max)
+    by_time = {}
+    for p4_ms, raw in frames:
+        try:
+            values = [int(value) for value in raw]
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid encoder frames") from exc
+        if len(values) != 21:
+            continue
+        by_time[int(p4_ms)] = values
+    cells = []
+    for raw in by_time.values():
+        row = [signed_counts(raw[joint], manual[joint][0], manual[joint][1])
+               for joint in range(21)]
+        if all(value is not None for value in row):
+            cells.append(row)
+    if len(cells) < 2:
+        raise ValueError("not enough valid encoder frames")
+    counts = np.asarray(cells, float)
+    mappings = initial_mappings([item[0] for item in manual],
+                                [item[1] for item in manual])
+    model = Kinematics(urdf_path)
+    clouds = _clouds(urdf_path)
+    all_frames = _transforms(model, _geometry_from_mappings(mappings), counts)
+    positions = _tip_positions(clouds, all_frames)
+    travel = [float(np.linalg.norm(np.diff(positions[:, finger], axis=0), axis=1).sum())
+              for finger in range(5)]
+    fingertip = int(np.argmax(travel))
+    kept = [0]
+    last = positions[0, fingertip]
+    for index in range(1, len(counts)):
+        point = positions[index, fingertip]
+        if float(np.linalg.norm(point - last)) >= step_m:
+            kept.append(index)
+            last = point
+    if kept[-1] != len(counts) - 1:
+        kept.append(len(counts) - 1)
+    if len(kept) < min_samples:
+        raise ValueError("sliding motion is too short; record a longer slide")
+    _gaps, pairs, _point_a, _point_b = _scan_pairs(
+        all_frames[kept], clouds, _fingertip_candidates(fingertip))
+    events = [
+        {"c": counts[index].tolist(), "y": 1,
+         "pair": (int(pairs[row, 0]), int(pairs[row, 1]), int(pairs[row, 2])),
+         "traj": int(traj_id)}
+        for row, index in enumerate(kept)]
+    info = {
+        "fingertip": fingertip,
+        "contacts": len(events),
+        "frames": len(by_time),
+        "valid_frames": len(counts),
+        "travel_mm": [round(value * 1000.0, 2) for value in travel],
+    }
+    return events, info
+
+
+def _pair_gap(model, clouds, geometry, counts, pair):
+    frames = _transforms(model, geometry, np.asarray(counts, float)[None, :])
+    return float(_pair_distances(frames, clouds, pair[0], pair[1], pair[2]).min())
+
+
+def _clamped_counts(counts, joints, limits, delta, max_delta):
+    candidate = counts.copy()
+    for joint in joints:
+        low, high = limits[joint]
+        change = min(max_delta[joint], max(-max_delta[joint], delta[joint]))
+        candidate[joint] = min(high, max(low, counts[joint] + change))
+    return candidate
+
+
+def add_non_contact_samples(events, mappings, manual_min, manual_max, *,
+                            gap_m=NONCONTACT_GAP_M,
+                            urdf_path=DEFAULT_URDF_PATH):
+    """在接触位姿上沿“增大目标对间隙”的方向退开，生成 y=0 样本。"""
+    _checked_manual(manual_min, manual_max)
+    if len(mappings) != 21:
+        raise ValueError("need 21 k/b mappings")
+    model = Kinematics(urdf_path)
+    clouds = _clouds(urdf_path)
+    base = _geometry_from_mappings(mappings)
+    limits = []
+    for joint in range(21):
+        low, high = get_spec(joint).urdf_range_deg
+        k = float(mappings[joint]["k"])
+        b = float(mappings[joint]["b"])
+        if k <= 0 or not math.isfinite(k) or not math.isfinite(b):
+            raise ValueError("invalid base k/b")
+        limits.append(((low - b) / k, (high - b) / k))
+    out = list(events)
+    created = skipped = 0
+    for event in events:
+        pair = event.get("pair")
+        if pair is None:
+            raise ValueError("contact events need a pair")
+        pair = (int(pair[0]), int(pair[1]), int(pair[2]))
+        counts = np.asarray(event["c"], float)
+        if counts.shape != (21,):
+            raise ValueError("contact events need 21 counts")
+        joints = FINGER_JOINTS[pair[0]]
+        gradient = np.zeros(21)
+        for joint in joints:
+            up = counts.copy()
+            down = counts.copy()
+            up[joint] += GRAD_STEP_COUNTS
+            down[joint] -= GRAD_STEP_COUNTS
+            gradient[joint] = (
+                _pair_gap(model, clouds, base, up, pair)
+                - _pair_gap(model, clouds, base, down, pair)
+            ) / (2.0 * GRAD_STEP_COUNTS)
+        norm = float(np.linalg.norm(gradient))
+        if norm <= 1e-12:
+            skipped += 1
+            continue
+        direction = gradient / norm
+        current = _pair_gap(model, clouds, base, counts, pair)
+        max_delta = {
+            joint: NONCONTACT_MAX_PERTURB_DEG / float(mappings[joint]["k"])
+            for joint in joints}
+
+        def step(scale):
+            candidate = _clamped_counts(
+                counts, joints, limits, direction * scale, max_delta)
+            return candidate, _pair_gap(model, clouds, base, candidate, pair)
+
+        # 沿梯度方向做一维搜索：在每关节最多 3° 的前提下，找最小步长达到 gap_m。
+        wanted = max(gap_m - current, NONCONTACT_MIN_GAP_M * 0.5)
+        limit_scale = min(
+            (max_delta[joint] / abs(direction[joint])
+             for joint in joints if abs(direction[joint]) > 1e-12),
+            default=0.0)
+        hi = min(max(1.0, wanted / max(norm, 1e-12)), limit_scale)
+        candidate, gap = step(hi)
+        if gap < gap_m:
+            skipped += 1
+            continue
+        lo = 0.0
+        for _attempt in range(8):
+            mid = 0.5 * (lo + hi)
+            trial, trial_gap = step(mid)
+            if trial_gap >= gap_m:
+                hi, candidate, gap = mid, trial, trial_gap
+            else:
+                lo = mid
+        if gap < NONCONTACT_MIN_GAP_M:
+            skipped += 1
+            continue
+        out.append({"c": candidate.tolist(), "y": 0, "pair": pair,
+                    "traj": event.get("traj")})
+        created += 1
+    return out, {"noncontacts": created, "skipped": skipped}
+
+
+def build_trajectory(frames, manual_min, manual_max, traj_id=0, *,
+                     step_m=STEP_M, gap_m=NONCONTACT_GAP_M,
+                     urdf_path=DEFAULT_URDF_PATH):
+    """Stop 的 worker 入口：raw 帧 -> contact + non-contact 事件。"""
+    contacts, info = trajectory_events(
+        frames, manual_min, manual_max, traj_id, step_m=step_m,
+        urdf_path=urdf_path)
+    mappings = initial_mappings(manual_min, manual_max)
+    events, close_info = add_non_contact_samples(
+        contacts, mappings, manual_min, manual_max, gap_m=gap_m,
+        urdf_path=urdf_path)
+    info.update(close_info)
+    return {"events": events, "info": info}
 
 
 def _prior(geometry, k0, b0):
@@ -299,11 +533,42 @@ def _revert_out_of_range(geometry, base):
     return rejected
 
 
+def _continuity_pairs(events):
+    """同一 traj 内、列表相邻的 y=1 事件下标对。"""
+    pairs, last = [], {}
+    for index, event in enumerate(events):
+        if int(event.get("y", 0)) != 1:
+            continue
+        traj = event.get("traj")
+        if traj is None:
+            last.clear()
+            continue
+        if traj in last:
+            pairs.append((last[traj], index))
+        last[traj] = index
+    return np.asarray(pairs, dtype=int).reshape(-1, 2)
+
+
+def _continuity_excess(points, pairs, allowance):
+    if len(pairs) == 0:
+        return 0.0
+    delta = np.linalg.norm(points[pairs[:, 1]] - points[pairs[:, 0]], axis=1)
+    return float(np.mean(np.maximum(0.0, delta - allowance)) * 1000.0)
+
+
+def _continuity_residual(points, pairs, allowance, sigma):
+    if len(pairs) == 0:
+        return np.empty(0)
+    delta = np.linalg.norm(points[pairs[:, 1]] - points[pairs[:, 0]], axis=1)
+    return np.maximum(0.0, delta - allowance) / sigma
+
+
 def _levenberg_marquardt(residual, x, steps, iterations):
     r = residual(x)
     cost = float(r @ r)
     damping = 1e-3
-    for _ in range(iterations):
+    used = 0
+    for used in range(1, iterations + 1):
         jacobian = np.empty((len(r), len(x)))
         for column in range(len(x)):
             delta = steps[column]
@@ -332,23 +597,98 @@ def _levenberg_marquardt(residual, x, steps, iterations):
             damping *= 10.0
         if not improved or float(np.linalg.norm(step)) < 1e-10:
             break
-    return x
+    return x, used
+
+
+def _event_pairs(events, model, clouds, base_geometry, counts):
+    """每个事件的 (指尖, 目标指, 段)；缺失时用起始模型的最近对补一次。"""
+    pairs = np.zeros((len(events), 3), dtype=int)
+    missing = []
+    for index, event in enumerate(events):
+        recorded = event.get("pair")
+        if recorded is None:
+            missing.append(index)
+            continue
+        try:
+            finger, other, segment = (int(value) for value in recorded)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid contact pair") from exc
+        if (not 0 <= finger < 5 or not 0 <= other < 5
+                or other == finger or not 0 <= segment < 3):
+            raise ValueError("invalid contact pair")
+        pairs[index] = (finger, other, segment)
+    if missing:
+        sub_events = [events[index] for index in missing]
+        _gaps, sub_pairs, _point_a, _point_b = _infer_pairs(
+            _transforms(model, base_geometry, counts[missing]), clouds, sub_events)
+        pairs[missing] = sub_pairs
+    return pairs
+
+
+def _gaps_and_points(model, clouds, counts, pairs, geometry):
+    """按当前几何重新找每个事件在指定 pair 内的最近点和接触点。"""
+    frames = _transforms(model, geometry, counts)
+    gaps = np.empty(len(counts))
+    points = np.empty((len(counts), 3))
+    rows = np.arange(len(counts))
+    for pair in np.unique(pairs, axis=0):
+        group = rows[np.all(pairs == pair[None, :], axis=1)]
+        distances = _pair_distances(
+            frames[group], clouds, int(pair[0]), int(pair[1]), int(pair[2]))
+        flat = distances.reshape(len(group), -1)
+        nearest = flat.argmin(axis=1)
+        gaps[group] = flat[np.arange(len(group)), nearest]
+        index_a, index_b = np.unravel_index(nearest, distances.shape[1:])
+        a = np.einsum("nij,nj->ni", frames[group, int(pair[0]) * 3],
+                      clouds[0][index_a])[:, :3]
+        b = np.einsum("nij,nj->ni",
+                      frames[group, int(pair[1]) * 3 + int(pair[2])],
+                      clouds[int(pair[2])][index_b])[:, :3]
+        points[group] = 0.5 * (a + b)
+    return gaps, points
 
 
 def solve(events, mappings, *, urdf_path=DEFAULT_URDF_PATH,
           iterations=SOLVE_ITERATIONS,
-          optimize_kb=True, optimize_geometry=False):
-    """二分类求解；默认只拟合 k/b，可选关节轴平移/旋转。"""
+          optimize_kb=True, optimize_geometry=False,
+          continuity_allowance_m=None, continuity_sigma_m=None,
+          initial=None, loss="bce", joints=None, prior_scale=1.0):
+    """二分类求解；默认只拟合 k/b，可选关节轴平移/旋转。
+
+    initial: 可选的起始 k/b（与 mappings 同格式）；先验仍锚定 mappings。
+    外层重复调用并传上一轮结果，即可刷新最近点对应（ICP 式外循环）。
+    loss: "bce"（V6 软接触概率）或 "gap"（直接间隙损失，便于对比）。
+    joints: 可选的关节子集；只放开这些关节的 k/b/几何，其余固定在初始值。
+    prior_scale: >1 放松先验，<1 收紧；只用于仿真调参。
+    """
+    allowance = (CONTINUITY_ALLOWANCE_M if continuity_allowance_m is None
+                 else float(continuity_allowance_m))
+    sigma = (CONTINUITY_SIGMA_M if continuity_sigma_m is None
+             else float(continuity_sigma_m))
+    if allowance < 0.0 or sigma <= 0.0:
+        raise ValueError("invalid continuity limits")
+    if loss not in ("bce", "gap"):
+        raise ValueError("unsupported loss")
+    if not math.isfinite(float(prior_scale)) or float(prior_scale) <= 0.0:
+        raise ValueError("invalid prior scale")
+    prior_scale = float(prior_scale)
+    selected = None if joints is None else sorted({int(joint) for joint in joints})
+    if selected is not None and any(not 0 <= joint < 21 for joint in selected):
+        raise ValueError("invalid joint subset")
     parts = []
     if optimize_geometry:
-        parts.append(GEOMETRY_COLUMNS)
+        parts.append(GEOMETRY_COLUMNS if selected is None
+                     else _PARAM_COLUMNS[selected, :5].reshape(-1))
     if optimize_kb:
-        parts.append(ENCODER_COLUMNS)
+        parts.append(ENCODER_COLUMNS if selected is None
+                     else _PARAM_COLUMNS[selected, 5:].reshape(-1))
     if not parts:
         raise ValueError("select at least one correction")
     free = np.concatenate(parts)
     if len(mappings) != 21:
         raise ValueError("need 21 k/b mappings")
+    if initial is not None and len(initial) != 21:
+        raise ValueError("need 21 initial k/b mappings")
     k0 = np.asarray([float(item["k"]) for item in mappings])
     b0 = np.asarray([float(item["b"]) for item in mappings])
     if np.any(k0 <= 0) or not np.isfinite(k0).all() or not np.isfinite(b0).all():
@@ -368,19 +708,15 @@ def solve(events, mappings, *, urdf_path=DEFAULT_URDF_PATH,
 
     model = Kinematics(urdf_path)
     clouds = _clouds(urdf_path)
-    base = np.zeros((21, 7))
-    base[:, 5] = k0
-    base[:, 6] = b0
-    gaps, pairs, point_a, point_b = _infer_pairs(
-        _transforms(model, base, counts), clouds, events)
-    tip_points = clouds[0][point_a]
-    target_points = np.asarray([
-        clouds[int(pairs[index, 2])][int(point_b[index])]
-        for index in range(len(events))])
-    link_a = pairs[:, 0] * 3
-    link_b = pairs[:, 1] * 3 + pairs[:, 2]
-    rows = np.arange(len(events))
-    base_x = base.reshape(-1)
+    prior_base = _geometry_from_mappings(mappings)
+    start_base = prior_base if initial is None else _geometry_from_mappings(initial)
+    continuity_pairs = _continuity_pairs(events)
+    pairs = _event_pairs(events, model, clouds, start_base, counts)
+    gaps, start_points = _gaps_and_points(
+        model, clouds, counts, pairs, start_base)
+    continuity_before = _continuity_excess(
+        start_points, continuity_pairs, allowance)
+    base_x = start_base.reshape(-1)
     steps = _STEP_BY_COLUMN[free % 7]
 
     def full_free(free_x):
@@ -390,25 +726,31 @@ def solve(events, mappings, *, urdf_path=DEFAULT_URDF_PATH,
 
     def residual(free_x):
         geometry = full_free(free_x).reshape(21, 7)
-        frames = _transforms(model, geometry, counts)
-        a = np.einsum("nij,nj->ni", frames[rows, link_a], tip_points)
-        b = np.einsum("nij,nj->ni", frames[rows, link_b], target_points)
-        gap = np.linalg.norm(a - b, axis=1)
-        probability = 1.0 / (1.0 + np.exp(-np.clip(
-            (CONTACT_MARGIN_M - gap) / CONTACT_SLOPE_M, -60.0, 60.0)))
-        probability = np.clip(probability, 1e-9, 1.0 - 1e-9)
-        bce = -np.where(labels == 1,
-                        np.log(probability), np.log(1.0 - probability))
-        return np.concatenate([np.sqrt(2.0 * bce), _prior(geometry, k0, b0)])
+        gap, points = _gaps_and_points(model, clouds, counts, pairs, geometry)
+        if loss == "gap":
+            data = np.where(labels == 1,
+                            gap / GAP_SIGMA_M,
+                            np.maximum(0.0, NONCONTACT_MIN_GAP_M - gap) / GAP_SIGMA_M)
+        else:
+            probability = 1.0 / (1.0 + np.exp(-np.clip(
+                (CONTACT_MARGIN_M - gap) / CONTACT_SLOPE_M, -60.0, 60.0)))
+            probability = np.clip(probability, 1e-9, 1.0 - 1e-9)
+            bce = -np.where(labels == 1,
+                            np.log(probability), np.log(1.0 - probability))
+            data = np.sqrt(2.0 * bce)
+        return np.concatenate([
+            data,
+            _continuity_residual(points, continuity_pairs, allowance, sigma),
+            _prior(geometry, k0, b0) / prior_scale])
 
-    free_x = _levenberg_marquardt(
+    free_x, iterations_used = _levenberg_marquardt(
         residual, base_x[free], steps, iterations)
     geometry = full_free(free_x).reshape(21, 7).copy()
-    rejected = _revert_out_of_range(geometry, base)
-    frames = _transforms(model, geometry, counts)
-    a = np.einsum("nij,nj->ni", frames[rows, link_a], tip_points)
-    b = np.einsum("nij,nj->ni", frames[rows, link_b], target_points)
-    fitted = np.linalg.norm(a - b, axis=1)
+    rejected = _revert_out_of_range(geometry, prior_base)
+    fitted, fitted_points = _gaps_and_points(
+        model, clouds, counts, pairs, geometry)
+    continuity_after = _continuity_excess(
+        fitted_points, continuity_pairs, allowance)
     contact = labels == 1
     finger_contacts = np.zeros(5, dtype=int)
     for finger in pairs[contact, 0]:
@@ -434,16 +776,44 @@ def solve(events, mappings, *, urdf_path=DEFAULT_URDF_PATH,
         "optimized": {"kb": bool(optimize_kb),
                       "geometry": bool(optimize_geometry)},
         "events": int(len(events)),
+        "iterations_used": int(iterations_used),
         "clearance_before_mm": float(np.mean(gaps[contact]) * 1000.0),
         "clearance_after_mm": float(np.mean(fitted[contact]) * 1000.0),
+        "continuity_before_mm": continuity_before,
+        "continuity_after_mm": continuity_after,
         "contact_pass": int(np.sum(fitted[contact] <= CONTACT_MARGIN_M)),
         "contact_total": int(np.sum(contact)),
-        "negative_pass": int(np.sum(fitted[~contact] > CONTACT_MARGIN_M)),
-        "negative_total": int(np.sum(~contact)),
+        "noncontact_pass": int(np.sum(fitted[~contact] > CONTACT_MARGIN_M)),
+        "noncontact_total": int(np.sum(~contact)),
         "weak": [joint for joint in range(21)
                  if finger_contacts[JOINT_FINGER[joint]] < 3],
         "rejected": rejected,
     }
+
+
+def solve_contact(events, mappings, *, outer=3, inner=6, **kwargs):
+    """ICP 式外循环：每轮刷新最近点对应，把上一轮结果作为下一轮起点。
+
+    返回的 clearance_before/continuity_before 取第一轮（基值模型）的值，
+    这样页面显示的 before→after 是整次拟合的真实改善。
+    """
+    initial = None
+    result = None
+    before = None
+    continuity_before = None
+    for index in range(max(1, int(outer))):
+        result = solve(events, mappings, iterations=int(inner),
+                       initial=initial, **kwargs)
+        if index == 0:
+            before = result["clearance_before_mm"]
+            continuity_before = result["continuity_before_mm"]
+        initial = [{"k": result["k"][joint], "b": result["b"][joint]}
+                   for joint in range(21)]
+    if before is not None:
+        result = dict(result)
+        result["clearance_before_mm"] = before
+        result["continuity_before_mm"] = continuity_before
+    return result
 
 
 def relabel_lut(result, old_k, old_b, new_k, new_b):

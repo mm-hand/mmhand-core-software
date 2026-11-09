@@ -11,7 +11,7 @@
 #include "../config/DimensionsConfig.h"
 
 inline constexpr uint8_t PROTOCOL_HEADER = 0xFE;
-inline constexpr uint8_t kHostProtocolVersion = 8;
+inline constexpr uint8_t kHostProtocolVersion = 9;
 inline constexpr uint8_t PROTOCOL_TAIL = 0xFF;
 inline constexpr int16_t PROTOCOL_DISCONNECT_SENTINEL = 32767;
 inline constexpr size_t kP4TimestampBytes = 4;

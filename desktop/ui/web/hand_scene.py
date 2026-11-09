@@ -69,6 +69,7 @@ class HandScene:
         self.scene = scene
         self.links, self.roots, self.by_parent, self.indices = _tree()
         self.models = {}
+        self.meshes = {}
 
     def add_model(self, name, color, opacity, origins=None, on_link=None):
         motors, origin_groups = [], {}
@@ -79,7 +80,8 @@ class HandScene:
                                    motors, origin_groups, on_link)
         self.models[name] = {'group': group, 'motors': motors,
                              'origin_groups': origin_groups,
-                             'origins': dict(origins or {})}
+                             'origins': dict(origins or {}),
+                             'color': color, 'opacity': opacity}
 
     def _add_link(self, name, color, opacity, origins, motors, origin_groups,
                   on_link):
@@ -92,9 +94,10 @@ class HandScene:
             xyz = _vec(origin.get('xyz') if origin is not None else None, '0 0 0')
             rpy = _vec(origin.get('rpy') if origin is not None else None, '0 0 0')
             scale = _vec(mesh.get('scale'), '1 1 1')
-            self.scene.stl(MESH_ROUTE + '/' + Path(mesh.attrib['filename']).name) \
+            item = self.scene.stl(MESH_ROUTE + '/' + Path(mesh.attrib['filename']).name) \
                 .move(*xyz).rotate(*rpy).scale(*scale) \
                 .material(color, opacity=opacity)
+            self.meshes.setdefault(name, []).append(item)
         for joint in self.by_parent.get(name, []):
             origin = joint.find('origin')
             xyz = _vec(origin.get('xyz') if origin is not None else None, '0 0 0')
@@ -116,6 +119,13 @@ class HandScene:
                         on_link(child, rotation)
                     self._add_link(child, color, opacity, origins, motors,
                                    origin_groups, on_link)
+
+    def set_link_color(self, name, link_names, color):
+        """Recolor the meshes of specific URDF links on one model."""
+        model = self.models[name]
+        for link in link_names:
+            for item in self.meshes.get(link, ()):
+                item.material(color, opacity=model['opacity'])
 
     def set_origins(self, name, origins):
         """原地更新关节原点；返回是否真的变了。"""

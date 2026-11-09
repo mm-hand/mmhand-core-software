@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "protocol_version": 8,
+  "protocol_version": 9,
   "retired_command_values": [
     202,
     217,

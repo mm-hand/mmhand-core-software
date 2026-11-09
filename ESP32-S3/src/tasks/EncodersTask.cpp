@@ -34,9 +34,11 @@ void Task_Encoders(void* pvParameters) {
         EncoderData rawData = encoders.getData();
         localData = rawData;
 
-        // CAN原始角度协议用0xFFFF表示该通道不可用。
+        // CAN原始角度协议用0xFFFF表示该通道不可用；自检分类哨兵保留原值上传。
         for (int i = 0; i < ENCODER_TOTAL_NUM; i++) {
-            if (localData.errorFlags[i]) {
+            if (localData.errorFlags[i] &&
+                localData.rawAngles[i] != ENCODER_OPEN_RAW &&
+                localData.rawAngles[i] != ENCODER_SHORT_RAW) {
                 localData.rawAngles[i] = 0xFFFF;
             }
         }
@@ -52,6 +54,8 @@ void Task_Encoders(void* pvParameters) {
                 lastErr = millis();
             }
         }
+
+        encoders.serviceWireProbe(millis());
 
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }

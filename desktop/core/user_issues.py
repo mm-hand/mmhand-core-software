@@ -161,6 +161,15 @@ def snapshot_issues(state, snapshot, *, fresh):
         for row in snapshot.get('joints', []):
             if row.get('encoder') == 'FAULT':
                 current.append(rule_issue(2003, scope=f"J{int(row['joint']):02d}", status='Current issue').to_dict())
+        can = snapshot.get('can') or {}
+        if can.get('cause') == 'can_error':
+            current.append(host_issue('HOST_ELECTRICS_CAN', status='Current issue',
+                                      details={'reason': can.get('label')}).to_dict())
+        for row in snapshot.get('joints', []):
+            if row.get('encoder_state') in ('open', 'short'):
+                current.append(host_issue('HOST_ENCODER_WIRING', scope=f"J{int(row['joint']):02d}",
+                                          status='Current issue',
+                                          details={'reason': row['encoder_state']}).to_dict())
         # Assembly warnings are authoritative P4 bits; no local 350/300 recomputation.
         for joint, result in enumerate(state.joint_calib_results):
             if not state.auto_calibration_valid_bitmap & (1 << joint) or not isinstance(result, dict):

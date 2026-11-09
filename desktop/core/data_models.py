@@ -119,6 +119,7 @@ class JointEncoder:
     error: bool = False       # 传感器/读数异常
     angle_error: bool = True  # mapped angle packet validity; not overwritten by health status
     raw_error: bool = True    # raw encoder packet validity; not overwritten by health status
+    raw_fault: str = ''       # '' | 'error' | 'open' | 'short' from the CAN sentinel
     angle_out_of_workspace: bool = False  # live mapped angle is outside calibrated URDF interval
 
     @property

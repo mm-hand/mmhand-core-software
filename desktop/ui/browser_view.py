@@ -24,6 +24,11 @@ SUBTABS = {
     'Plot': ['Hand', 'Curves'],
     'Settings': ['Renumber Motor', 'Control Parameters', 'Diagnostics'],
 }
+def can_background(level):
+    """CAN 色级：绿=通，红=断，灰=尚不可判。"""
+    return {'ok': '#bbf7d0', 'can_error': '#fecaca'}.get(str(level), '#e2e8f0')
+
+
 def status_background(value):
     """状态色卡：红=必须人工处理，黄=机器要自救/警告，蓝=正在动作，绿=可操作。"""
     status = str(value).upper()
@@ -370,8 +375,8 @@ def build_page(hand):
             ui.space()
             save = ui.button('Save Data: ON', on_click=lambda: act(lambda: hand.request_recording(not hand.application_snapshot(include_curves=False)['recording']['enabled']))).props('dense outline')
             top_stop = ui.button('■ STOP', on_click=lambda: act(hand.stop_motion), color='negative').props('dense').classes('font-bold px-5')
-        with ui.row().classes('status-bar items-center w-full'):
-            badges = {name: ui.label().classes('status-chip text-xs cursor-pointer') for name in ['System', 'P4', 'Calibration', 'Mode', 'Overload', 'Collision', 'Joint workspace', 'Motor workspace', 'Multi-turn']}
+        with ui.row().classes('status-bar items-center w-full flex-wrap gap-y-1'):
+            badges = {name: ui.label().classes('status-chip text-xs cursor-pointer') for name in ['System', 'P4', 'CAN', 'Calibration', 'Mode', 'Overload', 'Collision', 'Joint workspace', 'Motor workspace', 'Multi-turn']}
         with ui.tabs(value=TABS[0]).classes('console-tabs w-full').props('dense no-caps active-color=primary outside-arrows mobile-arrows') as tabs:
             for name in TABS: ui.tab(name)
         def leave_direct_control():
@@ -490,6 +495,10 @@ def build_page(hand):
         mode_value = snapshot.get('control_mode', 'UNKNOWN')
         set_text(('badge', 'Mode'), badges['Mode'], f'Mode: {mode_value}')
         set_style(('badge-style', 'Mode'), badges['Mode'], f'background-color:{status_background(mode_value)}')
+        can = snapshot.get('can') or {}
+        set_text(('badge', 'CAN'), badges['CAN'], can.get('label', 'CAN: UNKNOWN'))
+        set_style(('badge-style', 'CAN'), badges['CAN'],
+                  f"background-color:{can_background(can.get('level'))}")
         online = snapshot['communication'] == 'Online' and not snapshot['busy']
         set_text('top-stop', top_stop, '■ STOP')
         set_enabled('top-stop', top_stop, online)

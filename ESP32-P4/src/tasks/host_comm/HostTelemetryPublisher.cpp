@@ -40,6 +40,8 @@ static_assert(kP4TimestampBytes == sizeof(uint32_t),
 // 职责：解析下行命令并更新共享命令状态；发送传感器/舵机/故障遥测；
 // 维护协议 ACK、周期心跳和长触觉包的发送节奏。
 static const uint16_t kEncoderDisconnectRaw = 0xFFFF; ///< CAN 磁编断开原始哨兵。
+static const uint16_t kEncoderOpenRaw = 0x7FFE;       ///< S3 自检：开路。
+static const uint16_t kEncoderShortRaw = 0x7FFD;      ///< S3 自检：短路。
 static const uint8_t kTactileFullPacketMagic0 = 0x54; ///< 全量触觉分包魔数 'T'。
 static const uint8_t kTactileFullPacketMagic1 = 0x32; ///< 全量触觉分包版本 '2'。
 
@@ -100,6 +102,10 @@ bool activeManualReferencesReady(SystemRuntimeContext* sharedData)
 // 将 CAN 磁编 raw 转为线上值；无效通道统一发送断开哨兵。
 static uint16_t encodeRawEncoderForWire(uint16_t rawValue, bool channelValid)
 {
+    if (rawValue == kEncoderOpenRaw || rawValue == kEncoderShortRaw) {
+        return rawValue;  // 保留 S3 自检分类，供上位机显示 open/short。
+    }
+
     if (!channelValid) {
         return (uint16_t)PROTOCOL_DISCONNECT_SENTINEL;
     }

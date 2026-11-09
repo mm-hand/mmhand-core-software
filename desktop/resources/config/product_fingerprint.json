@@ -5,10 +5,10 @@
   "feedback_mapping_version": 3,
   "manual_scaled_mapping_version": 5,
   "control_model_crc": "EF7805AE",
-  "visual_model_crc": "1EFBF9AD",
+  "visual_model_crc": "D5CA466D",
   "hardware_map_crc": "CC2DB96D",
-  "parameter_crc": "36C2A9AB",
-  "firmware_source_crc": "0B012E82",
+  "parameter_crc": "F718C6C9",
+  "firmware_source_crc": "8540DA7E",
   "structure_commit_crc": "DF6D97B2",
   "source_commit": "1539d2578e61e51c38a62efdd1a7e098d7798863"
 }

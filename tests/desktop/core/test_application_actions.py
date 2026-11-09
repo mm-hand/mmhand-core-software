@@ -817,3 +817,60 @@ def test_enable_recovers_unknown_coordinates_before_setting_scope(hand, monkeypa
                      [('recover', 3), ('scope', 3)] if unknown else [('scope', 3)])
     if unknown and not recovery_ok:
         assert 'coordinate recovery failed' in message
+
+
+def _install_contact_history(hand):
+    from desktop.core.communication.feedback_history import TimestampedFeedbackHistory
+    history = TimestampedFeedbackHistory()
+    comm = Mock()
+    comm.feedback_history = history
+    hand._controller.comm = comm
+    state = hand.current_state
+    mask = (1 << 21) - 1
+    state.manual_reference_valid_bitmap = mask
+    state.manual_reference_min_raw = [1000] * 21
+    state.manual_reference_max_raw = [5000] * 21
+    state.has_encoder_raw_data = True
+    state.encoder_raw_last_rx_ts = time.time()
+    return history
+
+
+def test_contact_capture_reads_only_fresh_valid_frames(hand):
+    history = _install_contact_history(hand)
+    mask = (1 << 21) - 1
+    history.record('encoder_raw', 100, tuple([1200] * 21), mask,
+                   time.time() - 1.0)
+    started = hand.begin_contact_capture()
+    assert started['ok'], started
+    assert hand.application_snapshot(include_curves=False)['busy']
+    history.record('encoder_raw', 110, tuple([1250] * 21), mask, time.time())
+    history.record('encoder_raw', 120, tuple([1300] * 21), mask, time.time())
+    history.record('encoder_raw', 130, tuple([1350] * 21), 0, time.time())
+    done = hand.end_contact_capture()
+    assert done['ok'], done
+    assert [frame[0] for frame in done['frames']] == [110, 120]
+    assert done['manual_min'] == [1000] * 21
+    assert done['manual_max'] == [5000] * 21
+    assert not hand.application_snapshot(include_curves=False)['busy']
+    assert not hand.end_contact_capture()['ok']
+
+
+def test_contact_capture_rejects_duplicates_resets_and_missing_p4(hand):
+    history = _install_contact_history(hand)
+    assert hand.begin_contact_capture()['ok']
+    assert not hand.begin_contact_capture()['ok']
+    history.reset()
+    invalidated = hand.end_contact_capture()
+    assert not invalidated['ok'] and 'invalidated' in invalidated['message']
+    hand._controller.comm = None
+    missing = hand.begin_contact_capture()
+    assert not missing['ok'] and 'not connected' in missing['message']
+
+
+def test_contact_capture_requires_fresh_manual_endpoints(hand):
+    _install_contact_history(hand)
+    hand.current_state.manual_reference_valid_bitmap = 1
+    assert not hand.begin_contact_capture()['ok']
+    hand.current_state.manual_reference_valid_bitmap = (1 << 21) - 1
+    hand.current_state.encoder_raw_last_rx_ts = time.time() - 5
+    assert not hand.begin_contact_capture()['ok']

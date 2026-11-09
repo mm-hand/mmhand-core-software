@@ -273,7 +273,7 @@ class StateReducer:
     def _apply_sensor(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one sensor packet within the RX batch boundary."""
         emitted = False
-        angles, errors = parse_sensor_packet(payload)
+        angles, errors, _ = parse_sensor_packet(payload)
         if angles:
             for i in range(min(ENCODER_COUNT, len(angles), len(model.encoders))):
                 model.encoders[i].encoder_id = i
@@ -308,11 +308,12 @@ class StateReducer:
     def _apply_encoder_raw(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one encoder_raw packet within the RX batch boundary."""
         emitted = False
-        raw_values, errors = parse_sensor_packet(payload)
+        raw_values, errors, faults = parse_sensor_packet(payload)
         if raw_values:
             for i in range(min(ENCODER_COUNT, len(raw_values), len(model.encoders))):
                 raw_error = errors[i] if i < len(errors) else False
                 model.encoders[i].raw_error = raw_error
+                model.encoders[i].raw_fault = faults[i] if i < len(faults) else ''
                 if not raw_error:
                     model.encoders[i].raw_sensor = raw_values[i]
                 model.encoders[i].error = raw_error

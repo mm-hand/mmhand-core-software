@@ -368,7 +368,10 @@ bool stepS3CanRxService(SystemRuntimeContext* sharedData, uint32_t nowMs)
                         const uint16_t rawValue =
                             ((uint16_t)encoderState.bytes[i * 2] << 8) |
                             encoderState.bytes[i * 2 + 1];
-                        if (rawValue != 0xFFFFU && rxBuffer.errorFlags[i] == 0) {
+                        if (rawValue == 0x7FFEU || rawValue == 0x7FFDU) {
+                            // S3 接线自检分类哨兵：保留原值，供上行转发。
+                            rxBuffer.encoderValues[i] = rawValue;
+                        } else if (rawValue != 0xFFFFU && rxBuffer.errorFlags[i] == 0) {
                             rxBuffer.encoderValues[i] = rawValue;
                             encoderValidMask |= (1UL << i);
                         } else {

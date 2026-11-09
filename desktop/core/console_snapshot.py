@@ -12,7 +12,9 @@ measurements remain unknown; presentation labels never authorize motion.
 禁止依赖：禁止依赖 UI 或改变硬件判据。
 """
 import math
+import time
 
+from .electrical_status import can_state, joint_states
 from .host_calibration.math import forward_encoder_delta, deg_to_encoder_count, f32
 from .host_calibration.config import joint_motors
 from .motor_mapping import MOTOR_TO_JOINT_INDEX
@@ -226,6 +228,7 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
     s3_received_at = link.get('last_valid_rx', getattr(hand._tactile_state, 'tactile_last_rx_ts', 0.0))
     # RX can publish after this snapshot captured `now`; that is fresh data.
     s3_age = max(0, int((now - s3_received_at) * 1000)) if s3_received_at else None
+    p4_connected_at = float(getattr(hand, '_connected_at_monotonic', 0.0) or 0.0)
     for name, connected, port, age in (
         ('p4', hand.is_comm_connected(), getattr(hand.comm, 'port', ''), snapshot['diagnostics']['receive_age_ms']),
         ('s3', hand.is_tactile_serial_connected(), hand.tactile_port, s3_age)):
@@ -237,6 +240,20 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
             'Waiting for data' if age is None else 'Stale' if age > 600 else 'Online')
         if name == 's3' and connected and age is None and link.get('opened_at') and now - link['opened_at'] > 10:
             snapshot['connections'][name]['data_status'] = 'No valid frames' if link.get('bytes', 0) else 'No bytes received'
+    connected_for = time.monotonic() - p4_connected_at if p4_connected_at else 0.0
+    raw_age = now - state.encoder_raw_last_rx_ts if state.encoder_raw_last_rx_ts else None
+    invalid = [joint for joint, encoder in enumerate(state.encoders) if encoder.raw_error]
+    if state.has_encoder_health_status:
+        invalid += [joint for joint in range(ENCODER_COUNT)
+                    if state.encoder_fault_bitmap & (1 << joint) and joint not in invalid]
+    snapshot['can'] = can_state(
+        p4_online=hand.is_comm_connected() and fresh, connected_for_s=connected_for,
+        has_raw=state.has_encoder_raw_data, raw_age_s=raw_age)
+    states = joint_states(can_level=snapshot['can']['level'],
+                          faults=[encoder.raw_fault for encoder in state.encoders],
+                          invalid_joints=invalid)
+    for row in snapshot['joints']:
+        row['encoder_state'] = states[int(row['joint'])]
     snapshot['recording'].update(enabled=hand._save_data, full_tactile=hand._record_full_tactile,
         duration_s=max(0, now - hand._recording_started_at) if hand._recorder.is_running() else 0,
         error=hand._recording_error, finalizing=bool(hand._recording_thread and hand._recording_thread.is_alive()))

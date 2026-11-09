@@ -9,7 +9,7 @@
 """
 from nicegui import ui
 from .common import (FINGERS, finger_cards, selection, target_editor, label, show, quality,
-                     control_note, select_all_and_request)
+                     control_note, select_all_and_request, encoder_badge)
 
 ZERO_PROMPT = (
     'No motor calibration is loaded, so Direct Control has no motor coordinates. '
@@ -77,6 +77,7 @@ def build(hand, act, confirm, leave=None):
                         with ui.row().classes('items-center'):
                             refreshers.append(selection(hand, 'selected_motors', [m], f'M{m:02d}'))
                             control = quality()
+                            elec = encoder_badge()
                             feedback = label()
                         drafts[m], number, slider = target_editor(
                             0, 0, 1, integer=True,
@@ -87,7 +88,7 @@ def build(hand, act, confirm, leave=None):
                             ui.button('−', on_click=lambda m=m, number=number: number.set_value(drafts[m]['value'] - 1)).props('dense outline')
                             ui.button('+', on_click=lambda m=m, number=number: number.set_value(drafts[m]['value'] + 1)).props('dense outline')
                             limits = label()
-                    def refresh(snapshot, m=m, feedback=feedback, limits=limits, number=number, slider=slider, send=send, control=control):
+                    def refresh(snapshot, m=m, feedback=feedback, limits=limits, number=number, slider=slider, send=send, control=control, elec=elec):
                         row = snapshot['motors'][m]
                         statuses = [row['direct_control_status']]
                         if row.get('motor_beyond_workspace'):
@@ -95,6 +96,7 @@ def build(hand, act, confirm, leave=None):
                         if snapshot['joints'][row['joint']].get('angle_out_of_workspace'):
                             statuses.append('JOINT BEYOND WORKSPACE')
                         control(statuses, f"P4-confirmed direct control state for M{m:02d} / J{row['joint']:02d}, plus joint-angle and motor workspace state.")
+                        elec(snapshot['joints'][row['joint']].get('encoder_state'), row['joint'])
                         generation = row.get('abs_zero_generation', 0)
                         if generation != zero_generations[m] and row['abs'] is not None:
                             number.set_value(row['abs'])

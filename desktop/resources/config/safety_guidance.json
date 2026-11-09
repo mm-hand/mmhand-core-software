@@ -675,6 +675,27 @@
         "Click Connect and wait for current device data."
       ]
     },
+    "HOST_ELECTRICS_CAN": {
+      "title": "No joint position data is arriving over CAN",
+      "category": "host_connection",
+      "impact": "The app cannot read the magnetic encoders while the CAN link or its wiring is down.",
+      "steps": [
+        "Check CANH and CANL between S3 and P4 for swapped, open, or loose wires.",
+        "Check the common ground and the 120 ohm terminations at both ends.",
+        "Check that both CAN transceivers are powered and not in standby (STB tied low).",
+        "Check that the S3 board is powered."
+      ]
+    },
+    "HOST_ENCODER_WIRING": {
+      "title": "A magnetic encoder is not reporting a valid position",
+      "category": "quality",
+      "impact": "The affected joint has no usable raw feedback even though CAN is working.",
+      "steps": [
+        "Check the finger connector, the sensor board power, and the magnet on the affected joint.",
+        "Check the shared MISO/SCLK/MOSI wires for the affected finger.",
+        "Open Diagnostics for the per-joint raw and latched encoder error code."
+      ]
+    },
     "HOST_PARAMETERS_PENDING": {
       "title": "Control parameters have not been applied yet",
       "category": "parameters",

@@ -237,22 +237,32 @@ def split_p4_timestamp(pkt_type: int, payload: bytes) -> Tuple[bytes, Optional[i
     )
 
 
-def parse_sensor_packet(payload: bytes) -> Tuple[List[int], List[bool]]:
-    """Parse 21 raw magnetic encoder counts from the firmware sensor packet."""
+ENCODER_OPEN_SENTINEL = 0x7FFE
+ENCODER_SHORT_SENTINEL = 0x7FFD
+
+
+def parse_sensor_packet(payload: bytes) -> Tuple[List[int], List[bool], List[str]]:
+    """Parse 21 encoder words. faults: '' (ok), 'error', 'open', 'short'."""
     angles: List[int] = []
     errors: List[bool] = []
+    faults: List[str] = []
     if len(payload) != ENCODER_COUNT * 2:
-        return angles, errors
+        return angles, errors, faults
 
     for i in range(ENCODER_COUNT):
         raw_u16 = (payload[i * 2] << 8) | payload[i * 2 + 1]
-        is_error = (raw_u16 == DISCONNECT_SENTINEL)
-        errors.append(is_error)
-        if is_error:
-            angles.append(0)
+        if raw_u16 == ENCODER_OPEN_SENTINEL:
+            fault = 'open'
+        elif raw_u16 == ENCODER_SHORT_SENTINEL:
+            fault = 'short'
+        elif raw_u16 == DISCONNECT_SENTINEL:
+            fault = 'error'
         else:
-            angles.append(struct.unpack(">h", payload[i * 2:i * 2 + 2])[0])
-    return angles, errors
+            fault = ''
+        faults.append(fault)
+        errors.append(bool(fault))
+        angles.append(0 if fault else struct.unpack(">h", payload[i * 2:i * 2 + 2])[0])
+    return angles, errors, faults
 
 
 def parse_proto_ack(payload: bytes) -> Optional[Tuple[int, int, int]]:

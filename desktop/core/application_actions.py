@@ -299,6 +299,7 @@ class ApplicationActions(IdResetActions):
             if self._application_closed:
                 return
             self._application_closed = True
+            self._contact_capture = None
         self.stop_motion(emergency=True, source='application shutdown')
         self._application_stop.set()
         if self._discovery_thread:
@@ -1713,7 +1714,8 @@ class ApplicationActions(IdResetActions):
                         and state.servo_route_controllable_bitmap & bit
                         and not state.multi_turn_unknown_bitmap & bit):
                     self._displayed_motor_abs_zero_generations[motor] = zero_generations[motor]
-            busy = bool(self._application_busy or host_active)
+            busy = bool(self._application_busy or host_active or
+                        getattr(self, '_contact_capture', None))
             ros_reason = self._ros_reason if not self._ros_available else ('P4 is not ready' if not fresh or not self.is_started() else
                          'Device protection fault is active' if state.system_fault_bitmap else
                          'Calibration or another operation is running' if busy else 'Replay owns the input' if self._replay_motion_active else '')
