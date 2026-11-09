@@ -34,8 +34,8 @@
 // ===========================================
 // [系统] 单路磁编诊断状态机；AS5047P响应具有一拍流水线。
 // ===========================================
-// 接线自检：开机测一次，之后每 10 s 一次（5 指 × 2 遍短事务）。
-#define ENCODER_WIRE_PROBE_PERIOD_MS 10000
+// 接线自检：开机测一次，之后每 2 s 一次（5 指 × 2 遍短事务）。
+#define ENCODER_WIRE_PROBE_PERIOD_MS 2000
 // 自检结论借用"无效原始值"上传：0xFFFF=器件错误，0x7FFE=开路，0x7FFD=短路。
 #define ENCODER_OPEN_RAW  0x7FFE
 #define ENCODER_SHORT_RAW 0x7FFD

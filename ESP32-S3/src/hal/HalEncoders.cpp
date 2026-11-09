@@ -425,7 +425,7 @@ void HalEncoders::probeWires(EncoderWireResult& out) {
     }
 }
 
-/** @brief 节流执行自检；开机已测一次，之后每 10 s 一次。 */
+/** @brief 节流执行自检；开机已测一次，之后每 2 s 一次。 */
 void HalEncoders::serviceWireProbe(uint32_t nowMs) {
     if (_wireLastMs != 0 && (uint32_t)(nowMs - _wireLastMs) < ENCODER_WIRE_PROBE_PERIOD_MS) {
         return;

@@ -36,7 +36,7 @@ public:
     /** @brief 按值返回一次完整磁编快照的便捷重载。 */
     EncoderData getData();
 
-    /** @brief 节流执行接线自检（开机已测一次，之后每 10 s）。 */
+    /** @brief 节流执行接线自检（开机已测一次，之后每 2 s）。 */
     void serviceWireProbe(uint32_t nowMs);
 
     // [待确认是否删除] 当前工程没有调用该字符串转换函数，仅适合串口人工诊断。
