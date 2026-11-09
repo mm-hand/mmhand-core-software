@@ -19,7 +19,7 @@ def command(args, *, env=None):
 
 
 def check_dependencies():
-    for package, version in [('pytest', '8.4.2'), ('nicegui', '3.16.0'), ('numpy', None), ('pyserial', None)]:
+    for package, version in [('pytest', '9.2.0'), ('nicegui', '3.16.0'), ('numpy', None), ('pyserial', None)]:
         installed = importlib.metadata.version(package)
         if version and installed != version:
             raise RuntimeError(f'{package} must be {version}; found {installed}. Install requirements-test.txt.')
