@@ -79,7 +79,7 @@ def test_enabled_scope_reuses_a_superset_for_subset_targets():
     controller.comm.send_command.assert_not_called()
 
 
-@pytest.mark.parametrize("fault", ["stale", "unknown", "route", "raw_only"])
+@pytest.mark.parametrize("fault", ["stale", "unknown", "raw_only"])
 def test_direct_enable_rejects_untrusted_or_clamped_hold(fault):
     controller = controller_with_motor()
     state = controller.current_state
@@ -88,8 +88,6 @@ def test_direct_enable_rejects_untrusted_or_clamped_hold(fault):
         stamp(state, 'servo_abs_last_rx_ts')
     elif fault == "unknown":
         state.multi_turn_unknown_bitmap |= 8
-    elif fault == "route":
-        state.servo_route_controllable_bitmap = 0
     elif fault == "raw_only":
         state.has_servo_angle_data = False
     assert not controller.enable_direct_hold(8)[0]

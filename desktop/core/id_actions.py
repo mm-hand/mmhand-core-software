@@ -110,16 +110,18 @@ class IdResetActions:
                         reply = self._id_checked(comm.maintenance_request(session, PROBE, bus, identifier, cancelled=cancelled))
                         if reply['present']:
                             rows.append(dict(bus=bus, id=identifier))
-                self._id_scan_connections[kind] = (comm, self._controller.get_servo_abs_zero_generation_state()[-1])
                 message = f'Found {len(rows)} servos. Same-BUS duplicate IDs cannot be distinguished; connect them separately.'
-                self._id_update(kind, recovering=recovering)
+                reconciliation_error = None
                 if recovering:
-                    recovery_targets = motor_recovery_targets(journal, rows)
-                    for row in rows:
-                        row['new_id'] = recovery_targets[(row['bus'],row['id'])]
-                    message = 'Interrupted batch reconciled. Renumber All resumes the recorded sequence; inputs are locked.'
-                self._id_update(kind, rows=rows, scanned=True, generation=self._id_reset[kind]['generation'] + 1, message=message)
-                return True, message
+                    try:
+                        recovery_targets = motor_recovery_targets(journal, rows)
+                    except ValueError as exc:
+                        reconciliation_error = exc
+                        message = str(exc)
+                    else:
+                        for row in rows:
+                            row['new_id'] = recovery_targets.get((row['bus'], row['id']), row['id'])
+                        message = 'Interrupted batch reconciled. Renumber All resumes the recorded sequence; inputs are locked.'
             except Exception as exc:
                 self._id_update(kind, message=str(exc))
                 raise
@@ -129,6 +131,12 @@ class IdResetActions:
                 except Exception as exc:
                     self._id_update(kind, scanned=False, message=f'Maintenance cleanup failed: {exc}; reconnect and scan again')
                     raise RuntimeError(f'Maintenance cleanup failed: {exc}') from exc
+            if cancelled():
+                return False, 'Scan cancelled'
+            self._id_scan_connections[kind] = (comm, self._controller.get_servo_abs_zero_generation_state()[-1])
+            self._id_update(kind, rows=rows, scanned=reconciliation_error is None, recovering=recovering,
+                            generation=self._id_reset[kind]['generation'] + 1, message=message)
+            return reconciliation_error is None, message
         return self.submit_operation('Scan All Buses', scan, requires_device=True)
 
     def request_motor_renumber(self, targets):

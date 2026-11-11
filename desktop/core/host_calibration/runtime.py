@@ -30,7 +30,7 @@ from ..motor_mapping import MOTOR_TO_JOINT_INDEX
 from ..protocol import (
     CALIB_DIAG_PHASE_NONE, CALIB_DIAG_PHASE_SEQUENCE,
     CALIB_DIAG_REASON_NONE, CALIB_DIAG_REASON_ENCODER_ERROR,
-    CALIB_DIAG_REASON_OVERLOAD, CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
+    CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
     CALIB_DIAG_REASON_SERVO_RECOVERY_TIMEOUT, CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT,
     CMD_CALIB_LOAD_JOINT, CMD_CALIB_LOAD_LIMITS, CMD_MANUAL_ENCODER_SINGLE,
     CMD_MOTOR_DIRECT_RELEASE, CMD_MOTOR_POS_ABS,
@@ -50,7 +50,6 @@ from .config import (
     kEncoderRecoveryTimeoutMs, kEncoderTrustedSampleMaxAgeMs,
     kFeedbackReadyServoTimeoutMs, kServoRecoveryStableSamples,
     kServoRecoveryTimeoutMs, kHostTargetResultTimeoutMs, kHostRebaseFeedbackTimeoutMs,
-    kOverloadLoadThreshold, load_magnitude,
     kAaMidpointSpeedCountsPerSec, kAaMidpointToleranceFractionOfRange,
     kAbsRebaseTriggerCounts, kTendonFitSampleStepDeg,
 )
@@ -1011,10 +1010,12 @@ class HostCalibrationIO:
             return False
         scope = self.selected_motor_mask | self._workspace_mask
         requested_mask = sum(1 << m for m in targets)
+        outside = requested_mask & ~scope
+        if outside:
+            motor = (outside & -outside).bit_length() - 1
+            self.motion_publish_error = f'M{motor:02d} is outside the enabled calibration scope'
+            return False
         for motor, target in targets.items():
-            if not scope & (1 << motor):
-                self.motion_publish_error = f'M{motor:02d} is outside the enabled calibration scope'
-                return False
             if (self._active_calib_motor_mask & (1 << motor)
                     and abs(int(target)) >= kAbsRebaseTriggerCounts):
                 # 收紧把活动关节推到多圈上限附近：让流程重新设零后重跑该关节，
@@ -1024,6 +1025,7 @@ class HostCalibrationIO:
                     f'M{motor:02d} target {int(target)} reached ABS rebase trigger '
                     f'{kAbsRebaseTriggerCounts}')
                 return False
+        for motor, target in targets.items():
             bounds = self.logical_range(motor)
             if bounds is None:
                 self.motion_publish_error = f'M{motor:02d} logical range is unavailable'
@@ -1032,15 +1034,6 @@ class HostCalibrationIO:
                 self.motion_publish_error = (
                     f'M{motor:02d} target {int(target)} outside servo multi-turn range '
                     f'[{bounds[0]}, {bounds[1]}]')
-                return False
-        for motor in targets:
-            load = self.servo_load(motor)
-            if load is not None and load_magnitude(load) >= kOverloadLoadThreshold:
-                self.diag_if_empty(CALIB_DIAG_REASON_OVERLOAD,
-                                  CALIB_DIAG_PHASE_SEQUENCE,
-                                  MOTOR_TO_JOINT_INDEX[motor], motor,
-                                  load_magnitude(load), kOverloadLoadThreshold,
-                                  load, 1 << motor)
                 return False
         state = self._state()
         values = list(state.servo_angles)

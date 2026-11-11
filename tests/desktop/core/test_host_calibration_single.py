@@ -310,7 +310,7 @@ def test_control_hold_and_publish_failures_abort_the_outer_sequence():
         assert io.diags[0][0] == expected
 
 
-def test_lost_feedback_and_session_range_keep_original_diagnostic_phase():
+def test_lost_feedback_preserves_phase_and_range_is_checked_at_publish():
     io = FakeIO()
     ctx = tighten_context(io)
     io.encoder_value = None
@@ -322,9 +322,9 @@ def test_lost_feedback_and_session_range_keep_original_diagnostic_phase():
     io.range = (-7, 7)
     targets = {}
     step_single(ctx, io, AutoCalibrationParams(), targets)
-    assert ctx.state == AutoCalibState.FAILED
+    assert ctx.state == AutoCalibState.TIGHTEN
     assert targets == {2: 8}
-    assert io.diags[-1][:2] == (p.CALIB_DIAG_REASON_ABS_LIMIT_INVALID, p.CALIB_DIAG_PHASE_FIND_MAX)
+    assert not io.diags
 
 
 def test_outer_publish_failure_preserves_execution_timeout_diagnostic():

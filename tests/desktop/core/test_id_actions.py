@@ -80,6 +80,32 @@ def test_motor_scan_covers_only_zero_through_thirty_on_every_bus(hand, monkeypat
     assert hand.id_reset_snapshot()['motor']['rows'] == [dict(bus=0, id=0), dict(bus=1, id=30)]
     assert not device.writes
 
+def test_failed_id_reconciliation_preserves_scanned_addresses(hand, monkeypatch, tmp_path):
+    import json
+    from desktop.core import id_actions
+
+    device_id = '1234567890ABCDEF'
+    monkeypatch.setattr(id_actions, 'DEVICE_STATE_DIR', tmp_path)
+    monkeypatch.setattr(hand._controller, 'servo_abs_zero_device_id', lambda _: device_id)
+    path = tmp_path / f'id_reset_{device_id}.json'
+    journal = {'inventory': [{'bus': 0, 'id': 0}], 'moves': [[0, 0, 2]], 'completed': 0}
+    path.write_text(json.dumps(journal), encoding='utf-8')
+    device = MotorDevice()
+    device.inventory = {(0, 1)}
+    hand._controller.comm = device
+
+    result = finish(hand, hand.request_id_scan())
+    scan = hand.id_reset_snapshot()['motor']
+    assert result['status'] == 'FAILED'
+    assert 'Recorded batch does not match' in scan['message']
+    assert scan['rows'] == [{'bus': 0, 'id': 1}]
+    assert not scan['scanned']
+    assert not hand.request_motor_renumber({}).accepted
+    assert not hand.request_motor_buzz(0, 1).accepted
+    assert json.loads(path.read_text(encoding='utf-8')) == journal
+    assert not device.writes and not device.buzzes
+
+
 @pytest.mark.parametrize('occupied', [(0, 31), (3, 31), (2, 253)])
 def test_motor_quick_scan_still_rejects_unscanned_target_or_temporary_conflict(hand, monkeypatch, tmp_path, occupied):
     from desktop.core import id_actions

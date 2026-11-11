@@ -158,17 +158,6 @@ def _step_counts(ctx, now, params):
     return counts
 
 
-def _inside_limit(ctx, io, targets, phase, text):
-    if io.inside_limit(ctx.motor, ctx.command_abs):
-        return True
-    limits = io.logical_range(ctx.motor)
-    lo, hi = limits if limits is not None else (0, 0)
-    targets[ctx.motor] = ctx.command_abs
-    _fail(ctx, io, text, p.CALIB_DIAG_REASON_ABS_LIMIT_INVALID, phase,
-          a=ctx.command_abs, b=lo, c=hi)
-    return False
-
-
 def _single_lut_limit(result, motor, io):
     # Workspace comes from the fitted LUT line plus the configurable extension.
     # A measured "tight" position is deliberately not used: tube bending changes
@@ -437,9 +426,6 @@ def step_single(ctx: JointCalibContext, io, params: AutoCalibrationParams,
             counts = _step_counts(ctx, now, params)
             if counts > 0:
                 ctx.command_abs = motor_apply_tendon_delta(ctx.motor, ctx.command_abs, counts)
-                if not _inside_limit(ctx, io, targets, p.CALIB_DIAG_PHASE_FIND_MAX,
-                                     "find max command outside session range"):
-                    return
                 if not _append(ctx, io, targets, ctx.command_abs, p.CALIB_DIAG_PHASE_FIND_MAX,
                                "find max target append failed"):
                     return
@@ -459,9 +445,6 @@ def step_single(ctx: JointCalibContext, io, params: AutoCalibrationParams,
                       c=command_release, bitmap=1 << ctx.motor)
                 return
             ctx.command_abs = next_command
-            if not _inside_limit(ctx, io, targets, p.CALIB_DIAG_PHASE_RELEASE,
-                                 "release command outside session range"):
-                return
             if not _append(ctx, io, targets, ctx.command_abs, p.CALIB_DIAG_PHASE_RELEASE,
                            "release target append failed"):
                 return

@@ -170,6 +170,15 @@ static void noteTendonLutClamp(SystemRuntimeContext* sharedData,
 }
 
 // 协议字段使用 int16，保留 +32767 作为哨兵/无效值。
+static int32_t diagnosticMillidegrees(float degrees)
+{
+    if (isnan(degrees)) return 0;
+    const double scaled = static_cast<double>(degrees) * 1000.0;
+    if (scaled >= INT32_MAX) return INT32_MAX;
+    if (scaled <= INT32_MIN) return INT32_MIN;
+    return static_cast<int32_t>(lround(scaled));
+}
+
 static int16_t clampMappedCountForProtocol(int32_t value)
 {
     if (value > 32766) return 32766;
@@ -636,8 +645,8 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                         SafetyRuleId::ControlJointTargetClamp,
                         jointIndex,
                         0xFF,
-                        static_cast<int32_t>(lroundf(requestedDeg * 1000.0f)),
-                        static_cast<int32_t>(lroundf(appliedDeg * 1000.0f)));
+                        diagnosticMillidegrees(requestedDeg),
+                        diagnosticMillidegrees(appliedDeg));
                 }
             }
             const uint32_t recoveredTargetClampMask =

@@ -53,6 +53,6 @@ def build(hand, act):
                         buzz[key] = ui.button('Buzz', on_click=lambda key=key: act(lambda: hand.request_motor_buzz(*key))).props('dense outline')
                         with buzz[key]:
                             ui.tooltip('This motor buzzes about 6° towards tendon release and returns.')
-        for number in inputs.values(): number.set_enabled(motor['available'] and idle and not motor['recovering'])
-        for button in buzz.values(): button.set_enabled(motor['available'] and idle and not motor['recovering'])
+        for number in inputs.values(): number.set_enabled(motor['available'] and idle and motor['scanned'] and not motor['recovering'])
+        for button in buzz.values(): button.set_enabled(motor['available'] and idle and motor['scanned'] and not motor['recovering'])
     return refresh

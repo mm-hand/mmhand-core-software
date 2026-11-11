@@ -57,7 +57,6 @@ from .protocol import (
     CMD_MANUAL_ENCODER_REFERENCE,
     CMD_MANUAL_ENCODER_SINGLE,
     CMD_STATE_SYNC_REQUEST,
-    CMD_PULL_JOINT_INTO_WORKSPACE,
     CMD_RESET,
     CMD_MOTOR_ABS_ZERO,
     ENCODER_COUNT,
@@ -326,62 +325,51 @@ class HandController:
             state = HandModel()
             state.copy_state_from(self.current_state)
         targets = list(state.servo_angles)
-        age = time.monotonic() - state.received_at('servo_abs_last_rx_ts')
-        p4_age = ((state.p4_time_ms - state.servo_feedback_p4_time_ms + 0x80000000) & 0xFFFFFFFF) - 0x80000000
-        valid = state.servo_online_bitmap & state.servo_route_controllable_bitmap
-        reason = ""
         if not self.comm or not mask:
-            reason = "not connected or empty motor scope"
-        elif state.has_servo_online_status and any(mask & (1 << m) and status != ServoOnlineCheck.READY
-                                                  for m, status in enumerate(state.servo_online_check)):
-            reason = "selected motor firmware/configuration check has not passed"
-        elif state.servo_route_scan_state == 1:
-            reason = "full route scan is running"
-        elif not state.has_servo_angle_data or not state.has_servo_route_status:
-            reason = "waiting for logical ABS and routes"
-        elif not state.has_p4_time or not 0 <= age <= 0.5 or abs(p4_age) > 500:
-            reason = "logical ABS feedback is stale"
-        elif mask & (~valid | state.multi_turn_unknown_bitmap):
-            reason = "selected motor offline, unroutable or Turn Unknown"
-        if not reason:
-            if (state.system_state == SYSTEM_STATE_RUN_DIRECT and state.control_enabled
-                    and state.servo_target_owner == 1 and mask & ~state.active_motor_mask == 0):
-                return True, 'Direct control is already enabled', targets
-            self.invalidate_direct_commands()
-            self.set_control_mode(ControlMode.DIRECT_MOTOR)
-            generation = self._coordinate_cancel_generation
-            with self._coordinate_command_lock:
-                if generation != self._coordinate_cancel_generation:
-                    return False, 'Direct enable cancelled', targets
-                state = self._coordinate_state()
-                if (not 0 <= time.monotonic() - state.received_at('servo_abs_last_rx_ts') <= .5 or
-                    mask & (~state.servo_online_bitmap | ~state.servo_route_controllable_bitmap | state.multi_turn_unknown_bitmap)):
-
-                    return False, 'Current ABS became stale or unavailable', targets
-                targets = list(state.servo_angles)
-                token = (state.direct_target_token + 1) & 0xffffffff or 1
-                submitted_at = time.monotonic()
-                self.start()
-                if not self.comm.send_command((
-                        'motor_pos_abs', token, mask, targets, DIRECT_SERVO_SPEED, DIRECT_SERVO_ACC)):
-                    return False, 'Current-position hold was not queued', targets
-            deadline = time.monotonic() + 3
-            while time.monotonic() < deadline and generation == self._coordinate_cancel_generation:
-                state = self._coordinate_state()
-                if (state.direct_target_token == token and state.received_at('direct_target_result_rx_ts') >= submitted_at):
-                    if state.direct_target_status != 2 or state.direct_target_applied_mask != mask or state.direct_target_rejected_mask:
-                        return False, 'P4 rejected current-position hold', targets
-                    if (state.control_enabled and state.servo_target_owner == 1 and
-                            state.system_state == SYSTEM_STATE_RUN_DIRECT and state.active_motor_mask == mask
-                            and 0 <= time.monotonic() - state.received_at('system_status_last_rx_ts') <= .6):
-                        return True, 'Selected motors enabled; holding current ABS', targets
-                time.sleep(.01)
-            reason = 'Direct enable execution was not confirmed'
+            return False, 'Not connected or empty motor scope', targets
+        if (state.system_state == SYSTEM_STATE_RUN_DIRECT and state.control_enabled
+                and state.servo_target_owner == SERVO_TARGET_OWNER_CONTROL
+                and state.has_active_scope_status and mask & ~state.active_motor_mask == 0
+                and 0 <= time.monotonic() - state.received_at('system_status_last_rx_ts') <= .6):
+            return True, 'Direct control is already enabled', targets
+        self.invalidate_direct_commands()
+        self.set_control_mode(ControlMode.DIRECT_MOTOR)
+        generation = self._coordinate_cancel_generation
+        with self._coordinate_command_lock:
+            if generation != self._coordinate_cancel_generation:
+                return False, 'Direct enable cancelled', targets
+            state = self._coordinate_state()
+            age = time.monotonic() - state.received_at('servo_abs_last_rx_ts')
+            p4_age = ((state.p4_time_ms - state.servo_feedback_p4_time_ms + 0x80000000)
+                      & 0xffffffff) - 0x80000000
+            if (not state.has_servo_angle_data or not state.has_p4_time
+                    or not 0 <= age <= .5 or abs(p4_age) > 500
+                    or mask & (~state.servo_online_bitmap | state.multi_turn_unknown_bitmap)):
+                return False, 'Current ABS is stale or untrusted', targets
+            targets = list(state.servo_angles)
+            token = (state.direct_target_token + 1) & 0xffffffff or 1
+            submitted_at = time.monotonic()
+            self.start()
+            if not self.comm.send_command((
+                    'motor_pos_abs', token, mask, targets, DIRECT_SERVO_SPEED, DIRECT_SERVO_ACC)):
+                return False, 'Current-position hold was not queued', targets
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and generation == self._coordinate_cancel_generation:
+            state = self._coordinate_state()
+            if (state.direct_target_token == token and state.received_at('direct_target_result_rx_ts') >= submitted_at):
+                if state.direct_target_status != 2 or state.direct_target_applied_mask != mask or state.direct_target_rejected_mask:
+                    return False, f'P4 rejected current-position hold (reason={state.direct_reject_reason})', targets
+                if (state.control_enabled and state.servo_target_owner == 1 and
+                        state.system_state == SYSTEM_STATE_RUN_DIRECT and state.active_motor_mask == mask
+                        and 0 <= time.monotonic() - state.received_at('system_status_last_rx_ts') <= .6):
+                    return True, 'Selected motors enabled; holding current ABS', targets
+            time.sleep(.01)
+        reason = 'Direct enable execution was not confirmed'
 
         selected = {i: targets[i] for i in range(min(len(targets), MOTOR_COUNT)) if mask & (1 << i)}
         log_session("DIRECT_ENABLE", f"mask=0x{mask:08X} feedback_ms={state.servo_feedback_p4_time_ms} "
-                    f"age_s={age:.3f} ABS={selected} hold={selected if not reason else {}} reject={reason or 'none'}")
-        return not reason, reason or "Direct motor hold requested", targets
+                    f"age_s={age:.3f} ABS={selected} reject={reason}")
+        return False, reason, targets
 
     def set_control_mode(self, mode: ControlMode):
         """设置电机控制模式：JOINT_ANGLE 或 DIRECT_MOTOR"""
@@ -1567,16 +1555,8 @@ class HandController:
         return verified and not cancelled()
 
     def pull_joint_into_workspace(self, active_joint_mask: int) -> bool:
-        if not self.comm:
-            return False
-        sent_at = time.monotonic()
-        self.comm.send_command(("pull_joint_into_workspace", int(active_joint_mask)))
-        ack = self.comm.wait_for_ack(
-            CMD_PULL_JOINT_INTO_WORKSPACE,
-            MANUAL_REFERENCE_ACK_TIMEOUT_S,
-            received_after_monotonic=sent_at,
-        )
-        return bool(ack is not None and int(ack[2]) in (0, 2))
+        """Queue recovery so the caller can wait for the ACK outside the motion locks."""
+        return bool(self.comm and self.comm.send_command(("pull_joint_into_workspace", int(active_joint_mask))))
 
     def clear_manual_encoder_references(self) -> bool:
         """清除 P4 RAM 中的 Manual 表，并同步清除桌面标定 JSON 的对应内容。"""

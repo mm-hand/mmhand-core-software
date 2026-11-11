@@ -60,12 +60,15 @@ void finish(SystemRuntimeContext* sharedData,
 {
     if (!sharedData || sharedData->pullJointIntoWorkspaceRuntime.active == 0) return;
     sharedData->pullJointIntoWorkspaceRuntime.active = 0;
-    sharedAtomicStore(&sharedData->pull_joint_into_workspace_status,
-                      success ? PULL_JOINT_INTO_WORKSPACE_STATUS_SUCCESS
-                              : PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED);
-    sharedAtomicStore(&sharedData->pull_joint_into_workspace_reason,
-                      success ? PULL_JOINT_INTO_WORKSPACE_REASON_NONE : reason);
-    sharedAtomicStore(&sharedData->pull_joint_into_workspace_timestamp, nowMs);
+    {
+        SharedSafetyGuard guard;
+        sharedAtomicStore(&sharedData->pull_joint_into_workspace_status,
+                          success ? PULL_JOINT_INTO_WORKSPACE_STATUS_SUCCESS
+                                  : PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED);
+        sharedAtomicStore(&sharedData->pull_joint_into_workspace_reason,
+                          success ? PULL_JOINT_INTO_WORKSPACE_REASON_NONE : reason);
+        sharedAtomicStore(&sharedData->pull_joint_into_workspace_timestamp, nowMs);
+    }
 
     if (!success) {
         const SafetyRuleId ruleId = p4::safety::ruleForPullJointIntoWorkspaceReason(reason);

@@ -80,7 +80,7 @@ def test_queued_anchor_older_than_verified_zero_feedback_is_discarded(monkeypatc
 
 
 
-def direct_target_device(hand, monkeypatch, *, load=0):
+def direct_target_device(hand, monkeypatch, *, load=0, reject_reason=0):
     """Keep the real request/worker path and emulate execution-layer readback."""
     state = hand._controller.current_state
     state.has_servo_angle_data = state.has_servo_route_status = True
@@ -100,14 +100,17 @@ def direct_target_device(hand, monkeypatch, *, load=0):
     comm = Mock()
 
     def execution_reply(command):
+        if not isinstance(command, tuple):
+            return True
         assert command[0] == 'motor_pos_abs'
         _, token, mask, values, speed, acceleration = command
         from desktop.core.protocol import DIRECT_SERVO_SPEED, DIRECT_SERVO_ACC
         assert (speed, acceleration) == (DIRECT_SERVO_SPEED, DIRECT_SERVO_ACC)
         state.direct_target_token = token
-        state.direct_target_applied_mask = mask
-        state.direct_target_rejected_mask = 0
-        state.direct_target_status = 2
+        state.direct_target_applied_mask = 0 if reject_reason else mask
+        state.direct_target_rejected_mask = mask if reject_reason else 0
+        state.direct_target_status = 3 if reject_reason else 2
+        state.direct_reject_reason = reject_reason
         state.direct_target_result_rx_ts = time.time()
         stamp(state, 'direct_target_result_rx_ts')
         state.system_status_last_rx_ts = state.servo_abs_last_rx_ts = state.servo_telem_last_rx_ts = time.time()
@@ -124,42 +127,21 @@ def direct_target_device(hand, monkeypatch, *, load=0):
     return comm
 
 
-@pytest.mark.parametrize('load', [-799, -32, 0, 32, 799])
-def test_direct_targets_accept_signed_load_below_overload_threshold(hand, monkeypatch, load):
+@pytest.mark.parametrize('load', [-1023, -800, -799, 0, 799, 800, 1023])
+def test_direct_targets_forward_signed_loads_to_p4(hand, monkeypatch, load):
     comm = direct_target_device(hand, monkeypatch, load=load)
     assert wait_operation(hand, hand.request_motors({11: 3000}))['status'] == 'SUCCESS'
     command = comm.send_command.call_args.args[0]
     assert command[0] == 'motor_pos_abs' and command[2] == 1 << 11 and command[3][11] == 3000
 
 
-@pytest.mark.parametrize('load', [-800, 800, -1023, 1023])
-def test_direct_targets_reject_real_overload_in_both_directions(hand, monkeypatch, load):
-    comm = direct_target_device(hand, monkeypatch, load=load)
+@pytest.mark.parametrize('reason', [1, 2, 3, 6])
+def test_direct_target_uses_p4_rejection(hand, monkeypatch, reason):
+    comm = direct_target_device(hand, monkeypatch, load=1023, reject_reason=reason)
     result = wait_operation(hand, hand.request_motors({11: 3000}))
     assert result['status'] == 'FAILED'
-    assert f'M11 load magnitude {abs(load)}' in result['message']
-    assert 'multi-turn ABS is unknown' not in result['message']
-    comm.send_command.assert_not_called()
-    hand.set_active_scope.assert_not_called()
-    hand.enable_direct_hold.assert_not_called()
-
-
-@pytest.mark.parametrize('fault,expected', [
-    ('unknown', 'M11 multi-turn ABS is unknown'),
-    ('offline', 'M11 is offline'),
-])
-def test_direct_targets_report_the_specific_position_gate(hand, monkeypatch, fault, expected):
-    comm = direct_target_device(hand, monkeypatch)
-    state = hand._controller.current_state
-    if fault == 'unknown':
-        state.multi_turn_unknown_bitmap = 1 << 11
-    elif fault == 'offline':
-        state.servo_online_bitmap &= ~(1 << 11)
-    result = wait_operation(hand, hand.request_motors({11: 3000}))
-    assert result['status'] == 'FAILED' and expected in result['message']
-    comm.send_command.assert_not_called()
-    hand.set_active_scope.assert_not_called()
-    hand.enable_direct_hold.assert_not_called()
+    assert f'reason={reason}' in result['message']
+    assert comm.send_command.call_args.args[0][2] == 1 << 11
 
 
 def direct_zero_device(hand, monkeypatch, *, success=None, fault='', change_selection=False):
@@ -690,62 +672,85 @@ def test_port_discovery_failure_clears_stale_choices(hand):
 
 
 
-def test_enable_recovery_runs_pull_joint_into_workspace_when_pose_below_workspace(hand, monkeypatch):
-    """Enable 前发现低于工作区时，自动用 P4 Pull Joint into Workspace 回正，成功后再继续。"""
-    seen = []
-    def guard(state, joints, mask):
-        seen.append(1)
-        if len(seen) == 1:
-            return False, [0], 'J00 -0.62° below min 0.00° by 0.62°'
-        return False, [], ''
-    monkeypatch.setattr(hand, '_enable_holding_workspace', guard)
-    monkeypatch.setattr(hand, '_wait_application', lambda *a, **k: True)
+@pytest.mark.parametrize('outcome', ['success', 'failed', 'stale', 'wrong_scope', 'ack', 'stop', 'reconnect'])
+def test_enable_recovery_uses_p4_result(hand, monkeypatch, outcome):
     state = hand._controller.current_state
-    calls = []
+    state.pull_joint_into_workspace_sequence = 7
+    comm = Mock()
+    hand._controller.comm = comm
+    comm.wait_for_ack.return_value = (0, 0, 9 if outcome == 'ack' else 2)
+    epoch = hand._application_epoch
 
     def rope(mask):
-        calls.append(mask)
-        state.pull_joint_into_workspace_sequence += 1
-        state.pull_joint_into_workspace_status = 2
+        state.pull_joint_into_workspace_sequence = 7 if outcome == 'stale' else 8
+        state.pull_joint_into_workspace_joint_mask = 2 if outcome == 'wrong_scope' else mask
+        state.pull_joint_into_workspace_status = 3 if outcome == 'failed' else 2
+        state.pull_joint_into_workspace_reason = 4
+        state.monotonic_received['system_status_last_rx_ts'] = time.monotonic()
+        if outcome == 'stop':
+            hand._application_epoch += 1
+        if outcome == 'reconnect':
+            hand._controller.comm = Mock()
         return True
 
-    monkeypatch.setattr(hand, 'pull_joint_into_workspace', rope)
+    pull = Mock(side_effect=rope)
+    monkeypatch.setattr(hand, 'pull_joint_into_workspace', pull)
+    monkeypatch.setattr(hand, '_wait_application', lambda predicate, *_: predicate(state))
+    ok, message = hand._recover_enable_workspace(1, epoch, comm)
 
-    ok, message = hand._recover_enable_workspace([0], 1, 0)
+    pull.assert_called_once_with(1)
+    assert ok == (outcome == 'success')
+    if outcome == 'failed':
+        assert 'reason=4' in message
+    if outcome in ('stale', 'wrong_scope'):
+        assert 'timed out' in message
+    if outcome == 'ack':
+        assert 'ACK=9' in message
 
-    assert ok and message == '' and calls == [1] and len(seen) == 2
 
-
-def test_enable_recovery_reports_p4_reason_when_it_fails(hand, monkeypatch):
-    monkeypatch.setattr(hand, '_enable_holding_workspace',
-                        lambda *a: (False, [0], 'J00 -0.62° below min 0.00° by 0.62°'))
-    monkeypatch.setattr(hand, 'pull_joint_into_workspace', lambda mask: True)
+@pytest.mark.parametrize('recover', [False, True])
+def test_enable_uses_p4_readiness_and_holds_actual_angle(hand, monkeypatch, recover):
+    from desktop.core.hand_backend import JointCommandResult
+    from desktop.core.protocol import (
+        ControlMode, SYSTEM_STATE_READY, SYSTEM_STATE_JOINT_BEYOND_WORKSPACE,
+        SYSTEM_STATE_RUN_FEEDBACK, SERVO_TARGET_OWNER_CONTROL,
+    )
     state = hand._controller.current_state
-    waits = []
+    state.has_active_scope_status = state.has_system_status_data = state.protocol_compatible = True
+    state.require_can_feedback = True
+    state.active_joint_mask, state.active_motor_mask = 1, 3
+    state.control_mode = ControlMode.JOINT_ANGLE.value
+    state.encoders[0].raw = -8192
+    state.encoders[0].angle_error = False
+    monkeypatch.setattr(hand, 'is_comm_connected', lambda: True)
+    monkeypatch.setattr(hand, '_mapped_feedback_fresh', lambda _: True)
+    monkeypatch.setattr(hand, '_prepare_control_switch', lambda _: (True, ''))
+    monkeypatch.setattr(hand, 'set_active_scope', lambda *_: True)
 
-    def wait(predicate, epoch, timeout=3.0):
-        waits.append(1)
-        if len(waits) >= 2:
-            state.pull_joint_into_workspace_sequence += 1
-            state.pull_joint_into_workspace_status = 3
-            state.pull_joint_into_workspace_reason = 4
-        return True
+    def start():
+        state.system_state = SYSTEM_STATE_JOINT_BEYOND_WORKSPACE if recover else SYSTEM_STATE_READY
+        state.monotonic_received['system_status_last_rx_ts'] = time.monotonic()
 
-    monkeypatch.setattr(hand, '_wait_application', wait)
+    def recovery(*_):
+        state.system_state = SYSTEM_STATE_READY
+        state.monotonic_received['system_status_last_rx_ts'] = time.monotonic()
+        return True, ''
 
-    ok, message = hand._recover_enable_workspace([0], 1, 0)
+    def hold(values, **kwargs):
+        assert values[0] == -180.0 and kwargs['command_joint_mask'] == 1
+        state.system_state = SYSTEM_STATE_RUN_FEEDBACK
+        state.control_enabled = True
+        state.servo_target_owner = SERVO_TARGET_OWNER_CONTROL
+        return JointCommandResult(sent=True)
 
-    assert not ok and 'reason=4' in message and 'J00' in message
-
-
-def test_enable_recovery_is_skipped_when_pose_is_inside(hand, monkeypatch):
-    monkeypatch.setattr(hand, '_enable_holding_workspace', lambda *a: (False, [], ''))
-    calls = []
-    monkeypatch.setattr(hand, 'pull_joint_into_workspace', lambda mask: calls.append(mask) or True)
-
-    ok, message = hand._recover_enable_workspace([0], 1, 0)
-
-    assert ok and message == '' and calls == []
+    monkeypatch.setattr(hand, 'start', start)
+    pull = Mock(side_effect=recovery)
+    monkeypatch.setattr(hand, '_recover_enable_workspace', pull)
+    monkeypatch.setattr(hand, 'send_joint_targets', hold)
+    monkeypatch.setattr(hand, '_wait_application', lambda predicate, *_: predicate(state))
+    ok, message = hand._enable_selected_joints([0], hand._application_epoch)
+    assert ok, message
+    assert pull.call_count == int(recover)
 
 
 def test_calibration_rejects_unapplied_parameters_before_reset_or_motion(hand, monkeypatch):

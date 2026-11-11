@@ -57,7 +57,6 @@ def calibration_margins(io):
     return getter() if callable(getter) else DEFAULT_OUTPUT_MARGINS
 
 
-kOverloadLoadThreshold = 800
 kDualPrimaryTightLoadThreshold = 190
 kDualSecondaryPreloadLoadThreshold = 190
 kDualSecondaryFinalLoadThreshold = 250

@@ -30,7 +30,6 @@ from .host_calibration.config import joint_motors, shorten_sign
 from .session_log import close_session_log, log_session, session_log_since
 from .communication.connection_diagnostics import describe_connection_failure
 from .console_snapshot import enrich_snapshot, motor_quality
-from .data_models import resolve_joint_workspace_range
 from .id_actions import IdResetActions
 from .user_issues import operation_issue, issue_text, host_issue, IssueMessage
 from .control_parameters import ControlParameterStore
@@ -43,15 +42,15 @@ from .protocol import (
     SYSTEM_STATE_RUN_FEEDBACK, SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING,
     SYSTEM_STATE_JOINT_BEYOND_WORKSPACE,
     STATE_SYNC_ALL,
-    CMD_RESET, CMD_CONTROL_RELEASE, PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED,
-    SERVO_TARGET_OWNER_CONTROL, READY_WORKSPACE_TOLERANCE_DEG,
+    CMD_RESET, CMD_CONTROL_RELEASE, CMD_PULL_JOINT_INTO_WORKSPACE, PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED,
+    SERVO_TARGET_OWNER_CONTROL,
 )
 
 # 串口枚举在 Windows 上每次约 20-100ms；0.2s 轮询会持续占用 ~12% 单核。
 # 设备列表 1s 刷新一次即可满足人工连接操作，连接失败时随后快速重试。
 DEVICE_DISCOVERY_INTERVAL_S = 1.0
 
-# P4 收绳上限 20 s（PullJointIntoWorkspaceSafetyPolicy）；主机多留 5 s 等结果回写。
+# P4 回正超时为 10 秒，主机多留 5 秒等待状态回报。
 PULL_JOINT_INTO_WORKSPACE_HOST_TIMEOUT_S = 15
 
 # System 状态标签直接对应 P4 的 7 种状态；'Unknown' 只用于未列出的编号。
@@ -700,148 +699,99 @@ class ApplicationActions(IdResetActions):
                 return False, f'Enable coordinate recovery failed: {message}'
         if not mask or not self.set_active_scope(motors, mask, True):
             return False, 'Scope setup failed. Check online devices, feedback and calibration.'
-        recovered, recovery_message = self._recover_enable_workspace(joints, mask, epoch)
-        if not recovered:
-            return False, recovery_message
         with self._application_lock:
             if epoch != self._application_epoch:
                 return False, 'Enable cancelled'
             self.invalidate_direct_commands()
             self.set_control_mode(ControlMode.JOINT_ANGLE)
+            comm = self.comm
             started = time.monotonic()
             self.start()
         # START prepares a stopped P4. Motion ownership is granted only
         # when the paired joint target and RUN_FEEDBACK are submitted.
-        ok = self._wait_application(
-            lambda s: self.is_comm_connected() and s.protocol_compatible
-            and s.has_system_status_data
-            and s.system_state == SYSTEM_STATE_READY
-            and not s.control_enabled and not s.servo_target_owner
-            and s.control_mode == ControlMode.JOINT_ANGLE.value
-            and s.has_active_scope_status
-            and s.active_motor_mask == motors and s.active_joint_mask == mask
-            and s.require_can_feedback
-            and 0 <= time.monotonic() - s.received_at('system_status_last_rx_ts') <= 0.6
-            and s.received_at('system_status_last_rx_ts') > started,
-            epoch, 5,
-        )
-        if not ok:
-            state = self.get_state_snapshot()
-            details = []
-            if state.has_connectivity_status:
-                for motor in range(MOTOR_COUNT):
-                    if motors & (1 << motor):
-                        if not state.servo_online_bitmap & (1 << motor):
-                            details.append(f'M{motor:02d} is offline')
-                        elif state.multi_turn_unknown_bitmap & (1 << motor):
-                            details.append(f'M{motor:02d} multi-turn position is unknown; recover its position before enabling')
-            missing_manual = mask & ~state.manual_reference_valid_bitmap
-            missing_auto = mask & ~state.auto_calibration_valid_bitmap
-            if missing_manual:
-                details.append(f'Manual calibration missing for joint mask 0x{missing_manual:06X}')
-            if missing_auto:
-                details.append(f'Motor calibration missing for joint mask 0x{missing_auto:06X}')
-            ws_blocked, ws_clamped, ws_message = self._enable_holding_workspace(state, joints, mask)
-            if (ws_blocked or ws_clamped) and ws_message:
-                details.append(ws_message)
-            return False, 'Enable preparation was not confirmed. ' + ('; '.join(details) if details else 'Check the P4 rejection reason and retry after resolving it.')
-        state = self.get_state_snapshot()
-        if not self._mapped_feedback_fresh(state):
-            return False, 'Enable blocked: current joint-angle feedback is stale or unavailable'
-        values = list(state.target_angles)
-        for joint in joints:
-            if state.encoders[joint].angle_error:
-                return False, f'Enable blocked: J{joint:02d} has no valid calibrated angle'
-            value = state.encoders[joint].current_angle_deg
-            if not math.isfinite(value):
-                return False, f'Enable blocked: J{joint:02d} current angle is invalid'
-            values[joint] = value
-        guarded, blocked, clamped, message = self._apply_joint_workspace_guard(
-            state, values, source='Enable', command_joint_mask=mask,
-            tolerance_deg=READY_WORKSPACE_TOLERANCE_DEG)
-        if blocked or clamped:
-            return False, 'Enable blocked: holding the current pose would require clamping. ' + (message or '')
-        with self._application_lock:
-            if epoch != self._application_epoch:
-                return False, 'Enable cancelled'
-            # The ACK may take a second. Capture again immediately before
-            # granting motion so a moved joint is never pulled to an old pose.
-            state = self.get_state_snapshot()
-            if not self._mapped_feedback_fresh(state):
+        def prepared(state, states, after):
+            return (self.comm is comm and self.is_comm_connected() and state.protocol_compatible
+                    and state.has_system_status_data and state.system_state in states
+                    and not state.control_enabled and not state.servo_target_owner
+                    and state.control_mode == ControlMode.JOINT_ANGLE.value
+                    and state.has_active_scope_status and state.active_motor_mask == motors
+                    and state.active_joint_mask == mask and state.require_can_feedback
+                    and 0 <= time.monotonic() - state.received_at('system_status_last_rx_ts') <= 0.6
+                    and state.received_at('system_status_last_rx_ts') > after)
 
-                return False, 'Enable blocked: current joint-angle feedback became stale'
+        waiting = (SYSTEM_STATE_READY, SYSTEM_STATE_JOINT_BEYOND_WORKSPACE)
+        if not self._wait_application(
+                lambda state: self.comm is not comm or prepared(state, waiting, started), epoch, 5):
+            return False, 'Enable preparation was not confirmed by P4'
+        state = self.get_state_snapshot()
+        if not prepared(state, waiting, started):
+            return False, 'Enable preparation changed before it could be used'
+        if state.system_state == SYSTEM_STATE_JOINT_BEYOND_WORKSPACE:
+            recovered, message = self._recover_enable_workspace(mask, epoch, comm)
+            if not recovered:
+                return False, message
+            if not self._wait_application(
+                    lambda state: self.comm is not comm or prepared(state, (SYSTEM_STATE_READY,), started), epoch, 5):
+                return False, 'P4 did not report READY after workspace recovery'
+        with self._application_lock:
+            if epoch != self._application_epoch or self.comm is not comm:
+                return False, 'Enable cancelled'
+            state = self.get_state_snapshot()
+            if not prepared(state, (SYSTEM_STATE_READY,), started) or not self._mapped_feedback_fresh(state):
+                return False, 'Enable blocked: P4 readiness or mapped feedback changed'
             values = list(state.target_angles)
             for joint in joints:
                 encoder = state.encoders[joint]
                 if encoder.angle_error or not math.isfinite(encoder.current_angle_deg):
-
                     return False, f'Enable blocked: J{joint:02d} current angle is invalid'
                 values[joint] = encoder.current_angle_deg
-            guarded, blocked, clamped, message = self._apply_joint_workspace_guard(
-                state, values, source='Enable', command_joint_mask=mask,
-                tolerance_deg=READY_WORKSPACE_TOLERANCE_DEG)
-            if blocked or clamped:
-
-                return False, 'Enable blocked: current pose is outside the permitted workspace. ' + (message or '')
-            result = self.send_joint_targets(guarded, source='Enable', live=True, command_joint_mask=mask)
-        if not result.sent or result.clamped:
-
+            result = self.send_joint_targets(values, source='Enable', live=True, command_joint_mask=mask)
+        if not result.sent:
             return False, result.message or 'Current-pose hold was not sent'
         confirmed = self._wait_application(
-            lambda s: s.system_state == SYSTEM_STATE_RUN_FEEDBACK and s.control_enabled
+            lambda s: self.comm is comm and s.system_state == SYSTEM_STATE_RUN_FEEDBACK and s.control_enabled
             and s.servo_target_owner == SERVO_TARGET_OWNER_CONTROL
             and s.active_joint_mask == mask and s.active_motor_mask == motors
             and 0 <= time.monotonic() - s.received_at('system_status_last_rx_ts') <= 0.6,
             epoch, 3)
-        if not confirmed and epoch == self._application_epoch:
+        if not confirmed and epoch == self._application_epoch and self.comm is comm:
             self.stop_motion(source="enable confirmation failed")
 
         return confirmed, 'Selected joints enabled; closed-loop holding the current pose' if confirmed else 'P4 did not enter closed-loop hold; inspect its rejection reason'
 
-    def _enable_holding_workspace(self, state, joints, mask):
-        """以“当前姿态”为保持目标做一次工作区检查；返回 (blocked, clamped, message)。"""
-        values = list(state.target_angles)
-        for joint in joints:
-            encoder = state.encoders[joint]
-            if encoder.angle_error or not math.isfinite(encoder.current_angle_deg):
-                continue
-            values[joint] = encoder.current_angle_deg
-        _, blocked, clamped, message = self._apply_joint_workspace_guard(
-            state, values, source='Enable', command_joint_mask=mask,
-            tolerance_deg=READY_WORKSPACE_TOLERANCE_DEG)
-        return blocked, clamped, message
+    def _recover_enable_workspace(self, mask, epoch, comm):
+        with self._application_lock:
+            if epoch != self._application_epoch or self.comm is not comm:
+                return False, 'Enable cancelled'
+            baseline = int(self.get_state_snapshot().pull_joint_into_workspace_sequence)
+            sent_at = time.monotonic()
+            if not self.pull_joint_into_workspace(mask):
+                return False, 'Workspace recovery was not queued'
+        ack = comm.wait_for_ack(CMD_PULL_JOINT_INTO_WORKSPACE, 1, received_after_monotonic=sent_at)
+        if epoch != self._application_epoch or self.comm is not comm:
+            return False, 'Enable cancelled'
+        if ack is None:
+            return False, 'P4 workspace recovery ACK timed out'
+        if ack[2] not in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED):
+            return False, f'P4 rejected workspace recovery (ACK={ack[2]})'
 
-    def _recover_enable_workspace(self, joints, mask, epoch):
-        """Enable 前把低于下界的关节拉回工作区；返回 (ok, failure_message)。
-
-        P4 的 Pull Joint into Workspace（0xE9）就是为此设计的动作：只收绳、20 秒超时、连续 3 帧
-        进入工作区才算成功。这里不暴露给操作员，Enable 自动执行一次。
-        """
+        def completed(state):
+            return (state.pull_joint_into_workspace_sequence == ((baseline + 1) & 0xffffffff)
+                    and state.pull_joint_into_workspace_joint_mask == mask
+                    and state.pull_joint_into_workspace_status in (2, 3)
+                    and state.received_at('system_status_last_rx_ts') >= sent_at)
+        if not self._wait_application(lambda state: self.comm is not comm or completed(state),
+                                      epoch, PULL_JOINT_INTO_WORKSPACE_HOST_TIMEOUT_S):
+            if epoch != self._application_epoch:
+                return False, 'Enable cancelled'
+            return False, 'P4 workspace recovery result timed out'
         state = self.get_state_snapshot()
-        blocked, clamped, message = self._enable_holding_workspace(state, joints, mask)
-        if blocked or not clamped:
-            # 缺标定/映射问题 Pull Joint into Workspace 修不了；不越界则无需回正。
-            return True, ''
-        self._wait_application(
-            lambda s: s.system_state in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY,
-                                        SYSTEM_STATE_JOINT_BEYOND_WORKSPACE),
-            epoch, 1)
-        baseline = int(self.get_state_snapshot().pull_joint_into_workspace_sequence)
-        if not self.pull_joint_into_workspace(mask):
-            return False, f'Enable blocked: {message}. Automatic recovery was not accepted by the P4.'
-        if not self._wait_application(
-                lambda s: s.pull_joint_into_workspace_sequence != baseline and s.pull_joint_into_workspace_status in (2, 3),
-                epoch, PULL_JOINT_INTO_WORKSPACE_HOST_TIMEOUT_S):
-            return False, (f'Enable blocked: {message}. Automatic recovery did not finish '
-                           f'within {PULL_JOINT_INTO_WORKSPACE_HOST_TIMEOUT_S:.0f} s.')
-        state = self.get_state_snapshot()
-        if int(state.pull_joint_into_workspace_status) != 2:
+        if self.comm is not comm or epoch != self._application_epoch or not completed(state):
+            return False, 'Enable cancelled or workspace recovery result changed'
+        if state.pull_joint_into_workspace_status != 2:
             reason = int(state.pull_joint_into_workspace_reason)
-            return False, IssueMessage(f'Enable blocked: {message}. Automatic recovery failed '
-                f'(P4 reason={reason}).', f'ROP-{3400 + reason}' if 1 <= reason <= 9 else 'HOST_ACTION_FAILED')
-        blocked, clamped, message = self._enable_holding_workspace(state, joints, mask)
-        if blocked or clamped:
-            return False, f'Enable blocked: {message}. Automatic recovery left the joint outside its workspace.'
+            return False, IssueMessage(f'P4 workspace recovery failed (reason={reason})',
+                                       f'ROP-{3400 + reason}' if 1 <= reason <= 9 else 'HOST_ACTION_FAILED')
         return True, ''
 
     def stop_motion(self, *, emergency=False, source='global STOP'):
@@ -912,18 +862,6 @@ class ApplicationActions(IdResetActions):
         mask = int(joint_mask) if joint_mask is not None else sum(1 << j for j in self._selected_joints)
         if not mask or mask & ~((1 << ENCODER_COUNT) - 1):
             return OperationResult(False, None, 'Select a valid joint scope')
-        state = self.get_state_snapshot()
-        for j in range(ENCODER_COUNT):
-            if mask & (1 << j):
-                spec = get_spec(j)
-                workspace = resolve_joint_workspace_range(
-                    state, j, spec.urdf_range_deg[0], spec.urdf_range_deg[1],
-                    self._workspace_mapping_version, self._workspace_urdf_crc)
-                lo, hi = ((workspace.urdf_min_deg, workspace.urdf_max_deg)
-                          if workspace.ready else spec.urdf_range_deg)
-                if not lo <= float(values[j]) <= hi:
-                    return OperationResult(False, None, f'J{j:02d} target exceeds active model limits [{lo}, {hi}]')
-
         def send(epoch):
             with self._application_lock:
                 if epoch != self._application_epoch:
@@ -1504,26 +1442,7 @@ class ApplicationActions(IdResetActions):
             return OperationResult(True, operation_id, 'Calibration import started')
 
     def _application_direct(self, targets, epoch):
-        state = self.get_state_snapshot()
-        now = time.time()
-        if (not state.has_servo_angle_data or not 0 <= now - state.servo_abs_last_rx_ts <= 0.6
-                or not 0 <= now - state.servo_telem_last_rx_ts <= 0.6
-                or not state.has_servo_route_status):
-            return False, 'Fresh motor position, telemetry and route information are required'
         mask = sum(1 << m for m in targets)
-        if state.servo_route_conflict_bitmap & mask or state.servo_route_controllable_bitmap & mask != mask:
-            return False, 'Selected motor route is unavailable or conflicting'
-        for m, target in targets.items():
-            bit = 1 << m
-            if not state.servo_online_bitmap & bit:
-                return False, f'M{m:02d} is offline. Check Diagnostics.'
-            if state.multi_turn_unknown_bitmap & bit:
-                return False, f'M{m:02d} multi-turn ABS is unknown. Use the controlled recovery or calibration procedure.'
-            # P4 telemetry already encodes load as a signed value. Masking a
-            # negative value would turn a light reverse load into an overload.
-            load = abs(int(state.servo_load[m]))
-            if load >= 800:
-                return False, f'M{m:02d} load magnitude {load} is at or above the direct-control limit 800. Check Diagnostics.'
         from .motor_mapping import MOTOR_TO_JOINT_INDEX
         joints = sum(1 << j for j in {MOTOR_TO_JOINT_INDEX[m] for m in targets})
         if not self.set_active_scope(mask, joints, False):
@@ -1552,7 +1471,12 @@ class ApplicationActions(IdResetActions):
         result = self.get_state_snapshot()
         ok = bool(ok and result.direct_target_status == 2 and result.direct_target_applied_mask == mask
                   and not result.direct_target_rejected_mask)
-        return ok, 'Motor target accepted by the execution layer. Check feedback for physical completion.' if ok else 'Motor execution rejected or confirmation timed out. No automatic retry.'
+        if not ok:
+            if result.direct_target_token == token and result.received_at('direct_target_result_rx_ts') >= sent_at:
+                return False, (f'P4 rejected motor target (reason={result.direct_reject_reason}, '
+                               f'mask=0x{result.direct_target_rejected_mask:08X})')
+            return False, 'Motor execution confirmation timed out'
+        return True, 'Motor target accepted by the execution layer. Check feedback for physical completion.'
 
 
 

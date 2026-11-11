@@ -182,7 +182,7 @@ class _Controller:
         return True
 
 
-def test_backend_clamps_active_joint_to_static_urdf_workspace():
+def test_backend_forwards_joint_angle_for_p4_clamp():
     state = _ready_state(current_min=12.5)
     controller = _Controller(state)
     backend = HandBackend(controller=controller)
@@ -191,13 +191,13 @@ def test_backend_clamps_active_joint_to_static_urdf_workspace():
     result = backend.send_joint_targets(targets, source="test", live=False)
 
     assert result.sent
-    assert result.clamped == [0]
-    assert result.targets[0] == pytest.approx(get_spec(0).urdf_range_deg[0])
-    assert controller.sent[0][1][0] == pytest.approx(get_spec(0).urdf_range_deg[0])
+    assert result.clamped == []
+    assert result.targets[0] == -1000.0
+    assert controller.sent[0][1][0] == -1000.0
     assert controller.run_requests == 1
 
 
-def test_backend_blocks_active_joint_without_valid_auto():
+def test_backend_defers_calibration_admission_to_p4():
     state = _ready_state()
     state.auto_calibration_valid_bitmap = 0
     controller = _Controller(state)
@@ -205,10 +205,9 @@ def test_backend_blocks_active_joint_without_valid_auto():
 
     result = backend.send_joint_targets([0.0] * ENCODER_COUNT, source="test")
 
-    assert not result.sent
-    assert result.blocked == [0]
-    assert controller.sent == []
-    assert controller.run_requests == 0
+    assert result.sent
+    assert result.blocked == []
+    assert controller.run_requests == 1
 
 
 def test_backend_reports_not_sent_when_atomic_queue_rejects_command():
@@ -332,7 +331,7 @@ def test_ros2_accepts_float32_rounded_urdf_bounds(joint, endpoint):
 
 
 @pytest.mark.parametrize("joint,endpoint", ((1, 0), (5, 0), (8, 1)))
-def test_ros2_clamps_float32_rounded_bound_to_exact_urdf_limit(joint, endpoint):
+def test_ros2_preserves_float32_rounded_bound_for_p4(joint, endpoint):
     state = _ready_state()
     controller = _Controller(state)
     backend = HandBackend(controller=controller)
@@ -344,11 +343,11 @@ def test_ros2_clamps_float32_rounded_bound_to_exact_urdf_limit(joint, endpoint):
     result = backend.send_ros2_joint_targets(frame, source="ROS2:/mmhand/joint_angle_deg")
 
     assert result.sent, result.message
-    assert controller.sent[-1][1][joint] == limit
+    assert controller.sent[-1][1][joint] == frame[joint]
 
 
 @pytest.mark.parametrize("joint,endpoint,delta", ((1, 0, -1e-3), (8, 1, 1e-3)))
-def test_ros2_rejects_frames_beyond_float32_tolerance(joint, endpoint, delta):
+def test_ros2_forwards_frames_outside_joint_limits(joint, endpoint, delta):
     state = _ready_state()
     controller = _Controller(state)
     backend = HandBackend(controller=controller)
@@ -359,9 +358,8 @@ def test_ros2_rejects_frames_beyond_float32_tolerance(joint, endpoint, delta):
 
     result = backend.send_ros2_joint_targets(frame, source="ROS2:/mmhand/joint_angle_deg")
 
-    assert not result.sent
-    assert "ROS2 frame rejected" in result.message
-    assert controller.sent == []
+    assert result.sent
+    assert controller.sent[-1][1][joint] == frame[joint]
 
 
 def test_ros2_rejects_non_finite_and_wrong_length_frames():
@@ -590,7 +588,7 @@ def test_joint_mode_transition_keeps_real_transport_admission_gates(
 
 
 @pytest.mark.parametrize(
-    "blocked_by", ["workspace", "host_calibration", "maintenance", "import", "replay"]
+    "blocked_by", ["format", "host_calibration", "maintenance", "import", "replay"]
 )
 def test_rejected_joint_command_does_not_preempt_direct_mode_or_queue(
     direct_backend, blocked_by
@@ -598,8 +596,9 @@ def test_rejected_joint_command_does_not_preempt_direct_mode_or_queue(
     backend, controller, comm = direct_backend
     source = "Run J03"
     kwargs = {}
-    if blocked_by == "workspace":
-        controller.current_state.auto_calibration_valid_bitmap = 0
+    angles = [20.0] * ENCODER_COUNT
+    if blocked_by == "format":
+        angles[3] = 1e40
     elif blocked_by == "host_calibration":
         backend._calibration_workflow._host_worker_active = True
     elif blocked_by == "maintenance":
@@ -614,7 +613,7 @@ def test_rejected_joint_command_does_not_preempt_direct_mode_or_queue(
         comm.tx_queue.put_nowait(command)
 
     result = backend.send_joint_targets(
-        [20.0] * ENCODER_COUNT,
+        angles,
         source=source,
         command_joint_mask=1 << 3,
         **kwargs,
@@ -647,15 +646,10 @@ def test_hold_or_passive_joint_target_keeps_direct_mode_guard(
     assert list(comm.tx_queue.queue) == queued_before
 
 
-def test_workspace_clamp_message_names_joint_and_delta():
-    """Enable 失败信息必须说清哪个关节、差多少，而不是只报 clamped。"""
-    state = _ready_state()
-    backend = HandBackend(controller=_Controller(state))
-    lo = get_spec(0).urdf_range_deg[0]
-    targets = [lo - 0.62] + [0.0] * (ENCODER_COUNT - 1)
-
-    result = backend.send_joint_targets(targets, source='Enable', live=False)
-
-    assert result.clamped == [0]
-    assert 'J00' in result.message and 'below min' in result.message
-    assert '0.62' in result.message
+def test_joint_command_rejects_out_of_float32_range():
+    backend = HandBackend(controller=_Controller(_ready_state()))
+    targets = [1e40] + [0.0] * (ENCODER_COUNT - 1)
+    result = backend.send_joint_targets(targets, source='GUI')
+    assert not result.sent
+    assert result.blocked == [0]
+    assert 'float32' in result.message

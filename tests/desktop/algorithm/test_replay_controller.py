@@ -234,7 +234,7 @@ def test_replay_intersects_csv_scope_with_current_scope():
     assert controller.status().skipped_joint_mask == 0b10
 
 
-def test_replay_skips_uncalibrated_joint_and_clamps_current_workspace():
+def test_replay_forwards_out_of_range_keyframes_to_p4():
     backend = _Backend(active_mask=0b11, calibrated_mask=1)
     controller = ReplayController(backend)
     low = [-100.0] * ENCODER_COUNT
@@ -255,10 +255,9 @@ def test_replay_skips_uncalibrated_joint_and_clamps_current_workspace():
     assert ok
     assert controller.status().effective_joint_mask == 1
     assert controller.status().skipped_joint_mask == 0b10
-    assert controller.status().clamped_joint_mask == 1
-    assert controller.status().clamped_sample_count == 2
-    assert backend.sent[0][0][0] == get_spec(0).urdf_range_deg[0]
-    assert backend.sent[-1][0][0] == get_spec(0).urdf_range_deg[1]
+    assert controller.status().clamped_sample_count == 0
+    assert backend.sent[0][0][0] == -100.0
+    assert backend.sent[-1][0][0] == 1000.0
 
 
 def test_replay_rebases_timeline_instead_of_aborting(monkeypatch):

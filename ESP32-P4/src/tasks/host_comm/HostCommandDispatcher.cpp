@@ -323,7 +323,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         return;
     }
 
-    if (commandRequiresManualReference(cmd) &&
+    if (cmd != CMD_RUN_FEEDBACK && commandRequiresManualReference(cmd) &&
         !activeManualReferencesReady(sharedData)) {
         sendProtoAckPacket(cmd,
                            sharedData->system_state,

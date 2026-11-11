@@ -9,12 +9,10 @@
 """
 
 from dataclasses import dataclass, field
-import math
 import threading
 import time
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
-from .angle_mapping import get_spec, urdf_manual_scaled_mapping_metadata
 from .application_actions import ApplicationActions
 from .calibration_workflow import (
     CalibrationWorkflowEvent,
@@ -26,7 +24,8 @@ from .communication.feedback_history import (
     TimestampedFeedbackHistory,
 )
 from .core_logic import HandController, ManualPrepareResult
-from .data_models import HandModel, clone_hand_model, resolve_joint_workspace_range
+from .angle_mapping import urdf_manual_scaled_mapping_metadata
+from .data_models import HandModel, clone_hand_model
 from .protocol import ControlMode, ENCODER_COUNT, READY_WORKSPACE_TOLERANCE_DEG
 from desktop.paths import CALIB_ACTIVE_SNAPSHOT_PATH
 from .calibration_snapshot import CalibrationSnapshotError, joint_calib_result_tendon_lut_abs_ranges
@@ -40,7 +39,7 @@ JointTargetCallback = Callable[[dict], None]
 # ROS2 的 Float32MultiArray 在 URDF 限位处可能舍入到 float64 边界之外
 # （例如 J01/J05 下限 -15°、J08 上限 30°）。只容忍该表示误差；超出容差
 # 仍整帧拒绝，通过的值再钳位到精确的 URDF 限位。
-ROS2_JOINT_LIMIT_TOLERANCE_DEG = 1e-4
+MAX_FLOAT32 = float.fromhex("0x1.fffffep+127")
 
 
 def list_ports() -> List[tuple]:
@@ -145,9 +144,7 @@ class HandBackend(ApplicationActions):
         self._requested_active_joint_mask: Optional[int] = None
         self._requested_active_scope: Optional[Tuple[int, int, bool]] = None
         try:
-            self._workspace_mapping_version, self._workspace_urdf_crc = (
-                urdf_manual_scaled_mapping_metadata()
-            )
+            self._workspace_mapping_version, self._workspace_urdf_crc = urdf_manual_scaled_mapping_metadata()
         except (OSError, TypeError, ValueError):
             self._workspace_mapping_version, self._workspace_urdf_crc = 0, 0
         self._joint_target_callback_lock = threading.Lock()
@@ -427,106 +424,24 @@ class HandBackend(ApplicationActions):
             return int(self._requested_active_joint_mask) & valid_mask
         return int(state.active_joint_mask) & valid_mask
 
-    def _apply_joint_workspace_guard(
-        self,
-        state: Optional[HandModel],
-        targets: Iterable[float],
-        *,
-        source: str,
-        command_joint_mask: Optional[int] = None,
-        tolerance_deg: float = 0.0,
-    ) -> Tuple[List[float], List[int], List[int], str]:
-        values = list(targets)
-        if len(values) != ENCODER_COUNT:
-            blocked = list(range(ENCODER_COUNT))
-            return [], blocked, [], f"Joint command blocked: expected {ENCODER_COUNT} targets"
+    def _validate_joint_command(self, state, targets, command_joint_mask):
+        if len(targets) != ENCODER_COUNT:
+            return [], list(range(ENCODER_COUNT)), f"Joint command requires {ENCODER_COUNT} targets"
         try:
-            guarded = [float(value) for value in values]
-        except (TypeError, ValueError):
-            blocked = list(range(ENCODER_COUNT))
-            return [], blocked, [], "Joint command blocked: targets must be numeric"
-        non_finite = [idx for idx, value in enumerate(guarded) if not math.isfinite(value)]
-        if non_finite:
-            return [], non_finite, [], "Joint command blocked: targets must be finite"
-
+            values = [float(value) for value in targets]
+        except (TypeError, ValueError, OverflowError):
+            return [], list(range(ENCODER_COUNT)), "Joint targets must be numeric"
+        invalid = [idx for idx, value in enumerate(values) if not abs(value) <= MAX_FLOAT32]
+        if invalid:
+            return [], invalid, "Joint targets must be finite float32 values"
         active_mask = self._joint_workspace_active_mask(state)
-        if active_mask == 0:
-            blocked = list(range(ENCODER_COUNT))
-            return [], blocked, [], "Joint command blocked: active joint scope is empty"
-        if command_joint_mask is None:
-            guard_mask = active_mask
-        else:
-            requested_mask = int(command_joint_mask) & ((1 << ENCODER_COUNT) - 1)
-            outside_mask = requested_mask & ~active_mask
-            if outside_mask:
-                blocked = [
-                    joint
-                    for joint in range(ENCODER_COUNT)
-                    if outside_mask & (1 << joint)
-                ]
-                return (
-                    [],
-                    blocked,
-                    [],
-                    "Joint command blocked: command mask exceeds active joint scope",
-                )
-            guard_mask = requested_mask & active_mask
-            if guard_mask == 0:
-                return (
-                    [],
-                    list(range(ENCODER_COUNT)),
-                    [],
-                    "Joint command blocked: command joint mask is empty",
-                )
-
-        blocked: List[int] = []
-        clamped: List[int] = []
-        reasons: List[str] = []
-        outside: List[str] = []
-        for joint_idx in range(ENCODER_COUNT):
-            # 单行UI、Replay和ROS2均只校验本帧真正控制的关节，未参与关节不应拖垮整包。
-            if (guard_mask & (1 << joint_idx)) == 0:
-                continue
-            spec = get_spec(joint_idx)
-            workspace = resolve_joint_workspace_range(
-                state,
-                joint_idx,
-                spec.urdf_range_deg[0],
-                spec.urdf_range_deg[1],
-                self._workspace_mapping_version,
-                self._workspace_urdf_crc,
-            )
-            if not workspace.ready:
-                blocked.append(joint_idx)
-                reasons.append(f"J{joint_idx:02d} {workspace.reason}")
-                continue
-            requested = guarded[joint_idx]
-            bounded = workspace.clamp(requested)
-            if abs(bounded - requested) > 1e-6:
-                lo, hi = spec.urdf_range_deg
-                distance = lo - requested if requested < lo else requested - hi
-                guarded[joint_idx] = bounded
-                # Enable/recovery uses the firmware READY entry tolerance so a
-                # few tenths of a degree of backlash does not fail the pose.
-                if distance <= tolerance_deg + 1e-9:
-                    continue
-                if requested < lo:
-                    outside.append(f"J{joint_idx:02d} {requested:+.2f}° below min {lo:.2f}° by {lo - requested:.2f}°")
-                else:
-                    outside.append(f"J{joint_idx:02d} {requested:+.2f}° above max {hi:.2f}° by {requested - hi:.2f}°")
-                clamped.append(joint_idx)
-
-        if blocked:
-            detail = "; ".join(reasons[:4])
-            if len(reasons) > 4:
-                detail += f"; +{len(reasons) - 4} more"
-            return [], blocked, clamped, f"Joint command blocked: {detail}"
-
-        message = ""
-        if clamped:
-            suffix = f" ({source})" if source else ""
-            message = "Joint targets outside [URDF Min, URDF Max]: " + "; ".join(outside) + suffix
-        return guarded, blocked, clamped, message
+        mask = active_mask if command_joint_mask is None else int(command_joint_mask)
+        if not mask or mask < 0 or mask >> ENCODER_COUNT:
+            return [], list(range(ENCODER_COUNT)), "Command mask is empty or invalid"
+        outside = mask & ~active_mask
+        if outside:
+            return [], [j for j in range(ENCODER_COUNT) if outside & (1 << j)], "Command mask exceeds active joint scope"
+        return values, [], ""
 
     def send_joint_targets(
         self,
@@ -602,18 +517,14 @@ class HandBackend(ApplicationActions):
                 None if command_joint_mask is None else int(command_joint_mask)
             ),
         }
-        guarded, workspace_blocked, clamped, workspace_message = self._apply_joint_workspace_guard(
-            state,
-            input_targets,
-            source=source,
-            command_joint_mask=command_joint_mask,
-        )
-        if workspace_blocked:
+        guarded, invalid, message = self._validate_joint_command(state, input_targets, command_joint_mask)
+        clamped = []
+        if invalid:
             result = JointCommandResult(
                 sent=False,
-                blocked=workspace_blocked,
+                blocked=invalid,
                 clamped=clamped,
-                message=workspace_message,
+                message=message,
                 targets=list(input_targets),
             )
             self._notify_joint_target_callbacks(
@@ -622,9 +533,9 @@ class HandBackend(ApplicationActions):
                     "live": bool(live),
                     "input_targets": input_targets,
                     "output_targets": list(input_targets),
-                    "blocked": list(workspace_blocked),
+                    "blocked": list(invalid),
                     "clamped": list(clamped),
-                    "message": workspace_message,
+                    "message": message,
                     "sent": False,
                     "p4_time_ms": (
                         getattr(state, "p4_time_ms", "")
@@ -655,7 +566,6 @@ class HandBackend(ApplicationActions):
             )
         else:
             sent = self._controller.set_target_angles(guarded)
-        message = workspace_message
         if not sent and not message:
             message = "Joint command was not queued; check connection, protocol/model handshake and mode"
         result = JointCommandResult(
@@ -795,28 +705,11 @@ class HandBackend(ApplicationActions):
         values = list(angles)
         raw_values = list(raw_targets) if raw_targets is not None else list(values)
         try:
-            if len(values) != ENCODER_COUNT:
-                raise ValueError('joint target count')
-            state = self.get_current_state()
-            clamped_values = []
-            for joint, value in enumerate(values):
-                number = float(value)
-                spec = get_spec(joint)
-                workspace = resolve_joint_workspace_range(
-                    state, joint, spec.urdf_range_deg[0], spec.urdf_range_deg[1],
-                    self._workspace_mapping_version, self._workspace_urdf_crc)
-                low, high = ((workspace.urdf_min_deg, workspace.urdf_max_deg)
-                             if workspace.ready else spec.urdf_range_deg)
-                if not math.isfinite(number) or not (
-                    low - ROS2_JOINT_LIMIT_TOLERANCE_DEG
-                    <= number
-                    <= high + ROS2_JOINT_LIMIT_TOLERANCE_DEG
-                ):
-                    raise ValueError('joint target outside active model limits')
-                clamped_values.append(min(max(number, low), high))
-        except (ValueError, TypeError):
-            return JointCommandResult(sent=False, message='ROS2 frame rejected: requires 21 finite URDF degree values within joint limits', targets=values)
-        values = clamped_values
+            values = [float(value) for value in values]
+        except (TypeError, ValueError, OverflowError):
+            values = []
+        if len(values) != ENCODER_COUNT or not all(abs(value) <= MAX_FLOAT32 for value in values):
+            return JointCommandResult(sent=False, message='ROS2 frame requires 21 finite float32 angles', targets=values)
         with self._ros2_output_lock:
             if self._calibration_workflow.is_host_calibration_active():
                 reason = "host_calibration_active"

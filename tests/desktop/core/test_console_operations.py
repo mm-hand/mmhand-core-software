@@ -64,8 +64,6 @@ def joint_preparation_device(hand, monkeypatch, *, ready_state=SYSTEM_STATE_READ
     for encoder in state.encoders:
         encoder.angle_error = False
         encoder.raw = 0
-    monkeypatch.setattr(hand, '_apply_joint_workspace_guard',
-        lambda state, values, **kwargs: (list(values), [], [], ''))
     send_command = comm.send_command
 
     def reply(command):
@@ -197,17 +195,19 @@ def test_joint_enable_rechecks_current_pose_after_parameter_sync(hand, monkeypat
         assert item['status'] == 'FAILED'
         assert not targets
 
-def test_joint_enable_never_clamps_the_current_pose(hand, monkeypatch):
-    comm, _ = joint_preparation_device(hand, monkeypatch)
-    monkeypatch.setattr(hand, '_apply_joint_workspace_guard',
-                        lambda state, values, **kwargs: (values, [], [3], 'J03 outside limits'))
-    # 回正被 P4 拒绝时 Enable 仍然只能失败：绝不把夹回后的目标当成“保持当前姿态”。
-    monkeypatch.setattr(hand, 'pull_joint_into_workspace', lambda mask: False)
+def test_joint_enable_does_not_send_hold_after_p4_recovery_rejection(hand, monkeypatch):
+    from desktop.core.protocol import SYSTEM_STATE_JOINT_BEYOND_WORKSPACE
+
+    comm, _ = joint_preparation_device(hand, monkeypatch, ready_state=SYSTEM_STATE_JOINT_BEYOND_WORKSPACE)
+    pull = Mock(return_value=False)
+    monkeypatch.setattr(hand, 'pull_joint_into_workspace', pull)
     item = wait_operation(hand, hand.request_enable())
     assert item['status'] == 'FAILED'
-    assert 'J03 outside limits' in item['message']
+    assert 'recovery was not queued' in item['message']
+    pull.assert_called_once()
     assert not any(isinstance(c, tuple) and c[0] == 'joint_target_run_masked'
                    for c in comm.tx_queue.queue)
+
 
 def test_joint_enable_waits_for_ready_not_idle(hand, monkeypatch):
     """P4 在 IDLE 与 JOINT_BEYOND_WORKSPACE 之间抖动时，主机不得把 IDLE 当成“已就绪”。"""

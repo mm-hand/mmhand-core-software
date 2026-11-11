@@ -677,6 +677,7 @@ def native_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dict
         )
     sources = [str(source), str(SDK_SRC / "SCS.cpp"),
                str(SDK_SRC / "SCSerial.cpp"), str(sms_source),
+               str(P4_SRC / "config/topology/HardwareMap.cpp"),
                str(P4_SRC / "hal/servo/FeetechServoDriver.cpp")]
     if msvc:
         command = [compiler, "/std:c++17", "/EHsc", "/utf-8", "/DARDUINO=10819",

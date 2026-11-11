@@ -253,7 +253,6 @@ class ReplayController:
             warnings.append("URDF range CRC differs; historical angles will be clamped to the current calibrated workspace")
 
         mapping_version, urdf_crc = urdf_manual_scaled_mapping_metadata()
-        workspaces: Dict[int, object] = {}
         workspace_ready_mask = 0
         for joint in range(ENCODER_COUNT):
             bit = 1 << joint
@@ -269,7 +268,6 @@ class ReplayController:
                 urdf_crc,
             )
             if workspace.ready:
-                workspaces[joint] = workspace
                 workspace_ready_mask |= bit
 
         value_union_mask = 0
@@ -314,24 +312,14 @@ class ReplayController:
             else 0.0
             for value in baseline
         ]
-        prepared_frames, clamp_counts = self._prepare_clamped_frames(
+        prepared_frames = self._prepare_frames(
             trace,
             effective_mask,
-            workspaces,
             baseline,
         )
         if not prepared_frames:
             return "No frame contains a sendable value for the valid CSV joints", None, []
 
-        clamped_joint_mask = 0
-        for joint in clamp_counts:
-            clamped_joint_mask |= 1 << joint
-        clamped_sample_count = sum(clamp_counts.values())
-        if clamped_sample_count:
-            warnings.append(
-                f"{clamped_sample_count} keyframe target(s) were clamped for "
-                f"{self._format_joint_mask(clamped_joint_mask)}"
-            )
         preparation = ReplayPreparation(
             source_joint_mask=source_mask,
             current_active_mask=current_active,
@@ -339,9 +327,6 @@ class ReplayController:
             effective_joint_mask=effective_mask,
             skipped_joint_mask=skipped_mask,
             uncalibrated_joint_mask=uncalibrated_mask,
-            clamped_joint_mask=clamped_joint_mask,
-            clamped_sample_count=clamped_sample_count,
-            clamped_counts_by_joint=tuple(sorted(clamp_counts.items())),
             warnings=tuple(dict.fromkeys(warnings)),
         )
         return (
@@ -351,16 +336,14 @@ class ReplayController:
         )
 
     @staticmethod
-    def _prepare_clamped_frames(
+    def _prepare_frames(
         trace: ReplayTrace,
         effective_mask: int,
-        workspaces: Dict[int, object],
         baseline: List[float],
-    ) -> tuple[List[ReplayFrame], Dict[int, int]]:
-        """未参与本帧的槽位保持最近目标；有效关节在插值前先钳到当前范围。"""
+    ) -> List[ReplayFrame]:
+        """未参与本帧的槽位保持最近目标，P4 对实际发送的目标限幅。"""
         prepared: List[ReplayFrame] = []
         current_targets = list(baseline)
-        clamp_counts: Dict[int, int] = {}
         source_mask = int(trace.active_joint_mask) or int(effective_mask)
         for frame in trace.frames:
             requested_mask = int(frame.command_joint_mask) or source_mask
@@ -375,11 +358,7 @@ class ReplayController:
             for joint in range(ENCODER_COUNT):
                 if not (frame_mask & (1 << joint)):
                     continue
-                original = float(frame.target_urdf_deg[joint])
-                bounded = float(workspaces[joint].clamp(original))
-                current_targets[joint] = bounded
-                if abs(bounded - original) > 1e-6:
-                    clamp_counts[joint] = clamp_counts.get(joint, 0) + 1
+                current_targets[joint] = float(frame.target_urdf_deg[joint])
             prepared.append(
                 ReplayFrame(
                     time_s=float(frame.time_s),
@@ -391,7 +370,7 @@ class ReplayController:
                     joint_value_mask=frame_mask,
                 )
             )
-        return prepared, clamp_counts
+        return prepared
 
     @staticmethod
     def _build_output_samples(

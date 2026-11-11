@@ -305,14 +305,14 @@ def test_workspace_a_to_b_and_back_use_cached_release_then_tighten():
     assert io.commands[before][1] == {primary: -6400, secondary: -3200}
 
 
-def test_workspace_direct_release_invalid_hardware_range_stops_before_publish():
+def test_workspace_direct_release_propagates_publish_failure():
     io = FakeIO()
     primary = config.joint_motors(4)[0]
-    io.ranges[primary] = (-100, 100)
+    io.publish = lambda targets, speed, acc: False
     worker = machine(io, 0)
     assert not worker._ensure_workspace_pose(4, dual.POSE_A)
     assert not io.commands
-    assert worker.reason == protocol.CALIB_DIAG_REASON_ABS_LIMIT_INVALID
+    assert worker.reason == protocol.CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED
 
 
 def test_reset_and_origin_change_only_invalidate_corresponding_pose():
@@ -361,15 +361,12 @@ def test_primary_tight_stall_sample_counter_resets_on_angle_progress():
     assert io.t == 800
 
 
-@pytest.mark.parametrize("load,expected", [(799, True), (800, False), (-800, False), (1024 + 190, True)])
-def test_batch_overload_uses_feetech_ten_bit_magnitude(load, expected):
+@pytest.mark.parametrize("load", [799, 800, -800, 1023, -1023])
+def test_dual_batch_does_not_gate_on_load(load):
     io = FakeIO()
     io.loads[20] = load
     worker = machine(io)
-    assert worker._publish({20: 8}, protocol.CALIB_DIAG_PHASE_FIND_MAX, 16, 20) is expected
-    if not expected:
-        assert worker.reason == protocol.CALIB_DIAG_REASON_OVERLOAD
-        assert not io.commands
+    assert worker._publish({20: 8}, protocol.CALIB_DIAG_PHASE_FIND_MAX, 16, 20)
 
 
 def test_preload_accepts_load_without_encoder_stall_or_extra_motion():

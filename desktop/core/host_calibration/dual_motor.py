@@ -222,26 +222,6 @@ class _DualMachine:
         if not self.io.owns_control():
             self._control_lost(phase, joint, motor)
             return False
-        for channel, target in targets.items():
-            bounds = self.io.logical_range(channel)
-            if bounds is None or not bounds[0] <= target <= bounds[1]:
-                # 收紧搜索把多圈计数推到 ±30715 之外时，必须报出是哪颗电机、
-                # 目标是多少；否则上位机只显示笼统的 "target publish failed"。
-                self.io.motion_publish_error = (
-                    f'M{channel:02d} target {target} outside servo multi-turn range '
-                    f'{list(bounds) if bounds else "unavailable"}')
-                values = list(targets.values()) + [0]
-                self._diag(protocol.CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
-                           phase, joint, motor, values[0], values[1], -1,
-                           sum(1 << c for c in targets))
-                return False
-        for channel in targets:
-            load = self.io.servo_load(channel)
-            if load is not None and config.load_magnitude(load) >= config.kOverloadLoadThreshold:
-                self._diag(protocol.CALIB_DIAG_REASON_OVERLOAD,
-                           protocol.CALIB_DIAG_PHASE_SEQUENCE, 255, channel,
-                           config.load_magnitude(load), config.kOverloadLoadThreshold, load, 1 << channel)
-                return False
         params = self.params if params is None else params
         if self.io.publish(targets, params.servoSpeed, params.servoAcc):
             return True
@@ -443,12 +423,6 @@ class _DualMachine:
         release_motor, tighten_motor = (primary, secondary) if desired == POSE_A else (secondary, primary)
         release_start, hold_abs = (p_abs, s_abs) if desired == POSE_A else (s_abs, p_abs)
         release_target = self._delta(release_motor, release_start, -config.kWorkspaceReleaseCounts)
-        if not self.io.inside_limit(release_motor, release_target):
-            limits = self.io.logical_range(release_motor) or (0, 0)
-            self._diag(protocol.CALIB_DIAG_REASON_ABS_LIMIT_INVALID,
-                       protocol.CALIB_DIAG_PHASE_DUAL_PRELOAD, joint, release_motor,
-                       release_target, *limits, 1 << release_motor)
-            return False
         p_target, s_target = (release_target, hold_abs) if desired == POSE_A else (hold_abs, release_target)
         if not self._wait_workspace_targets(joint, primary, p_target, secondary, s_target, "DIRECT_RELEASE"):
             return False

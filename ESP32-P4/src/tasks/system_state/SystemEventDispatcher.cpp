@@ -337,6 +337,25 @@ static bool feedbackTargetsPointIntoWorkspace(SystemRuntimeContext* sharedData)
     return safe;
 }
 
+static void beginWorkspaceRecoveryResult(SystemRuntimeContext* sharedData)
+{
+    SharedSafetyGuard guard;
+    sharedData->pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_RUNNING;
+    sharedData->pull_joint_into_workspace_reason = PULL_JOINT_INTO_WORKSPACE_REASON_NONE;
+    sharedData->pull_joint_into_workspace_joint_mask =
+        sharedAtomicLoad(&sharedData->active_joint_mask) & kManualEncoderReferenceFullMask;
+    sharedData->pull_joint_into_workspace_timestamp = p4::platform::time::monotonicMillis();
+    p4::platform::rtos::atomicAddFetch(&sharedData->pull_joint_into_workspace_sequence, (uint32_t)1);
+}
+
+static void failWorkspaceRecovery(SystemRuntimeContext* sharedData, uint8_t reason)
+{
+    SharedSafetyGuard guard;
+    sharedData->pull_joint_into_workspace_reason = reason;
+    sharedData->pull_joint_into_workspace_timestamp = p4::platform::time::monotonicMillis();
+    sharedData->pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED;
+}
+
 static bool beginPullJointIntoWorkspaceMotion(SystemRuntimeContext* sharedData,
                                 bool feedbackRecovery,
                                 uint32_t feedbackRequestSequence,
@@ -345,13 +364,9 @@ static bool beginPullJointIntoWorkspaceMotion(SystemRuntimeContext* sharedData,
     if (!sharedData) {
         return false;
     }
-    // 保留 Pull Joint into Workspace 的既有输出所有权编号，运行态由独立状态表示。
-    p4::platform::rtos::atomicAddFetch(&sharedData->pull_joint_into_workspace_sequence,
-                                 (uint32_t)1);
-    sharedData->pull_joint_into_workspace_joint_mask =
-        sharedAtomicLoad(&sharedData->active_joint_mask) &
-        kManualEncoderReferenceFullMask;
-    sharedData->pull_joint_into_workspace_timestamp = p4::platform::time::monotonicMillis();
+    if (feedbackRecovery) {
+        beginWorkspaceRecoveryResult(sharedData);
+    }
     resetServoTargetQueue(sharedData);
     if (!grantMotionOwnerUnlessServoRebaseZeroPending(
             sharedData, SERVO_TARGET_OWNER_CALIBRATION, 0,
@@ -431,6 +446,10 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
         return;
     }
 
+    if (event.event == SYSTEM_EVENT_PULL_JOINT_INTO_WORKSPACE) {
+        beginWorkspaceRecoveryResult(sharedData);
+    }
+
     // STOP/RESET 等安全事件继续处理。归零完成后仍须拒绝旧坐标代际的
     // 运动启动事件；只检查 pending 会让本轮之后才消费的旧事件复活。
     const bool staleMaintenanceGeneration = event.servoMaintenanceToken !=
@@ -450,10 +469,7 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                                        FEEDBACK_ADMISSION_REJECTED,
                                        FEEDBACK_REJECT_STATE);
         } else if (event.event == SYSTEM_EVENT_PULL_JOINT_INTO_WORKSPACE) {
-            sharedData->pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED;
-            sharedData->pull_joint_into_workspace_reason = PULL_JOINT_INTO_WORKSPACE_REASON_CANCELLED;
-            sharedData->pull_joint_into_workspace_timestamp =
-                p4::platform::time::monotonicMillis();
+            failWorkspaceRecovery(sharedData, PULL_JOINT_INTO_WORKSPACE_REASON_CANCELLED);
         }
         FW_LOG_INFO_PRINTF("[STATE] reject motion event=%u: ABS zero pending or old coordinate generation\r\n",
                            (unsigned)event.event);
@@ -497,9 +513,7 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
             sharedData->control_enabled = 0;
             p4::state::resetHostControlLeaseRuntime(sharedData);
             if (sharedData->system_state == SYSTEM_STATE_PULL_JOINT_INTO_WORKSPACE_RUNNING) {
-                sharedData->pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED;
-                sharedData->pull_joint_into_workspace_reason = PULL_JOINT_INTO_WORKSPACE_REASON_CANCELLED;
-                sharedData->pull_joint_into_workspace_timestamp = p4::platform::time::monotonicMillis();
+                failWorkspaceRecovery(sharedData, PULL_JOINT_INTO_WORKSPACE_REASON_CANCELLED);
             }
             setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
             break;
@@ -799,25 +813,19 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
             // 手动 Pull Joint into Workspace 只处理 active scope，并且要求其 Manual/Auto/多圈已可信。
             if (rejectMotionWhenEmergencyStopLatched(sharedData,
                                                      "PULL_JOINT_INTO_WORKSPACE")) {
-                sharedData->pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED;
-                sharedData->pull_joint_into_workspace_reason = PULL_JOINT_INTO_WORKSPACE_REASON_CANCELLED;
-                sharedData->pull_joint_into_workspace_timestamp = p4::platform::time::monotonicMillis();
+                failWorkspaceRecovery(sharedData, PULL_JOINT_INTO_WORKSPACE_REASON_CANCELLED);
                 break;
             }
             if (!p4::state::prepareHostControlCommandAdmission(sharedData)) {
                 FW_LOG_INFO_PRINTLN(
                     "[STATE] reject PULL_JOINT_INTO_WORKSPACE: host lease stale or Hold pending");
-                sharedData->pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED;
-                sharedData->pull_joint_into_workspace_reason = PULL_JOINT_INTO_WORKSPACE_REASON_CANCELLED;
-                sharedData->pull_joint_into_workspace_timestamp = p4::platform::time::monotonicMillis();
+                failWorkspaceRecovery(sharedData, PULL_JOINT_INTO_WORKSPACE_REASON_CANCELLED);
                 break;
             }
             const uint8_t preflightReason =
                 p4::recovery::pullJointIntoWorkspaceActiveScopeRejectReason(sharedData);
             if (preflightReason != PULL_JOINT_INTO_WORKSPACE_REASON_NONE) {
-                sharedData->pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED;
-                sharedData->pull_joint_into_workspace_reason = preflightReason;
-                sharedData->pull_joint_into_workspace_timestamp = p4::platform::time::monotonicMillis();
+                failWorkspaceRecovery(sharedData, preflightReason);
                 if (preflightReason == PULL_JOINT_INTO_WORKSPACE_REASON_MANUAL_REQUIRED) {
                     logManualReferenceReject(sharedData, "PULL_JOINT_INTO_WORKSPACE");
                 } else {
@@ -831,23 +839,17 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                 sharedData->system_state != SYSTEM_STATE_JOINT_BEYOND_WORKSPACE) {
                 FW_LOG_INFO_PRINTF("[STATE] reject PULL_JOINT_INTO_WORKSPACE in state=%u\r\n",
                                    (unsigned)sharedData->system_state);
-                sharedData->pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED;
-                sharedData->pull_joint_into_workspace_reason = PULL_JOINT_INTO_WORKSPACE_REASON_CANCELLED;
-                sharedData->pull_joint_into_workspace_timestamp = p4::platform::time::monotonicMillis();
+                failWorkspaceRecovery(sharedData, PULL_JOINT_INTO_WORKSPACE_REASON_CANCELLED);
                 break;
             }
             if (!activeMotorsMultiTurnKnown(sharedData)) {
                 logMultiTurnUnknownReject(sharedData, "PULL_JOINT_INTO_WORKSPACE");
-                sharedData->pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED;
-                sharedData->pull_joint_into_workspace_reason = PULL_JOINT_INTO_WORKSPACE_REASON_MULTITURN_UNKNOWN;
-                sharedData->pull_joint_into_workspace_timestamp = p4::platform::time::monotonicMillis();
+                failWorkspaceRecovery(sharedData, PULL_JOINT_INTO_WORKSPACE_REASON_MULTITURN_UNKNOWN);
                 break;
             }
             if (!beginPullJointIntoWorkspaceMotion(sharedData, false, 0,
                                      event.servoMaintenanceToken)) {
-                sharedData->pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED;
-                sharedData->pull_joint_into_workspace_reason = PULL_JOINT_INTO_WORKSPACE_REASON_CANCELLED;
-                sharedData->pull_joint_into_workspace_timestamp = p4::platform::time::monotonicMillis();
+                failWorkspaceRecovery(sharedData, PULL_JOINT_INTO_WORKSPACE_REASON_CANCELLED);
             }
             break;
         }
@@ -926,9 +928,7 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
             setCommandModeJoint(sharedData);
             if (sharedData->pull_joint_into_workspace_status != PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED) {
-                sharedData->pull_joint_into_workspace_status = PULL_JOINT_INTO_WORKSPACE_STATUS_FAILED;
-                sharedData->pull_joint_into_workspace_reason = PULL_JOINT_INTO_WORKSPACE_REASON_CANCELLED;
-                sharedData->pull_joint_into_workspace_timestamp = p4::platform::time::monotonicMillis();
+                failWorkspaceRecovery(sharedData, PULL_JOINT_INTO_WORKSPACE_REASON_CANCELLED);
             }
             {
                 const uint32_t recoveryRequestSequence =

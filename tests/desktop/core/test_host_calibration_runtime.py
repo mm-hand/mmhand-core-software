@@ -638,12 +638,14 @@ def test_stop_cancels_host_display_and_old_worker_cannot_restore_running(io):
     assert io.controller.current_state.calib_status == 'IDLE'
 
 
-def test_overloaded_hold_motor_rejects_entire_batch_before_transmission(io, monkeypatch):
+@pytest.mark.parametrize('load', [800, -800, 1023, -1023])
+def test_calibration_batch_waits_for_p4_result_even_at_high_load(io, monkeypatch, load):
     monkeypatch.setattr(io, '_ensure_motion', lambda: True)
-    monkeypatch.setattr(io, 'servo_load', lambda _motor: -800)
+    monkeypatch.setattr(io, 'servo_load', lambda _motor: load)
+    monkeypatch.setattr(io, '_wait', lambda *args: False)
     assert not io.publish({2: 200}, 400, 20)
-    io.controller.comm.send_command.assert_not_called()
-    assert diag_reason(io) == runtime.CALIB_DIAG_REASON_OVERLOAD
+    assert any(call.args[0][0] == 'motor_pos_abs' for call in io.controller.comm.send_command.call_args_list)
+    assert diag_reason(io) == runtime.CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT
 
 
 def test_rebased_scope_cannot_reappear_through_host_overlay(io):
@@ -975,11 +977,12 @@ def test_host_zero_finish_failure_stops_ordinary_motion(io, monkeypatch):
     io.controller.comm.send_command.assert_called_once_with('stop')
 
 
-def test_active_joint_abs_trigger_requests_rebase_retry(io, monkeypatch):
+@pytest.mark.parametrize('target', [30000, -30000])
+def test_active_joint_abs_trigger_requests_rebase_retry(io, monkeypatch, target):
     monkeypatch.setattr(io, '_ensure_motion', lambda: True)
     io.set_active_calibration_motors(1 << 2)
     io.rebase_retry_requested = False
-    assert not io.publish({2: 30000}, 400, 20)
+    assert not io.publish({2: target}, 400, 20)
     assert io.rebase_retry_requested
     assert 'rebase trigger' in io.motion_publish_error
     io.controller.comm.send_command.assert_not_called()
