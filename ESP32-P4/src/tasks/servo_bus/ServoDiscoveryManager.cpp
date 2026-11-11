@@ -16,6 +16,11 @@ using mmhand::config::servo::kDiscoveryProbeTimeoutMs;
 using mmhand::config::servo::kOfflineRouteRescanIntervalMs;
 using mmhand::config::servo::kRecoveryProbeTimeoutMs;
 
+namespace {
+uint32_t lastScanLogMs = 0;
+constexpr uint32_t kScanLogIntervalMs = 5000;
+}
+
 ServoDiscoveryManager& servoDiscoveryManager()
 {
     static ServoDiscoveryManager manager;
@@ -82,12 +87,6 @@ void ServoDiscoveryManager::startPendingScan(uint32_t nowMs)
         targetedProbeCount_ = 0;
         scanBus_ = targetedBusForProbe(0);
         servoRouteTable().beginMotorScan(targetedMotor_);
-        FW_LOG_INFO_PRINTF(
-            "[SERVO ROUTE] targeted scan M%02u started preferred_bus=%d\r\n",
-            (unsigned)targetedMotor_,
-            targetedPreferredBus_ < NUM_BUSES
-                ? (int)targetedPreferredBus_
-                : -1);
     }
 }
 
@@ -149,12 +148,15 @@ void ServoDiscoveryManager::finishCurrentScan(uint32_t nowMs)
     if (pendingMotorMask_ == 0) {
         lastHotplugRescanMs_ = nowMs;
     }
-    FW_LOG_INFO_PRINTF(
-        "[SERVO ROUTE] scan done valid=0x%08lx controllable=0x%08lx conflict=0x%08lx overload=0x%02x\r\n",
-        (unsigned long)routes.validMotorMask,
-        (unsigned long)routes.controllableMotorMask,
-        (unsigned long)routes.conflictMotorMask,
-        (unsigned)routes.busOverloadMask);
+    if ((uint32_t)(nowMs - lastScanLogMs) >= kScanLogIntervalMs) {
+        lastScanLogMs = nowMs;
+        FW_LOG_INFO_PRINTF(
+            "[SERVO ROUTE] scan done valid=0x%08lx controllable=0x%08lx conflict=0x%08lx overload=0x%02x\r\n",
+            (unsigned long)routes.validMotorMask,
+            (unsigned long)routes.controllableMotorMask,
+            (unsigned long)routes.conflictMotorMask,
+            (unsigned)routes.busOverloadMask);
+    }
     for (uint8_t bus = 0; bus < NUM_BUSES; ++bus) {
         if ((routes.busOverloadMask & (1U << bus)) != 0) {
             FW_LOG_WARN_PRINTF(

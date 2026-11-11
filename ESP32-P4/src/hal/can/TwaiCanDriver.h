@@ -51,6 +51,12 @@ public:
     /** 重新启动已安装的 TWAI 驱动。 */
     bool restart();
 
+    /** 读取硬件 RX FIFO 当前帧数（0..64）。 */
+    uint32_t rxFifoCount() const;
+
+    /** 停止并重启控制器：清空硬件 FIFO 和软件 RX 队列。 */
+    bool recoverRx();
+
 private:
     bool ensureIoPower();
 

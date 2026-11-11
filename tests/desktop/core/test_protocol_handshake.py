@@ -37,8 +37,13 @@ def test_only_positive_hello_confirmation_opens_contract_gate():
     comm = _comm()
     model = _ack(comm, protocol.PROTO_ACK_STATUS_OK)
     assert comm._protocol_compatible and model.protocol_compatible
+    # The P4 host lease is 1 s, so an idle app must keep heartbeating after the
+    # contract is confirmed; otherwise the next maintenance/direct command is
+    # rejected with CONTRACT_MISMATCH before the app notices.
+    assert comm._heartbeat_enabled
     assert comm.send_command("start")
     _ack(comm, protocol.PROTO_ACK_STATUS_CONTRACT_MISMATCH)
+    assert not comm._heartbeat_enabled
     assert not comm.send_command("start")
 
 

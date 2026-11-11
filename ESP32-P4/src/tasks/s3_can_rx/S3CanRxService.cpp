@@ -48,6 +48,10 @@ static_assert(
     "Tactile full payload budget too small.");
 static_assert(CAN_ID_TAC_FULL_DUMP_LAST <= 0x7FF, "Tactile full CAN IDs must fit standard CAN.");
 
+// RX FIFO 卡死判据：快满且 1 秒没有完整编码器快照，连续 1 秒即重建控制器。
+constexpr uint32_t CAN_RX_FIFO_NEAR_FULL = 60;
+constexpr uint32_t CAN_RX_STALL_MS = 1000;
+
 typedef struct {
     uint8_t active;                       ///< 1 表示正在等待同一批编码器分帧。
     uint8_t frameMask;                    ///< 已收到的 0x100 起始数据帧位图。
@@ -193,6 +197,7 @@ struct SensorIngressRuntimeContext {
     uint32_t lastCanId;
     uint32_t lastTwaiHealthCheckMs;
     bool twaiRecoveryRequested;
+    uint32_t stallSinceMs;             ///< RX FIFO 卡死计时起点；0 表示未卡死。
     uint32_t lastCanFrameRuleMs;       ///< COM-6002 最近上报时间。
     uint32_t lastEncoderRuleMs;        ///< COM-6003 最近上报时间。
     uint32_t lastTactileRuleMs;        ///< COM-6004 最近上报时间。
@@ -761,6 +766,35 @@ bool stepS3CanRxService(SystemRuntimeContext* sharedData, uint32_t nowMs)
                         twaiRecoveryRequested = false;
                         resetEncoderReassembly(&encoderState);
                         FW_LOG_INFO_PRINTLN("[CAN HOTPLUG] controller restarted after recovery");
+                    }
+                } else if (!statusInfo.busOff && !statusInfo.stopped && !twaiRecoveryRequested) {
+                    const uint32_t fifo = canDriver.rxFifoCount();
+                    const bool stale =
+                        (uint32_t)(nowMs - rxBuffer.timestamp) > CAN_RX_STALL_MS;
+                    if (stale && fifo >= CAN_RX_FIFO_NEAR_FULL) {
+                        if (runtime.stallSinceMs == 0) {
+                            runtime.stallSinceMs = nowMs;
+                        } else if ((uint32_t)(nowMs - runtime.stallSinceMs) >=
+                                   CAN_RX_STALL_MS) {
+                            runtime.stallSinceMs = 0;
+                            if (canDriver.recoverRx()) {
+                                resetEncoderReassembly(&encoderState);
+                                resetErrorDetailReassembly(&errorState);
+                                resetTactileReassembly(&tactileState);
+                                resetTactileFullReassembly(&tactileFullState);
+                                rxBuffer.isValid = false;
+                                clearEncoderHealth(sharedData, encoderHealth);
+                                sharedData->canRxQueue.overwrite(rxBuffer);
+                                FW_LOG_WARN_PRINTF(
+                                    "[CAN HOTPLUG] RX FIFO stalled fifo=%lu; TWAI restarted\r\n",
+                                    (unsigned long)fifo);
+                            } else {
+                                FW_LOG_WARN_PRINTF(
+                                    "[CAN HOTPLUG] RX FIFO stalled; TWAI restart failed\r\n");
+                            }
+                        }
+                    } else {
+                        runtime.stallSinceMs = 0;
                     }
                 }
             }

@@ -12,7 +12,7 @@ import threading
 import time
 from . import protocol
 
-CAPABILITY, BEGIN, END, PROBE, RENAME = range(5)
+CAPABILITY, BEGIN, END, PROBE, RENAME, BUZZ = range(6)
 
 
 
@@ -118,6 +118,9 @@ def reconcile_motor_journal(journal, rows):
     expected = {(r['bus'], r['id']) for r in journal['inventory']}
     moves = [tuple(move) for move in journal['moves']]
     completed = int(journal['completed'])
+    changed = {(bus, identifier) for bus, old, new in moves for identifier in (old, new)}
+    # Missing motors outside the write sequence cannot affect its recovery.
+    expected &= actual | changed
     for bus, old, new in moves[:completed]:
         expected.remove((bus, old)); expected.add((bus, new))
     if expected == actual:

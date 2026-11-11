@@ -7,6 +7,7 @@
 #include "../../config/BoardConfig.h"
 
 #include <driver/twai.h>
+#include <hal/twai_ll.h>
 #include <esp_err.h>
 #include <esp_ldo_regulator.h>
 #include "../../system/rtos/FreeRtosKernel.h"
@@ -110,6 +111,24 @@ bool TwaiCanDriver::restart()
 {
     if (!installed_) {
         return begin();
+    }
+    started_ = twai_start() == ESP_OK;
+    return started_;
+}
+
+uint32_t TwaiCanDriver::rxFifoCount() const
+{
+    return twai_ll_get_rx_msg_count(TWAI_LL_GET_HW(0));
+}
+
+bool TwaiCanDriver::recoverRx()
+{
+    if (!installed_) {
+        return begin();
+    }
+    if (started_) {
+        twai_stop();
+        started_ = false;
     }
     started_ = twai_start() == ESP_OK;
     return started_;

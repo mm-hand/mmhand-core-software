@@ -1,11 +1,12 @@
 """Motor renumbering recovery, operation state and removed tactile ID APIs."""
 
 from _clock_helpers import stamp
+import json
 import time
 import pytest
 from unittest.mock import Mock
 
-from desktop.core.id_protocol import CAPABILITY, BEGIN, END, PROBE, RENAME
+from desktop.core.id_protocol import CAPABILITY, BEGIN, END, PROBE, RENAME, BUZZ
 from desktop.core.protocol import HOST_PROTOCOL_VERSION
 
 def finish(hand, result):
@@ -40,6 +41,8 @@ class MotorDevice:
     def __init__(self, lose_result=False, locked=True):
         self.writes = []
         self.probes = []
+        self.buzzes = []
+        self.buzz_status = 0
         self.inventory={(0,i) for i in range(5)}
         self.lose_result=lose_result
         self.locked=locked
@@ -53,6 +56,10 @@ class MotorDevice:
         if operation==PROBE:
             self.probes.append((bus, old_id))
             reply['present']=int((bus,old_id) in self.inventory)
+        if operation==BUZZ:
+            self.buzzes.append((bus, old_id, new_id))
+            reply['status'] = self.buzz_status
+            reply['present'] = int((bus, old_id) in self.inventory)
         if operation==RENAME:
             assert (bus,old_id) in self.inventory and (bus,new_id) not in self.inventory
             self.inventory.remove((bus,old_id)); self.inventory.add((bus,new_id))
@@ -117,3 +124,69 @@ def test_motor_lost_result_resumes_after_scan_without_duplicate_write(hand,monke
     assert device.writes.count((0,0,253))==1
     assert device.inventory=={(0,i) for i in range(5,10)}
     assert not device.profiles  # Profile configuration belongs to online checks.
+
+@pytest.mark.parametrize('recovering', [False, True])
+def test_unchanged_motor_missing_does_not_block_renumber(hand, monkeypatch, tmp_path, recovering):
+    from desktop.core import id_actions, calibration_snapshot
+
+    device_id = '1234567890ABCDEF'
+    monkeypatch.setattr(id_actions, 'DEVICE_STATE_DIR', tmp_path)
+    invalidate = Mock()
+    monkeypatch.setattr(calibration_snapshot, 'invalidate_calibration_snapshot_scope', invalidate)
+    monkeypatch.setattr(hand._controller, '_invalidate_coordinate_anchors', Mock())
+    monkeypatch.setattr(hand._controller, 'servo_abs_zero_device_id', lambda _: device_id)
+    device = MotorDevice()
+    hand._controller.comm = device
+    journal_path = tmp_path / f'id_reset_{device_id}.json'
+    moves = [(2, 1, 253), (2, 253, 15)]
+    if recovering:
+        journal_path.write_text(json.dumps(dict(
+            inventory=[dict(bus=2, id=1), dict(bus=2, id=10)],
+            moves=moves, completed=2, status='NEEDS_RECOVERY')), encoding='utf-8')
+        device.inventory = {(2, 15)}
+    else:
+        device.inventory = {(2, 1), (2, 10)}
+    assert finish(hand, hand.request_id_scan())['status'] == 'SUCCESS'
+    device.inventory.discard((2, 10))
+
+    targets = {} if recovering else {(2, 1): 15, (2, 10): 10}
+    result = finish(hand, hand.request_motor_renumber(targets))
+    assert result['status'] == 'SUCCESS', result
+    assert 'BUS2 ID10' in result['message']
+    assert device.writes == ([] if recovering else moves)
+    assert invalidate.call_count == (0 if recovering else 1)
+    assert hand.id_reset_snapshot()['motor']['rows'] == [dict(bus=2, id=15)]
+    assert json.loads(journal_path.read_text(encoding='utf-8'))['status'] == 'SUCCESS'
+
+
+def test_motor_buzz_requires_a_scan(hand, monkeypatch, tmp_path):
+    from desktop.core import id_actions
+    monkeypatch.setattr(id_actions, 'DEVICE_STATE_DIR', tmp_path)
+    device = MotorDevice()
+    hand._controller.comm = device
+    result = hand.request_motor_buzz(0, 3)
+    assert not result.accepted and 'scan all buses' in result.message
+    assert not device.buzzes
+
+def test_motor_buzz_moves_only_the_addressed_servo(hand, monkeypatch, tmp_path):
+    from desktop.core import id_actions
+    monkeypatch.setattr(id_actions, 'DEVICE_STATE_DIR', tmp_path)
+    device = MotorDevice()
+    device.inventory = {(0, 3), (2, 7)}
+    hand._controller.comm = device
+    finish(hand, hand.request_id_scan())
+    result = finish(hand, hand.request_motor_buzz(2, 7))
+    assert result['status'] == 'SUCCESS', result
+    assert device.buzzes == [(2, 7, id_actions.BUZZ_AMPLITUDE)]
+    assert not device.writes
+
+def test_motor_buzz_reports_an_unsupported_firmware(hand, monkeypatch, tmp_path):
+    from desktop.core import id_actions
+    monkeypatch.setattr(id_actions, 'DEVICE_STATE_DIR', tmp_path)
+    device = MotorDevice()
+    device.buzz_status = 3
+    hand._controller.comm = device
+    finish(hand, hand.request_id_scan())
+    result = finish(hand, hand.request_motor_buzz(0, 3))
+    assert result['status'] == 'FAILED'
+    assert 'does not support motor buzz' in result['message']

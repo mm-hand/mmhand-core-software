@@ -131,6 +131,52 @@ bool FeetechServoDriver::checkOnlineConfiguration(uint8_t id)
     return true;
 }
 
+/* bool FeetechServoDriver::buzzMaintenance */
+bool FeetechServoDriver::buzzMaintenance(uint8_t id, uint8_t counts)
+{
+    if (!_serial || id > MAX_SERVO_ID || !_feedback[id].online ||
+        _feedback[id].motorStatus != 0 || counts == 0) {
+        return false;
+    }
+    const unsigned long savedTimeout = _sms.IOTimeOut;
+    _sms.IOTimeOut = 10;
+    const int raw = _sms.readWord(id, SMS_STS_PRESENT_POSITION_L);
+    // 寄存器 18 的 0x10 位就是上线检查写的多圈配置位：未开多圈时位置只有 0..4095。
+    const int phase = _sms.readByte(id, 18);
+    _sms.IOTimeOut = savedTimeout;
+    if (raw < 0 || phase < 0) {
+        return false;
+    }
+    const int32_t origin = (raw & 0x8000) ? -(int32_t)(raw & 0x7fff) : (int32_t)raw;
+    if (origin < kServoHardwareCommandMin || origin > kServoHardwareCommandMax) {
+        return false;
+    }
+    const int32_t step = counts > 127 ? 127 : counts;
+    int32_t target;
+    const int channel = findMotorChannelByServoId(id);
+    if (channel >= 0) {
+        // 振动只往松绳方向走：断电对账的危险侧是收绳方向。
+        target = origin - getMotorTendonShortenAbsSign((uint8_t)channel) * step;
+        if ((phase & 0x10) == 0) {
+            target = target < 0 ? 0 : (target > 4095 ? 4095 : target);
+        }
+    } else {
+        // 没有产品绑定的 ID（27-30、253）没有收绳方向，只避开单圈边界。
+        target = origin > 2048 ? origin - step : origin + step;
+    }
+    const bool wasDisabled = _torqueDisabled[id];
+    const bool ok = _sms.WritePosEx(id, origin, SERVO_TARGET_SPEED_DEFAULT, 254) > 0
+                 && setTorqueEnabled(id, true)
+                 && _sms.WritePosEx(id, target, SERVO_TARGET_SPEED_DEFAULT, 254) > 0;
+    delay(kMaintenanceBuzzHoldMs);
+    _sms.WritePosEx(id, origin, SERVO_TARGET_SPEED_DEFAULT, 254);
+    delay(kMaintenanceBuzzHoldMs);
+    if (wasDisabled) {
+        setTorqueEnabled(id, false);
+    }
+    return ok;
+}
+
 /* bool FeetechServoDriver::setTarget */
 bool FeetechServoDriver::setTarget(uint8_t id, int32_t logicalPosition, uint16_t speed, uint8_t acc)
 {

@@ -11,10 +11,19 @@ from copy import deepcopy
 import json
 from uuid import uuid4
 from desktop.paths import DEVICE_STATE_DIR, atomic_write_json
-from .id_protocol import CAPABILITY, BEGIN, END, PROBE, RENAME, plan_motor_ids, reconcile_motor_journal, motor_recovery_targets
+from .id_protocol import (CAPABILITY, BEGIN, END, PROBE, RENAME, BUZZ,
+                          plan_motor_ids, reconcile_motor_journal, motor_recovery_targets)
 
 MOTOR_SCAN_ID_COUNT = 31
 MOTOR_BUS_COUNT = 4
+BUZZ_AMPLITUDE = 64
+# P4 status -> explanation; 0 never reaches this table.
+BUZZ_ERRORS = {
+    2: 'Controller refused the move; check for a latched STOP or an active control owner',
+    3: 'P4 firmware does not support motor buzz; flash the matching firmware',
+    6: 'Maintenance session expired; retry',
+    7: 'BUS{bus} ID{ident} did not answer or could not move; check the bus, power and obstruction',
+}
 
 
 class IdResetActions:
@@ -165,9 +174,13 @@ class IdResetActions:
             self._id_begin(comm, 'motor', session, cancelled)
             started = recovering
             try:
-                # Recheck the whole inventory immediately before EEPROM writes.
+                remaining = planned[journal['completed']:]
+                sources = {(bus, old) for bus, old, _ in remaining}
                 for row in state['rows']:
-                    probe = self._id_checked(comm.maintenance_request(session, PROBE, row['bus'], row['id'], cancelled=cancelled))
+                    bus, identifier = row['bus'], row['id']
+                    if (bus, identifier) not in sources:
+                        continue
+                    probe = self._id_checked(comm.maintenance_request(session, PROBE, bus, identifier, cancelled=cancelled))
                     if not probe['present']:
                         raise ValueError('Inventory changed; scan all buses again')
                 for bus in range(4):
@@ -176,7 +189,7 @@ class IdResetActions:
                 # High target IDs are allowed, but are outside the quick scan.
                 # Check those exact IDs on all buses before the first write.
                 inventory = {(row['bus'], row['id']) for row in state['rows']}
-                high_targets = {new for _, _, new in planned if MOTOR_SCAN_ID_COUNT <= new < 253}
+                high_targets = {new for _, _, new in remaining if MOTOR_SCAN_ID_COUNT <= new < 253}
                 for identifier in sorted(high_targets):
                     for bus in range(MOTOR_BUS_COUNT):
                         if (bus, identifier) in inventory:
@@ -186,7 +199,7 @@ class IdResetActions:
                             raise ValueError(f'Target ID {identifier} is occupied on BUS{bus}')
                 affected = sum(1 << identifier for identifier in {i for _, old, new in planned for i in (old, new) if i < 27})
                 joints = sum(1 << j for j in {MOTOR_TO_JOINT_INDEX[m] for m in range(27) if affected & (1 << m)})
-                if affected:
+                if remaining and affected:
                     invalidate_calibration_snapshot_scope(controller.calibration_snapshot_path, motor_mask=affected,
                                                           joint_mask=joints, reason='servo_id_reset')
                     controller._invalidate_coordinate_anchors(affected, 'servo_id_reset', self.get_state_snapshot())
@@ -218,17 +231,28 @@ class IdResetActions:
                         raise
                     journal['completed'] = index + 1; journal.pop('intent', None); save()
                 current = {(r['bus'], r['id']) for r in journal['inventory']}
+                destinations = {(bus, new) for bus, _, new in planned}
                 for bus, old, new in planned:
                     current.remove((bus, old)); current.add((bus, new))
+                for bus in sorted({bus for bus, _, _ in planned}):
+                    if self._id_checked(comm.maintenance_request(session, PROBE, bus, 253, cancelled=cancelled))['present']:
+                        raise ValueError(f'Temporary ID 253 is still occupied on BUS{bus}')
                 verified = []
+                missing = []
                 for bus, identifier in sorted(current):
                     if not self._id_checked(comm.maintenance_request(session, PROBE, bus, identifier, cancelled=cancelled))['present']:
-                        raise ValueError('Post-renumber scan failed; inspect current addresses')
+                        if (bus, identifier) in destinations:
+                            raise ValueError(f'Post-renumber check failed: BUS{bus} ID{identifier} did not answer')
+                        missing.append(f'BUS{bus} ID{identifier}')
+                        continue
                     verified.append(dict(bus=bus, id=identifier))
                 journal['status'] = 'SUCCESS'; save()
+                message = 'Motor IDs verified.'
+                if missing:
+                    message += f' Unchanged motors did not answer: {", ".join(missing)}.'
                 self._id_update('motor', rows=verified, generation=state['generation'] + 1,
-                                message='Motor IDs verified. Repeat motor calibration after any ID change.', scanned=True, recovering=False)
-                return True, 'Motor IDs verified'
+                                message=f'{message} Repeat motor calibration after any ID change.', scanned=True, recovering=False)
+                return True, message
             except Exception as exc:
                 if started:
                     journal['status'] = 'NEEDS_RECOVERY'; journal['error'] = str(exc); save()
@@ -243,3 +267,41 @@ class IdResetActions:
                     self._id_update('motor', scanned=False, message='P4 maintenance cleanup failed; reconnect and scan current IDs.')
                     raise
         return self.submit_operation('Renumber All', renumber)
+
+    def request_motor_buzz(self, bus, identifier):
+        """Vibrate one addressed servo briefly towards tendon release and back."""
+        from .application_actions import OperationResult
+        state = self.id_reset_snapshot()['motor']
+        if not state['available'] or not state['scanned']:
+            return OperationResult(False, None, 'Connect P4 and scan all buses before buzzing a motor')
+        bus, identifier = int(bus), int(identifier)
+
+        def buzz(epoch):
+            switched, message = self._prepare_maintenance_switch(epoch)
+            if not switched:
+                return False, message
+            comm = self.comm
+            session = int(uuid4().hex[:8], 16) or 1
+            cancelled = lambda: epoch != self._application_epoch or comm is not self.comm
+            self._id_begin(comm, 'motor', session, cancelled)
+            try:
+                result = comm.maintenance_request(
+                    session, BUZZ, bus, identifier, BUZZ_AMPLITUDE, cancelled=cancelled)
+                if result['version'] != 3:
+                    raise ValueError('Unsupported ID maintenance protocol version')
+                if result['status']:
+                    text = BUZZ_ERRORS.get(result['status'],
+                                           f'P4 refused the move (status={result["status"]})')
+                    return False, text.format(bus=bus, ident=identifier)
+                return True, f'Motor BUS{bus} ID{identifier} buzzed and returned'
+            except Exception as exc:
+                self._id_update('motor', message=str(exc))
+                return False, str(exc)
+            finally:
+                try:
+                    self._id_checked(comm.maintenance_request(session, END, timeout=1))
+                except Exception as exc:
+                    self._id_update('motor', scanned=False,
+                                    message=f'Maintenance cleanup failed: {exc}; reconnect and scan again')
+                    raise RuntimeError(f'Maintenance cleanup failed: {exc}') from exc
+        return self.submit_operation('Buzz Motor', buzz)

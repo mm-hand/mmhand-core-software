@@ -5,10 +5,12 @@
 #include <stdint.h>
 struct SystemRuntimeContext;
 // Request: big-endian token/session, then operation/bus/old/new.
-// Operations: capability=0, begin=1, end=2, probe=3, rename=4.
+// Operations: capability=0, begin=1, end=2, probe=3, rename=4, buzz=5.
 bool submitServoMaintenance(const uint8_t* payload);
 bool servoMaintenanceBlocksCommands();
 bool stepServoMaintenance(SystemRuntimeContext* context, uint32_t nowMs);
 void publishServoMaintenance();
 void cancelServoMaintenance();
 uint32_t takeServoMaintenanceChangedMask();
+/** 维护动作阻塞总线后延长反馈新鲜度窗口，避免在线电机被误判离线。 */
+void servoMaintenanceExtendFeedbackGrace(uint32_t nowMs);

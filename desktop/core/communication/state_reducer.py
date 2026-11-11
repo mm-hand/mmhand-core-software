@@ -991,9 +991,13 @@ class StateReducer:
             if ack_cmd == CMD_PROTOCOL_HELLO:
                 owner._protocol_compatible = int(status) == PROTO_ACK_STATUS_OK
                 model.protocol_compatible = owner._protocol_compatible
+                # P4 的上位机租约只有 1 s：握手成功后必须持续发心跳，
+                # 否则空闲一秒后契约被清，下一次维护/直控命令直接被拒。
+                owner._heartbeat_enabled = owner._protocol_compatible
             elif (ack_cmd in COMMANDS_REQUIRING_HANDSHAKE
                   and int(status) == PROTO_ACK_STATUS_CONTRACT_MISMATCH):
                 owner._protocol_compatible = False
+                owner._heartbeat_enabled = False
                 model.protocol_compatible = False
             model.proto_ack_p4_time_ms = int(packet_p4_time_ms or 0)
             if ack_cmd == CMD_RESET and status in (

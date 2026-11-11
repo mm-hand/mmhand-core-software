@@ -34,6 +34,8 @@ static_assert(MAX_SERVOS_PER_BUS * (15U + 6U) <= 256U,
               "12-servo sync-read response exceeds protocol buffer");
 
 inline constexpr uint32_t kMultiTurnConfigDelayMs = 5; ///< EEPROM 写入和 Reset 后等待时间。
+/** 维护“振动”每个去/回阶段的等待；识别用的 64 counts 往返靠它停留。 */
+inline constexpr uint32_t kMaintenanceBuzzHoldMs = 120;
 inline constexpr uint8_t kOfflineInvalidateMisses = 10; ///< 连续读失败达到此值才判离线。
 /** 同一 BUS/ID 的反馈失败文本最多每5秒一条，避免离线重扫刷屏。 */
 inline constexpr uint32_t kFeedbackFailureLogIntervalMs = 5000;

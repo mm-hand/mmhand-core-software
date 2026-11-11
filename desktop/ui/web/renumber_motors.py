@@ -18,6 +18,7 @@ def build(hand, act):
     if not any(getattr(route, 'path', '') == '/joint-motor-ids.png' for route in app.routes):
         app.add_static_file(url_path='/joint-motor-ids.png', local_file=IMAGE)
     inputs = {}
+    buzz = {}
     generation = [None]
     with ui.row().classes('page-toolbar'):
         scan = ui.button('Scan All Buses', on_click=lambda: act(hand.request_id_scan))
@@ -30,6 +31,7 @@ def build(hand, act):
             rows = ui.column().classes('w-full')
             ui.label('Assembly target IDs are shown in the diagram. Product joint bindings remain fixed. IDs above 26 are outside the product control mapping.').classes('text-xs text-slate-500')
             ui.label('Renumber All also sets every scanned motor: maximum speed (84) = 254, maximum acceleration (85) = 254, acceleration multiplier (86) = 0. All values are read back before success.').classes('text-xs text-slate-700')
+            ui.label('Buzz moves one motor about 6° towards tendon release and back. Motors sharing a BUS and ID move together.').classes('text-xs text-slate-500')
         with ui.column().classes('w-full min-w-0'):
             ui.image('/joint-motor-ids.png').props('fit=contain').classes('renumber-motors-diagram')
 
@@ -40,7 +42,7 @@ def build(hand, act):
         rename.set_enabled(motor['available'] and idle and motor['scanned'] and bool(motor['rows']))
         motor_status.set_text(motor['message'] if motor['available'] else 'Connect P4 with fresh status to reset motor IDs.')
         if generation[0] != motor['generation']:
-            generation[0] = motor['generation']; rows.clear(); inputs.clear()
+            generation[0] = motor['generation']; rows.clear(); inputs.clear(); buzz.clear()
             with rows:
                 for row in motor['rows']:
                     key = (row['bus'], row['id'])
@@ -48,5 +50,9 @@ def build(hand, act):
                         ui.label(f"BUS{row['bus']}").classes('w-14')
                         ui.label(str(row['id'])).classes('w-14')
                         inputs[key] = ui.number('New ID', value=row.get('new_id',row['id']), min=0, max=252, step=1).props('dense outlined').classes('w-28')
+                        buzz[key] = ui.button('Buzz', on_click=lambda key=key: act(lambda: hand.request_motor_buzz(*key))).props('dense outline')
+                        with buzz[key]:
+                            ui.tooltip('This motor buzzes about 6° towards tendon release and returns.')
         for number in inputs.values(): number.set_enabled(motor['available'] and idle and not motor['recovering'])
+        for button in buzz.values(): button.set_enabled(motor['available'] and idle and not motor['recovering'])
     return refresh

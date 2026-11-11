@@ -20,6 +20,7 @@
 #include "../../system/log/FirmwareLog.h"
 
 using mmhand::config::servo::kMultiTurnConfigDelayMs;
+using mmhand::config::servo::kMaintenanceBuzzHoldMs;
 using mmhand::config::servo::kOfflineInvalidateMisses;
 using mmhand::config::servo::kOnlineConfirmReads;
 using mmhand::config::servo::kRecoveryMaxAttempts;
@@ -156,6 +157,12 @@ public:
 
     /** 每次上线统一核验版本和配置，配置不符才写EEPROM。 */
     bool checkOnlineConfiguration(uint8_t id);
+
+    /**
+     * 维护振动：让一台舵机往松绳方向走 counts 个原生 counts 再回原位。
+     * 不写坐标基准，返回前复原扭力状态；阻塞约 2*kMaintenanceBuzzHoldMs。
+     */
+    bool buzzMaintenance(uint8_t id, uint8_t counts);
 
     /** 检查实际 ABS 的范围和信任状态后加入同步写批次。 */
     bool setTarget(uint8_t id, int32_t logicalPosition, uint16_t speed, uint8_t acc);

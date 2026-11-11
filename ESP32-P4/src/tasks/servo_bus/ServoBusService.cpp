@@ -584,6 +584,13 @@ bool initServoBusService(SystemRuntimeContext* sharedData, uint32_t nowMs)
     return true;
 }
 
+/** 维护动作阻塞总线后延长反馈新鲜度窗口；否则 100 ms 无反馈会把在线电机判离线。 */
+void servoMaintenanceExtendFeedbackGrace(uint32_t nowMs)
+{
+    g_servoRuntime.feedbackFreshnessGraceUntilMs =
+        nowMs + mmhand::config::servo::kFeedbackMaintenanceGraceMs;
+}
+
 /** 推进一个舵机服务周期；周期等待和运行时统计由 ServoBusTask 负责。 */
 bool stepServoBusService(SystemRuntimeContext* sharedData,
                          const ServoServiceInputSnapshot& input,

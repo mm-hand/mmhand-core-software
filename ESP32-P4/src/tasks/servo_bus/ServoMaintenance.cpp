@@ -78,7 +78,7 @@ bool stepServoMaintenance(SystemRuntimeContext* context, uint32_t nowMs) {
             portEXIT_CRITICAL(&lock); return held;
         }
     }
-    if (duplicate || !readMaintenanceU32(local) || op > 4) status = 3;
+    if (duplicate || !readMaintenanceU32(local) || op > 5) status = 3;
     else if (op == 0) response[13] = 1;
     else if (!stopped) status = 2;
     else if (op == 1) {
@@ -92,8 +92,8 @@ bool stepServoMaintenance(SystemRuntimeContext* context, uint32_t nowMs) {
     else if (op == 2) {
         portENTER_CRITICAL(&lock); active=false; session=0; portEXIT_CRITICAL(&lock);
         servoDiscoveryManager().begin();
-    } else if (op > 4 || bus >= NUM_BUSES || oldId >= 254 ||
-               (op == 4 && newId >= 254)) status = 3;
+    } else if (op > 5 || bus >= NUM_BUSES || oldId >= 254 ||
+               ((op == 4 || op == 5) && newId >= 254)) status = 3;
     else {
         lastRequestMs=nowMs;
         auto* driver = servoBusRegistry().driver(bus);
@@ -101,6 +101,17 @@ bool stepServoMaintenance(SystemRuntimeContext* context, uint32_t nowMs) {
         else if (op == 3) {
             response[13] = driver->probeMaintenanceId(oldId);
             if(response[13]) response[15]=driver->maintenanceIdLocked(oldId);
+        }
+        else if (op == 5) {
+            if (newId == 0) status = 3;
+            else {
+                // 振动会阻塞约 0.25 s，先补反馈 grace，避免其它在线电机被误判离线。
+                servoMaintenanceExtendFeedbackGrace(nowMs);
+                if (sharedAtomicLoad(&context->emergency_stop_latched) != 0) status = 2;
+                else if (driver->isFaulted(oldId)) status = 7;
+                else if (!driver->buzzMaintenance(oldId, newId)) status = 7;
+                else response[13] = 1;
+            }
         }
         else {
             uint32_t affected = 0;
