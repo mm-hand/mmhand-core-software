@@ -44,8 +44,9 @@ uint32_t requiredMotorMask(SystemRuntimeContext* runtime);
 bool requiresCan(SystemRuntimeContext* runtime);
 bool requiredServosOnline(SystemRuntimeContext* runtime,
                           const ServoAngleData_t& servoSnapshot);
-bool directMotorMaskReady(SystemRuntimeContext* runtime,
-                          uint32_t requiredMask);
+enum class DirectMotorAdmission : uint8_t { Ready, MultiTurnUnknown, HardwareNotReady };
+DirectMotorAdmission evaluateDirectMotorAdmission(SystemRuntimeContext* runtime,
+                                                  uint32_t requiredMask);
 bool controllableEntryReady(SystemRuntimeContext* runtime);
 
 /** 当前 active joints 是否完整具备 Manual 参考。 */
@@ -57,7 +58,8 @@ bool activeMotorsMultiTurnKnown(SystemRuntimeContext* runtime);
 /** 执行完整反馈 READY 判定，并更新 24/48 counts、连续三帧迟滞状态。 */
 FeedbackReadinessDecision evaluateFeedbackReadiness(
     SystemRuntimeContext* runtime,
-    uint32_t nowMs);
+    uint32_t nowMs,
+    bool manualReady);
 
 /** Pull Joint into Workspace 成功后，将 active joints 登记为已进入当前标定工作空间。 */
 void markActiveJointsWorkspaceReady(SystemRuntimeContext* runtime);

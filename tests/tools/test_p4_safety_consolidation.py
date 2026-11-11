@@ -33,6 +33,139 @@ def run_native(tmp_path, name, source):
     subprocess.run([str(executable)], check=True, env=env, cwd=tmp_path, timeout=10)
 
 
+def test_direct_admission_preserves_priority_and_samples_unknown_once(tmp_path):
+    implementation = (SRC / 'safety/policies/SystemReadinessPolicy.cpp').read_text(encoding='utf-8')
+    header = (SRC / 'safety/policies/SystemReadinessPolicy.h').read_text(encoding='utf-8')
+    source = r'''
+#include <cassert>
+#include <cstdint>
+#include "config/SafetyConfig.h"
+#include "data/SafetyTypes.h"
+#include "data/SystemTypes.h"
+using namespace mmhand::config::safety;
+constexpr uint32_t validMotorChannelMask() { return 3; }
+struct ServoAngleData_t { uint32_t timestamp = 1000; uint8_t onlineStatus[SERVO_TOTAL_NUM] = {1, 1}; };
+struct SystemRuntimeContext {
+    uint32_t multi_turn_unknown_bitmap = 0, servo_turn_overflow_bitmap = 0;
+    uint32_t system_fault_bitmap = 0, system_fault_latched_bitmap = 0;
+    bool routes = true;
+    struct Feedback {
+        bool available = true;
+        bool peek(ServoAngleData_t* out) { *out = {}; return available; }
+    } servoFeedbackQueue;
+};
+static unsigned unknownReads;
+static SystemRuntimeContext runtime;
+uint32_t sharedAtomicLoad(const uint32_t* value) {
+    if (value == &runtime.multi_turn_unknown_bitmap) ++unknownReads;
+    return *value;
+}
+bool routesControllable(SystemRuntimeContext* context, uint32_t) { return context->routes; }
+namespace p4::platform::time { uint32_t monotonicMillis() { return 1000; } }
+'''
+    source += function(header, 'enum class DirectMotorAdmission') + ';\n'
+    source += function(implementation, 'DirectMotorAdmission evaluateDirectMotorAdmission(')
+    source += r'''
+int main() {
+    using Decision = DirectMotorAdmission;
+    assert(evaluateDirectMotorAdmission(&runtime, 1) == Decision::Ready && unknownReads == 1);
+    runtime.multi_turn_unknown_bitmap = 1;
+    runtime.servoFeedbackQueue.available = false;
+    unknownReads = 0;
+    assert(evaluateDirectMotorAdmission(&runtime, 1) == Decision::MultiTurnUnknown && unknownReads == 1);
+    assert(evaluateDirectMotorAdmission(&runtime, 2) == Decision::HardwareNotReady);
+    runtime.servoFeedbackQueue.available = true;
+    runtime.servo_turn_overflow_bitmap = 2;
+    assert(evaluateDirectMotorAdmission(&runtime, 2) == Decision::HardwareNotReady);
+    runtime.servo_turn_overflow_bitmap = 0;
+    runtime.routes = false;
+    assert(evaluateDirectMotorAdmission(&runtime, 2) == Decision::HardwareNotReady);
+}
+'''
+    run_native(tmp_path, 'direct_admission', source)
+
+
+def test_feedback_admission_reuses_readiness_when_workspace_becomes_ready(tmp_path):
+    dispatcher = (SRC / 'tasks/system_state/SystemEventDispatcher.cpp').read_text(encoding='utf-8')
+    start = dispatcher.index('case SYSTEM_EVENT_RUN_FEEDBACK: {')
+    end = dispatcher.index('case SYSTEM_EVENT_MOTOR_DIRECT_RELEASE:', start)
+    source = r'''
+#include <cassert>
+#include "data/ActuatorTypes.h"
+#include "data/SystemTypes.h"
+#define FW_LOG_INFO_PRINTF(...) ((void)0)
+#define FW_LOG_INFO_PRINTLN(...) ((void)0)
+struct SystemRuntimeContext {
+    uint8_t system_state = SYSTEM_STATE_READY;
+    uint8_t feedback_recovery_pending = 0, status = 0, reason = 0;
+    uint32_t feedback_recovery_request_sequence = 0;
+    bool manual = true, ready = true, enteredReady = false;
+    unsigned manualReads = 0, workspaceReads = 0, grants = 0;
+};
+template<class T> T sharedAtomicLoad(T* value) { return *value; }
+template<class T> void sharedAtomicStore(T* field, T value) { *field = value; }
+namespace p4::state {
+bool prepareHostControlCommandAdmission(SystemRuntimeContext*) { return true; }
+}
+namespace p4::system {
+bool canAcceptRunFeedback(uint8_t state) { return state == SYSTEM_STATE_READY; }
+}
+namespace p4::recovery {
+uint8_t pullJointIntoWorkspaceActiveScopeRejectReason(SystemRuntimeContext*) {
+    return PULL_JOINT_INTO_WORKSPACE_REASON_NONE;
+}
+}
+bool rejectMotionWhenEmergencyStopLatched(SystemRuntimeContext*, const char*) { return false; }
+bool manualReferenceGateReady(SystemRuntimeContext* r) { ++r->manualReads; return r->manual; }
+void logManualReferenceReject(SystemRuntimeContext*, const char*) {}
+bool feedbackTargetsPointIntoWorkspace(SystemRuntimeContext*) { return true; }
+bool activeMotorsMultiTurnKnown(SystemRuntimeContext*) { return true; }
+bool beginPullJointIntoWorkspaceMotion(SystemRuntimeContext*, bool, uint32_t, uint32_t) { return true; }
+struct Readiness { bool ready; uint32_t recoverableBelowMask; };
+Readiness evaluateWorkspace(SystemRuntimeContext* r, bool manual) {
+    assert(manual); ++r->workspaceReads; return {r->ready, 0};
+}
+void setFeedbackAdmissionResult(SystemRuntimeContext* r, uint32_t, uint8_t status, uint8_t reason) {
+    r->status = status; r->reason = reason;
+}
+void setSystemState(SystemRuntimeContext* r, uint8_t state) {
+    r->system_state = state;
+    r->enteredReady |= state == SYSTEM_STATE_READY;
+}
+bool setCommandModeJoint(SystemRuntimeContext*) { return true; }
+void resetServoTargetQueue(SystemRuntimeContext*) {}
+bool grantMotionOwnerUnlessServoRebaseZeroPending(SystemRuntimeContext* r, uint8_t, uint8_t, uint8_t, uint32_t) {
+    ++r->grants; return true;
+}
+void runFeedback(SystemRuntimeContext* sharedData) {
+    SystemEvent_t event{};
+    event.event = SYSTEM_EVENT_RUN_FEEDBACK;
+    switch (event.event) {
+'''
+    source += dispatcher[start:end] + r'''
+    }
+}
+int main() {
+    SystemRuntimeContext r;
+    r.system_state = SYSTEM_STATE_JOINT_BEYOND_WORKSPACE;
+    runFeedback(&r);
+    assert(r.enteredReady && r.system_state == SYSTEM_STATE_RUN_FEEDBACK);
+    assert(r.manualReads == 1 && r.workspaceReads == 1 && r.grants == 1);
+    assert(r.status == FEEDBACK_ADMISSION_ACCEPTED);
+    r = {};
+    r.ready = false;
+    runFeedback(&r);
+    assert(r.reason == FEEDBACK_REJECT_WORKSPACE && r.grants == 0 && r.workspaceReads == 1);
+    r = {};
+    r.system_state = SYSTEM_STATE_RUN_FEEDBACK;
+    r.manual = false;
+    runFeedback(&r);
+    assert(r.reason == FEEDBACK_REJECT_MANUAL_REFERENCE && r.workspaceReads == 0 && r.grants == 0);
+}
+'''
+    run_native(tmp_path, 'feedback_admission', source)
+
+
 def test_health_snapshot_reads_each_mailbox_once_and_preserves_safety_thresholds(tmp_path):
     implementation = (SRC / 'safety/policies/SystemFaultPolicy.cpp').read_text(encoding='utf-8')
     header = (SRC / 'safety/policies/SystemFaultPolicy.h').read_text(encoding='utf-8')

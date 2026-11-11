@@ -61,10 +61,8 @@ class ReplayPreparation:
 
     source_joint_mask: int
     current_active_mask: int
-    workspace_ready_mask: int
     effective_joint_mask: int
     skipped_joint_mask: int
-    uncalibrated_joint_mask: int
     clamped_joint_mask: int = 0
     clamped_sample_count: int = 0
     clamped_counts_by_joint: Tuple[Tuple[int, int], ...] = ()

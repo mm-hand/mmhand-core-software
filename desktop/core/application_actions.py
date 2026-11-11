@@ -1221,7 +1221,9 @@ class ApplicationActions(IdResetActions):
 
         def zero(epoch):
             def transaction(manual_cancelled):
-                cancelled = lambda: manual_cancelled() or epoch != self._application_epoch
+                comm = self.comm
+                cancelled = lambda: (manual_cancelled() or epoch != self._application_epoch
+                                     or self.comm is not comm)
 
                 def submit(callback):
                     # 只锁入队过程；ACK、反馈和文件等待不阻塞 STOP。
@@ -1232,14 +1234,8 @@ class ApplicationActions(IdResetActions):
 
                 state = self.get_state_snapshot()
                 operation_device_id = self._controller.servo_abs_zero_device_id(state)
-                if (cancelled() or not self._fresh_application_state()
-                        or not operation_device_id
-                        or not state.has_servo_route_status
-                        or state.servo_route_scan_state == 1
-                        or mask & ~state.servo_online_bitmap
-                        or mask & ~state.servo_route_controllable_bitmap
-                        or mask & state.servo_route_conflict_bitmap):
-                    return False, 'ABS zero requires fresh status and online, unambiguous selected motors'
+                if cancelled() or not self._fresh_application_state() or not operation_device_id:
+                    return False, 'ABS zero requires the original connected P4 device'
 
                 stopped_states = (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE,
                                   SYSTEM_STATE_READY, SYSTEM_STATE_JOINT_BEYOND_WORKSPACE)
@@ -1340,15 +1336,14 @@ class ApplicationActions(IdResetActions):
         return self.request_direct_zero(motors=motors)
 
     def request_tendon_step(self, tighten):
-        from .motor_mapping import motor_abs_after_tendon_action
-        motors = self._selected_motors
-        def step(epoch):
-            state = self.get_state_snapshot()
-            targets = {m: motor_abs_after_tendon_action(state.servo_angles[m], m, 2048 if tighten else -2048) for m in motors}
-            if not targets:
-                return False, 'Select motors'
-            return self._application_direct(targets, epoch)
-        return self.submit_operation('Tighten Half Turn' if tighten else 'Release Half Turn', step)
+        delta = 2048 if tighten else -2048
+        targets = {motor: delta for motor in self._selected_motors}
+        if not targets:
+            return OperationResult(False, None, 'Select motors')
+        return self.submit_operation(
+            'Tighten Half Turn' if tighten else 'Release Half Turn',
+            lambda epoch: self._application_direct(targets, epoch, relative=True),
+        )
 
     def request_release_rope(self):
         joints = self._selected_joints
@@ -1441,7 +1436,7 @@ class ApplicationActions(IdResetActions):
             threading.Thread(target=start_import, name='mmhand-import-prepare', daemon=True).start()
             return OperationResult(True, operation_id, 'Calibration import started')
 
-    def _application_direct(self, targets, epoch):
+    def _application_direct(self, targets, epoch, *, relative=False):
         mask = sum(1 << m for m in targets)
         from .motor_mapping import MOTOR_TO_JOINT_INDEX
         joints = sum(1 << j for j in {MOTOR_TO_JOINT_INDEX[m] for m in targets})
@@ -1453,13 +1448,20 @@ class ApplicationActions(IdResetActions):
         ok, message, _ = self.enable_direct_hold(mask)
         if not ok:
             return False, message
-        state = self.get_state_snapshot()
-        values = list(state.servo_angles)
-        for m, target in targets.items():
-            values[m] = target
         with self._application_lock:
             if epoch != self._application_epoch:
                 return False, 'Direct control cancelled'
+            state = self.get_state_snapshot()
+            values = list(state.servo_angles)
+            if relative:
+                if not self._controller.direct_abs_feedback_ready(state, mask):
+                    return False, 'Current ABS is stale or untrusted'
+                from .motor_mapping import motor_abs_after_tendon_action
+                for motor, delta in targets.items():
+                    values[motor] = motor_abs_after_tendon_action(values[motor], motor, delta)
+            else:
+                for motor, target in targets.items():
+                    values[motor] = target
             self._direct_sequence = (max(self._direct_sequence, state.direct_target_token) + 1) & 0xffffffff or 1
             token = self._direct_sequence
             sent_at = time.monotonic()

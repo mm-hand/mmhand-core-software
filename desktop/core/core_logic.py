@@ -318,6 +318,15 @@ class HandController:
         if self.comm:
             self.comm.invalidate_pending_direct_commands()
 
+    @staticmethod
+    def direct_abs_feedback_ready(state, mask: int) -> bool:
+        age = time.monotonic() - state.received_at('servo_abs_last_rx_ts')
+        p4_age = ((state.p4_time_ms - state.servo_feedback_p4_time_ms + 0x80000000)
+                  & 0xffffffff) - 0x80000000
+        return (state.has_servo_angle_data and state.has_p4_time
+                and 0 <= age <= .5 and abs(p4_age) <= 500
+                and not mask & (~state.servo_online_bitmap | state.multi_turn_unknown_bitmap))
+
     def enable_direct_hold(self, motor_mask: int) -> Tuple[bool, str, List[int]]:
         """Enable only from a fresh logical ABS snapshot; never rebuild from sliders."""
         mask = int(motor_mask) & ((1 << MOTOR_COUNT) - 1)
@@ -339,12 +348,7 @@ class HandController:
             if generation != self._coordinate_cancel_generation:
                 return False, 'Direct enable cancelled', targets
             state = self._coordinate_state()
-            age = time.monotonic() - state.received_at('servo_abs_last_rx_ts')
-            p4_age = ((state.p4_time_ms - state.servo_feedback_p4_time_ms + 0x80000000)
-                      & 0xffffffff) - 0x80000000
-            if (not state.has_servo_angle_data or not state.has_p4_time
-                    or not 0 <= age <= .5 or abs(p4_age) > 500
-                    or mask & (~state.servo_online_bitmap | state.multi_turn_unknown_bitmap)):
+            if not self.direct_abs_feedback_ready(state, mask):
                 return False, 'Current ABS is stale or untrusted', targets
             targets = list(state.servo_angles)
             token = (state.direct_target_token + 1) & 0xffffffff or 1
@@ -368,7 +372,7 @@ class HandController:
 
         selected = {i: targets[i] for i in range(min(len(targets), MOTOR_COUNT)) if mask & (1 << i)}
         log_session("DIRECT_ENABLE", f"mask=0x{mask:08X} feedback_ms={state.servo_feedback_p4_time_ms} "
-                    f"age_s={age:.3f} ABS={selected} reject={reason}")
+                    f"ABS={selected} reject={reason}")
         return False, reason, targets
 
     def set_control_mode(self, mode: ControlMode):

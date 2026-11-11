@@ -267,23 +267,28 @@ static void resetControlProtectionFaults(SystemRuntimeContext* sharedData)
 // 3) READY 只由工作空间下边界决定：低于 Auto Min 时进入 JOINT_BEYOND_WORKSPACE，
 //    上边界越界只由控制层限制目标并记录警告，不在这里强制退出 READY；
 // 4) 24/48 counts 迟滞和连续三帧确认用于消除边界抖动。
-static bool activeJointsInControlWorkspace(SystemRuntimeContext* sharedData,
-                                           uint32_t* recoverableBelowMask)
+static p4::state::FeedbackReadinessDecision evaluateWorkspace(SystemRuntimeContext* sharedData,
+                                                             bool manualReady)
 {
-    const p4::state::FeedbackReadinessDecision decision =
-        p4::state::evaluateFeedbackReadiness(
-            sharedData, p4::platform::time::monotonicMillis());
-    if (recoverableBelowMask) {
-        *recoverableBelowMask = decision.recoverableBelowMask;
-    }
-    if (!decision.ready &&
-        decision.reason != p4::state::FEEDBACK_READY_REJECT_NONE) {
+    const auto decision = p4::state::evaluateFeedbackReadiness(
+        sharedData, p4::platform::time::monotonicMillis(), manualReady);
+    if (!decision.ready && decision.reason != p4::state::FEEDBACK_READY_REJECT_NONE) {
         logFeedbackReadyReject(sharedData,
                                decision.reason,
                                decision.a,
                                decision.b,
                                decision.c,
                                decision.d);
+    }
+    return decision;
+}
+
+static bool activeJointsInControlWorkspace(SystemRuntimeContext* sharedData,
+                                           uint32_t* recoverableBelowMask)
+{
+    const auto decision = evaluateWorkspace(sharedData, p4::state::manualReferenceGateReady(sharedData));
+    if (recoverableBelowMask) {
+        *recoverableBelowMask = decision.recoverableBelowMask;
     }
     return decision.ready;
 }
@@ -571,25 +576,15 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
             {
                 const uint32_t pendingMotorMask =
                     pendingDirectMotorMask(sharedData, event.token);
-                if ((sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap) &
-                     pendingMotorMask) != 0) {
-                    FW_LOG_INFO_PRINTF("[STATE] reject RUN_DIRECT generation=%lu: multi-turn unknown motor=0x%08lX unknown=0x%08lX\r\n",
+                const auto admission = p4::state::evaluateDirectMotorAdmission(sharedData, pendingMotorMask);
+                if (admission != p4::state::DirectMotorAdmission::Ready) {
+                    const bool turnUnknown = admission == p4::state::DirectMotorAdmission::MultiTurnUnknown;
+                    FW_LOG_INFO_PRINTF("[STATE] reject RUN_DIRECT generation=%lu: %s motor=0x%08lX\r\n",
                                        (unsigned long)event.token,
-                                       (unsigned long)pendingMotorMask,
-                                       (unsigned long)sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap));
-                    rejectPendingDirectCommand(sharedData,
-                                               event.token,
-                                               DIRECT_REJECT_MULTITURN);
-                    break;
-                }
-                if (!p4::state::directMotorMaskReady(sharedData,
-                                                     pendingMotorMask)) {
-                    FW_LOG_INFO_PRINTF("[STATE] reject RUN_DIRECT generation=%lu: pending hardware not ready motor=0x%08lX\r\n",
-                                       (unsigned long)event.token,
+                                       turnUnknown ? "multi-turn unknown" : "pending hardware not ready",
                                        (unsigned long)pendingMotorMask);
-                    rejectPendingDirectCommand(sharedData,
-                                               event.token,
-                                               DIRECT_REJECT_HARDWARE);
+                    rejectPendingDirectCommand(sharedData, event.token,
+                                               turnUnknown ? DIRECT_REJECT_MULTITURN : DIRECT_REJECT_HARDWARE);
                     break;
                 }
             }
@@ -623,7 +618,7 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
             setSystemState(sharedData, SYSTEM_STATE_RUN_DIRECT);
             break;
 
-        case SYSTEM_EVENT_RUN_FEEDBACK:
+        case SYSTEM_EVENT_RUN_FEEDBACK: {
             // 反馈准入结果通过 sequence 回写给上位机；JOINT_BEYOND_WORKSPACE
             // 会自动启动 Pull Joint into Workspace，完成后再恢复本次反馈请求。
             if (rejectMotionWhenEmergencyStopLatched(sharedData,
@@ -641,7 +636,8 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                                            FEEDBACK_REJECT_STATE);
                 break;
             }
-            if (!manualReferenceGateReady(sharedData)) {
+            const bool manualReady = manualReferenceGateReady(sharedData);
+            if (!manualReady) {
                 logManualReferenceReject(sharedData, "RUN_FEEDBACK");
                 setFeedbackAdmissionResult(sharedData, event.token,
                                            FEEDBACK_ADMISSION_REJECTED,
@@ -680,11 +676,19 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                                            FEEDBACK_REJECT_NONE);
                 break;
             }
-            if (sharedData->system_state == SYSTEM_STATE_JOINT_BEYOND_WORKSPACE) {
-                uint32_t recoverableBelowMask = 0;
-                const bool workspaceReady = activeJointsInControlWorkspace(
-                    sharedData, &recoverableBelowMask);
-                if (workspaceReady) {
+            const bool beyondWorkspace = sharedData->system_state == SYSTEM_STATE_JOINT_BEYOND_WORKSPACE;
+            if (!beyondWorkspace && !p4::system::canAcceptRunFeedback(sharedData->system_state)) {
+                FW_LOG_INFO_PRINTF("[STATE] reject RUN_FEEDBACK in state=%u\r\n",
+                              (unsigned)sharedData->system_state);
+                setFeedbackAdmissionResult(sharedData, event.token,
+                                           FEEDBACK_ADMISSION_REJECTED,
+                                           FEEDBACK_REJECT_STATE);
+                break;
+            }
+            const auto readiness = evaluateWorkspace(sharedData, manualReady);
+            if (beyondWorkspace) {
+                const uint32_t recoverableBelowMask = readiness.recoverableBelowMask;
+                if (readiness.ready) {
                     setSystemState(sharedData, SYSTEM_STATE_READY);
                 } else if (recoverableBelowMask == 0 ||
                            !feedbackTargetsPointIntoWorkspace(sharedData)) {
@@ -731,26 +735,11 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                     break;
                 }
             }
-            if (!p4::system::canAcceptRunFeedback(sharedData->system_state)) {
-                FW_LOG_INFO_PRINTF("[STATE] reject RUN_FEEDBACK in state=%u\r\n",
-                              (unsigned)sharedData->system_state);
-                setFeedbackAdmissionResult(sharedData, event.token,
-                                           FEEDBACK_ADMISSION_REJECTED,
-                                           FEEDBACK_REJECT_STATE);
-                break;
-            }
-            if (!activeJointsInControlWorkspace(sharedData)) {
+            if (!readiness.ready) {
                 FW_LOG_INFO_PRINTLN("[STATE] reject RUN_FEEDBACK: feedback gate changed");
                 setFeedbackAdmissionResult(sharedData, event.token,
                                            FEEDBACK_ADMISSION_REJECTED,
                                            FEEDBACK_REJECT_WORKSPACE);
-                break;
-            }
-            if (!activeMotorsMultiTurnKnown(sharedData)) {
-                logMultiTurnUnknownReject(sharedData, "RUN_FEEDBACK");
-                setFeedbackAdmissionResult(sharedData, event.token,
-                                           FEEDBACK_ADMISSION_REJECTED,
-                                           FEEDBACK_REJECT_MULTITURN);
                 break;
             }
             if (!setCommandModeJoint(sharedData)) {
@@ -774,6 +763,7 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                                        FEEDBACK_ADMISSION_ACCEPTED,
                                        FEEDBACK_REJECT_NONE);
             break;
+        }
 
         case SYSTEM_EVENT_MOTOR_DIRECT_RELEASE:
             if (sharedData->system_state != SYSTEM_STATE_RUN_DIRECT) {

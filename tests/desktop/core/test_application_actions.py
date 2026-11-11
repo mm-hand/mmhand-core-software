@@ -144,6 +144,38 @@ def test_direct_target_uses_p4_rejection(hand, monkeypatch, reason):
     assert comm.send_command.call_args.args[0][2] == 1 << 11
 
 
+@pytest.mark.parametrize('fault', [None, 'stale', 'unknown', 'offline', 'missing'])
+def test_half_turn_uses_fresh_abs_after_direct_preparation(hand, monkeypatch, fault):
+    from desktop.core.motor_mapping import motor_abs_after_tendon_action
+
+    comm = direct_target_device(hand, monkeypatch)
+    hand._selected_motors = (11,)
+    state = hand._controller.current_state
+    state.servo_angles[11] = 2000
+
+    def prepare(_mask):
+        state.has_p4_time = True
+        state.has_servo_angle_data = fault != 'missing'
+        state.p4_time_ms = state.servo_feedback_p4_time_ms = 1500
+        state.monotonic_received['servo_abs_last_rx_ts'] = time.monotonic() - (1 if fault == 'stale' else 0)
+        state.servo_angles[11] = 4000
+        if fault == 'unknown':
+            state.multi_turn_unknown_bitmap = 1 << 11
+        elif fault == 'offline':
+            state.servo_online_bitmap &= ~(1 << 11)
+        return True, '', []
+
+    monkeypatch.setattr(hand, 'enable_direct_hold', prepare)
+    result = wait_operation(hand, hand.request_tendon_step(tighten=True))
+    if fault:
+        assert result['status'] == 'FAILED'
+        assert 'stale or untrusted' in result['message']
+        comm.send_command.assert_not_called()
+    else:
+        assert result['status'] == 'SUCCESS'
+        assert comm.send_command.call_args.args[0][3][11] == motor_abs_after_tendon_action(4000, 11, 2048)
+
+
 def direct_zero_device(hand, monkeypatch, *, success=None, fault='', change_selection=False):
     """模拟 P4 发布；不会让 UI 或业务操作直接改写反馈。"""
     state = hand._controller.current_state
@@ -236,6 +268,35 @@ def test_direct_targets_continue_after_zero_and_a_light_reverse_load(hand, monke
     assert commands[0][1] != commands[1][1]
     assert [command[3][11] for command in commands] == [3000, 2500]
     assert all(command[2] == 1 << 11 for command in commands)
+
+
+@pytest.mark.parametrize('recovers', [True, False])
+def test_direct_zero_checks_routes_after_stopping(hand, monkeypatch, recovers):
+    writer = direct_zero_device(hand, monkeypatch)
+    controller = hand._controller
+    state = controller.current_state
+    state.servo_route_scan_state = 1
+    state.servo_online_bitmap = state.servo_route_controllable_bitmap = 0
+    stop = controller.stop.side_effect
+    publish_result = writer.side_effect
+
+    def stop_and_update_routes():
+        stop()
+        if recovers:
+            state.servo_route_scan_state = 0
+            state.servo_online_bitmap = state.servo_route_controllable_bitmap = 1 << 9
+
+    def zero_if_ready(mask, **kwargs):
+        if controller._coordinate_safe_state(hand.get_state_snapshot(), mask):
+            return publish_result(mask, **kwargs)
+        return ServoRebaseZeroResult(False, 'hardware not ready', 0, 0, mask)
+
+    controller.stop.side_effect = stop_and_update_routes
+    writer.side_effect = zero_if_ready
+    result = wait_operation(hand, hand.request_direct_zero((9,)))
+    assert result['status'] == ('SUCCESS' if recovers else 'FAILED')
+    writer.assert_called_once()
+    assert state.servo_angles[9] == (2048 if recovers else 7009)
 
 
 def test_direct_zero_only_selected_motor_without_expanding_joint_scope(hand, monkeypatch):

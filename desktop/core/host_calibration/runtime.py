@@ -370,10 +370,6 @@ class HostCalibrationIO:
         return (int(state.servo_logical_range_min[motor]),
                 int(state.servo_logical_range_max[motor]))
 
-    def inside_limit(self, motor, target):
-        bounds = self.logical_range(motor)
-        return bounds is not None and bounds[0] <= target <= bounds[1]
-
     def clear_limits(self, joint):
         for motor in joint_motors(joint):
             self._limits.pop(motor, None)

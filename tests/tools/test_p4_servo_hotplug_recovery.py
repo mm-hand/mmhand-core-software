@@ -35,7 +35,22 @@ namespace p4::safety { /* PRODUCTION_RULE_MAPPING */ }
 static int16_t normalizeServoRawSingleTurn(int32_t value) { return mmhand::servo::normalizeRawSingleTurn(value); }
 struct SystemRuntimeContext {
     uint32_t multi_turn_unknown_bitmap = 3;
+    uint8_t system_state = SYSTEM_STATE_RUN_DIRECT;
+    uint8_t servo_target_owner = SERVO_TARGET_OWNER_CONTROL;
+    uint8_t host_control_hold_status = 0;
+    struct {
+        unsigned writes = 0;
+        bool overwrite(const ServoTargetBatch_t&) { ++writes; return true; }
+    } servoTargetQueue;
+    struct { void notify(int) {} } servoBusWake;
 };
+template<class T> T sharedAtomicLoad(const T* value) { return *value; }
+static bool producerOwnsOutput(SystemRuntimeContext* r, uint8_t source) {
+    return r->servo_target_owner == source;
+}
+namespace p4::runtime::wake { constexpr int kServoTarget = 1; }
+namespace p4::safety { void reportServoSafetyDecision(const ServoSafetyDecision&, uint8_t, uint8_t) {} }
+namespace p4::actuator { /* PRODUCTION_GATEWAY */ }
 static void sharedAtomicFetchAnd(uint32_t* value, uint32_t mask) { *value &= mask; }
 static void sharedAtomicStore(uint32_t* value, uint32_t data) { *value = data; }
 static bool safe = true;
@@ -115,6 +130,17 @@ static void safetyScenario(const std::string& name) {
     context.onlineMotorMask = context.routedMotorMask = context.controllableRouteMask = 1;
     context.requireOnline = context.requireMultiTurnKnown = true;
     ServoRejectReason expected = ServoRejectReason::None;
+    if (name == "gateway_rejects_duplicate") {
+        SystemRuntimeContext runtime;
+        batch.count = 2;
+        batch.commands[1] = batch.commands[0];
+        require(!p4::actuator::publishLatest(&runtime, batch) && runtime.servoTargetQueue.writes == 0,
+                "invalid batch entered the mailbox");
+        batch.count = 1;
+        require(p4::actuator::publishLatest(&runtime, batch) && runtime.servoTargetQueue.writes == 1,
+                "valid batch did not enter the mailbox");
+        return;
+    }
     if (name == "identity") {
         for (int value : {-30719, -8392, 0, 8392, 30719}) {
             batch.commands[0].position = value;
@@ -140,6 +166,14 @@ static void safetyScenario(const std::string& name) {
     } else if (name == "overflow") {
         context.turnOverflowMask = 1;
         expected = ServoRejectReason::TurnOverflow;
+    } else if (name == "stop_after_publish") {
+        require(p4::actuator::evaluateBatchStructure(batch).allowed, "batch must pass structural validation");
+        context.emergencyStopLatched = true;
+        expected = ServoRejectReason::EmergencyStop;
+    } else if (name == "route_change_after_publish") {
+        require(p4::actuator::evaluateBatchStructure(batch).allowed, "batch must pass structural validation");
+        context.routeConflictMask = 1;
+        expected = ServoRejectReason::RouteConflict;
     } else require(false, "unknown safety scenario");
     const auto result = p4::actuator::evaluateCommand(batch, 0, context);
     require(!result.allowed && result.reason == expected &&
@@ -191,8 +225,12 @@ def hotplug_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dic
     mapping = _production_function(
         (P4_SRC / "safety/SafetyRuleRegistry.cpp").read_text(encoding="utf-8"),
         "SafetyRuleId ruleForServoRejectReason(")
+    gateway = _production_function(
+        (P4_SRC / "system/ActuatorCommandGateway.cpp").read_text(encoding="utf-8"),
+        "bool publishLatest(")
     source = directory / "servo_hotplug_test.cpp"
     source.write_text(NATIVE_SOURCE.replace("/* PRODUCTION_SERVICE */", code)
+                      .replace("/* PRODUCTION_GATEWAY */", gateway)
                       .replace("/* PRODUCTION_RULE_MAPPING */", mapping), encoding="utf-8")
     executable = directory / "servo_hotplug_test.exe"
     production_policy = P4_SRC / "safety/policies/ActuatorSafetyPolicy.cpp"
@@ -208,7 +246,8 @@ def hotplug_harness(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dic
 
 
 SCENARIOS = ("safety_checked_conversion", "safety_identity", "safety_hard_boundary",
-    "safety_unknown_before_range", "safety_overflow", "success", "unsafe", "failure")
+    "safety_unknown_before_range", "safety_overflow", "safety_gateway_rejects_duplicate",
+    "safety_stop_after_publish", "safety_route_change_after_publish", "success", "unsafe", "failure")
 
 @pytest.mark.parametrize("scenario", SCENARIOS)
 def test_abs_safety_and_hotplug_recovery(

@@ -106,15 +106,19 @@ bool requiredServosOnline(SystemRuntimeContext* runtime,
     return true;
 }
 
-bool directMotorMaskReady(SystemRuntimeContext* runtime,
-                          uint32_t requiredMask)
+DirectMotorAdmission evaluateDirectMotorAdmission(SystemRuntimeContext* runtime,
+                                                  uint32_t requiredMask)
 {
     if (!runtime) {
-        return false;
+        return DirectMotorAdmission::HardwareNotReady;
     }
     requiredMask &= validMotorChannelMask();
     if (requiredMask == 0) {
-        return false;
+        return DirectMotorAdmission::HardwareNotReady;
+    }
+
+    if ((sharedAtomicLoad(&runtime->multi_turn_unknown_bitmap) & requiredMask) != 0) {
+        return DirectMotorAdmission::MultiTurnUnknown;
     }
 
     ServoAngleData_t snapshot = {};
@@ -122,18 +126,17 @@ bool directMotorMaskReady(SystemRuntimeContext* runtime,
     if (!runtime->servoFeedbackQueue.peek(&snapshot) ||
         (uint32_t)(nowMs - snapshot.timestamp) >
             kStateServoFeedbackTimeoutMs) {
-        return false;
+        return DirectMotorAdmission::HardwareNotReady;
     }
     for (uint8_t motor = 0; motor < SERVO_TOTAL_NUM; ++motor) {
         if ((requiredMask & (1UL << motor)) != 0 &&
             snapshot.onlineStatus[motor] == 0) {
-            return false;
+            return DirectMotorAdmission::HardwareNotReady;
         }
     }
-    if ((sharedAtomicLoad(&runtime->multi_turn_unknown_bitmap) & requiredMask) != 0 ||
-        (sharedAtomicLoad(&runtime->servo_turn_overflow_bitmap) & requiredMask) != 0 ||
+    if ((sharedAtomicLoad(&runtime->servo_turn_overflow_bitmap) & requiredMask) != 0 ||
         !routesControllable(runtime, requiredMask)) {
-        return false;
+        return DirectMotorAdmission::HardwareNotReady;
     }
 
     const uint32_t scopeFaults = SYSTEM_FAULT_CAN_OFFLINE |
@@ -143,12 +146,12 @@ bool directMotorMaskReady(SystemRuntimeContext* runtime,
         (sharedAtomicLoad(&runtime->system_fault_bitmap) |
          sharedAtomicLoad(&runtime->system_fault_latched_bitmap)) &
         ~scopeFaults;
-    return blocking == 0;
+    return blocking == 0 ? DirectMotorAdmission::Ready : DirectMotorAdmission::HardwareNotReady;
 }
 
 bool controllableEntryReady(SystemRuntimeContext* runtime)
 {
-    return runtime && directMotorMaskReady(runtime, requiredMotorMask(runtime));
+    return runtime && evaluateDirectMotorAdmission(runtime, requiredMotorMask(runtime)) == DirectMotorAdmission::Ready;
 }
 
 bool manualReferenceGateReady(SystemRuntimeContext* runtime)
@@ -177,11 +180,12 @@ bool activeMotorsMultiTurnKnown(SystemRuntimeContext* runtime)
 
 FeedbackReadinessDecision evaluateFeedbackReadiness(
     SystemRuntimeContext* runtime,
-    uint32_t nowMs)
+    uint32_t nowMs,
+    bool manualReady)
 {
     if (runtime && (sharedAtomicLoad(&runtime->active_joint_mask) & kManualEncoderReferenceFullMask) == 0)
         return reject(FEEDBACK_READY_REJECT_EMPTY_SCOPE, sharedAtomicLoad(&runtime->active_motor_mask));
-    if (!runtime || !manualReferenceGateReady(runtime)) {
+    if (!runtime || !manualReady) {
         return reject(FEEDBACK_READY_REJECT_CALIBRATION_MISSING);
     }
     if (!requiresCan(runtime)) {

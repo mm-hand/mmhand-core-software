@@ -125,22 +125,8 @@ static ServoBatchApplyResult applyServoTargetBatch(
         result.rejectedMask = result.requestedMask;
         return result;
     }
-    // 队列属于跨任务边界：即使发布入口已经校验，也必须在消费端再次验证批次结构，
-    // 避免损坏数据在检查 busIndex/servoId 前被用于访问驱动数组。
-    const uint8_t systemState = sharedAtomicLoad(&sharedData->system_state);
-    const uint8_t activeOwner =
-        sharedAtomicLoad(&sharedData->servo_target_owner);
-    const ServoSafetyDecision batchDecision =
-        p4::actuator::evaluateBatchStructure(batch);
-    if (!batchDecision.allowed) {
-        if (p4::safety::reportServoSafetyDecision(batchDecision,
-                                                  systemState,
-                                                  activeOwner)) {
-            FW_LOG_WARN_PRINTF(
-                "[SERVO SAFETY REJECT] batch reason=%s command_index=%u\r\n",
-                p4::actuator::rejectReasonName(batchDecision.reason),
-                (unsigned)batchDecision.commandIndex);
-        }
+    // The gateway validates the full batch before publishing. Keep the local array bound.
+    if (batch.count > SERVO_TARGET_BATCH_MAX) {
         result.rejectedMask = result.requestedMask;
         return result;
     }

@@ -122,8 +122,8 @@ GROUP_BINDINGS: dict[str, RuleBinding] = {
         "tasks/system_state/SystemEventDispatcher.cpp", "reportSafetyRuleEvent",
         "tasks/system_state/SystemEventDispatcher.cpp", "SYSTEM_EVENT_RESET"),
     "DIR": binding(
-        "safety/policies/SystemReadinessPolicy.cpp", "directMotorMaskReady",
-        "tasks/system_state/SystemEventDispatcher.cpp", "directMotorMaskReady",
+        "safety/policies/SystemReadinessPolicy.cpp", "evaluateDirectMotorAdmission",
+        "tasks/system_state/SystemEventDispatcher.cpp", "evaluateDirectMotorAdmission",
         "tasks/system_state/DirectCommandCoordinator.cpp", "reportSafetyRuleEvent",
         "tasks/system_state/DirectCommandCoordinator.cpp", "DIRECT_REJECT_NONE",
         "ruleForDirectRejectReason"),

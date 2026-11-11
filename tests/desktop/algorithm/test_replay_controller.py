@@ -253,11 +253,11 @@ def test_replay_forwards_out_of_range_keyframes_to_p4():
         time.sleep(0.01)
 
     assert ok
-    assert controller.status().effective_joint_mask == 1
-    assert controller.status().skipped_joint_mask == 0b10
+    assert controller.status().effective_joint_mask == 0b11
+    assert controller.status().skipped_joint_mask == 0
     assert controller.status().clamped_sample_count == 0
     assert backend.sent[0][0][0] == -100.0
-    assert backend.sent[-1][0][0] == 1000.0
+    assert backend.sent[-1][0][:2] == [1000.0, 1000.0]
 
 
 def test_replay_rebases_timeline_instead_of_aborting(monkeypatch):

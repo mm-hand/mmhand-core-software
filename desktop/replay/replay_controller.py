@@ -16,8 +16,6 @@ import threading
 import time
 from typing import Callable, Dict, List, Optional, Tuple
 
-from desktop.core.angle_mapping import get_spec, urdf_manual_scaled_mapping_metadata
-from desktop.core.data_models import resolve_joint_workspace_range
 from desktop.core.hand_backend import HandBackend
 from desktop.core.protocol import (
     ENCODER_COUNT,
@@ -209,7 +207,7 @@ class ReplayController:
         trace: ReplayTrace,
         state,
     ) -> tuple[str, Optional[ReplayPreparation], List[ReplayOutputSample]]:
-        """将历史轨迹降级到当前可用关节，并在插值前钳入当前标定工作空间。"""
+        """按当前 P4 活动范围准备历史轨迹。"""
         system_state = int(getattr(state, "system_state", -1))
         if not replay_start_state_allowed(system_state):
             return "P4 must be in READY or RUN_FEEDBACK before Replay can start", None, []
@@ -252,24 +250,6 @@ class ReplayController:
         if trace.urdf_crc and int(trace.urdf_crc) != int(mapping.urdf_config_crc):
             warnings.append("URDF range CRC differs; historical angles will be clamped to the current calibrated workspace")
 
-        mapping_version, urdf_crc = urdf_manual_scaled_mapping_metadata()
-        workspace_ready_mask = 0
-        for joint in range(ENCODER_COUNT):
-            bit = 1 << joint
-            if not (source_mask & current_active & bit):
-                continue
-            spec = get_spec(joint)
-            workspace = resolve_joint_workspace_range(
-                state,
-                joint,
-                spec.urdf_range_deg[0],
-                spec.urdf_range_deg[1],
-                mapping_version,
-                urdf_crc,
-            )
-            if workspace.ready:
-                workspace_ready_mask |= bit
-
         value_union_mask = 0
         for frame in trace.frames:
             frame_source_mask = int(frame.command_joint_mask) or source_mask
@@ -277,12 +257,10 @@ class ReplayController:
         effective_mask = (
             source_mask
             & current_active
-            & workspace_ready_mask
             & value_union_mask
             & ALL_JOINTS_MASK
         )
         unavailable_mask = source_mask & ~current_active
-        uncalibrated_mask = source_mask & current_active & ~workspace_ready_mask
         missing_value_mask = source_mask & ~value_union_mask
         skipped_mask = source_mask & ~effective_mask
         if unavailable_mask:
@@ -290,18 +268,13 @@ class ReplayController:
                 "Skipped joints outside the current P4 active scope: "
                 + self._format_joint_mask(unavailable_mask)
             )
-        if uncalibrated_mask:
-            warnings.append(
-                "Skipped joints without ready Manual/Auto calibration: "
-                + self._format_joint_mask(uncalibrated_mask)
-            )
         if missing_value_mask:
             warnings.append(
                 "Skipped joints without valid CSV values: "
                 + self._format_joint_mask(missing_value_mask)
             )
         if effective_mask == 0:
-            return "CSV and current P4 state have no calibrated joints in common", None, []
+            return "CSV contains no usable values for the current P4 active joints", None, []
 
         baseline = list(state.angles or [])
         if len(baseline) != ENCODER_COUNT:
@@ -323,10 +296,8 @@ class ReplayController:
         preparation = ReplayPreparation(
             source_joint_mask=source_mask,
             current_active_mask=current_active,
-            workspace_ready_mask=workspace_ready_mask,
             effective_joint_mask=effective_mask,
             skipped_joint_mask=skipped_mask,
-            uncalibrated_joint_mask=uncalibrated_mask,
             warnings=tuple(dict.fromkeys(warnings)),
         )
         return (
