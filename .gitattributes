@@ -1,5 +1,7 @@
 *.py text eol=lf
 *.sh text eol=lf
 .githooks/* text eol=lf
-desktop/resources/hku_hand_v2_urdf/urdf/* -text whitespace=cr-at-eol
-desktop/resources/hku_hand_v2_urdf/package.xml -text
+# CAD exports keep their exact original bytes (CRLF). Disabling text
+# normalization keeps the recorded sha256 identical on every checkout;
+# cr-at-eol keeps CR from being reported as trailing whitespace.
+desktop/resources/mmhand_urdf/** -text whitespace=cr-at-eol
