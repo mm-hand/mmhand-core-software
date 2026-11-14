@@ -635,14 +635,20 @@ class ApplicationActions(IdResetActions):
             return False, 'P4 did not release the old control owner'
         return True, 'Control released'
 
+    def _reset_if_latched(self, epoch, state):
+        """Clear a latched STOP (or a stopped fault) before an action that needs the device idle."""
+        if self._estop_requested_at or (not state.control_enabled and not state.servo_target_owner
+                                        and (state.system_fault_bitmap
+                                             or state.system_state == SYSTEM_STATE_UNCONTROLLABLE)):
+            return self._reset_for_operation(epoch)
+        return True, ''
+
     def _prepare_maintenance_switch(self, epoch):
         """Automatically leave Feedback/Direct control before a maintenance action."""
+        ok, message = self._reset_if_latched(epoch, self.get_state_snapshot())
+        if not ok:
+            return False, message
         state = self.get_state_snapshot()
-        if self._estop_requested_at or (not state.control_enabled and not state.servo_target_owner and (state.system_fault_bitmap or state.system_state == SYSTEM_STATE_UNCONTROLLABLE)):
-            ok, message = self._reset_for_operation(epoch)
-            if not ok:
-                return False, message
-            state = self.get_state_snapshot()
         if state.control_enabled or state.servo_target_owner:
             released, message = self._release_control_owner(epoch, purpose='maintenance switch')
             if not released:
@@ -659,12 +665,10 @@ class ApplicationActions(IdResetActions):
             False, 'P4 did not reach a stopped maintenance state')
 
     def _prepare_control_switch(self, epoch):
+        ok, message = self._reset_if_latched(epoch, self.get_state_snapshot())
+        if not ok:
+            return False, message
         state = self.get_state_snapshot()
-        if self._estop_requested_at or (not state.control_enabled and not state.servo_target_owner and (state.system_fault_bitmap or state.system_state == SYSTEM_STATE_UNCONTROLLABLE)):
-            ok, message = self._reset_for_operation(epoch)
-            if not ok:
-                return False, message
-            state = self.get_state_snapshot()
         allowed = (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE, SYSTEM_STATE_READY,
                    SYSTEM_STATE_JOINT_BEYOND_WORKSPACE, SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK)
         if state.system_state not in allowed or state.servo_target_owner not in (0, SERVO_TARGET_OWNER_CONTROL):
@@ -1232,8 +1236,20 @@ class ApplicationActions(IdResetActions):
                             return False
                         return self._submit_manual_motion(callback)
 
+                switched, message = self._reset_if_latched(epoch, self.get_state_snapshot())
+                if not switched:
+                    return False, message
                 state = self.get_state_snapshot()
                 operation_device_id = self._controller.servo_abs_zero_device_id(state)
+                # The P4 runs each motor's online configuration check only while the
+                # device is stopped and no STOP latch is held.  RESET above releases
+                # the latch, so give the check a moment before the rebase needs it.
+                if (state.has_servo_online_status and not self._wait_application(
+                        lambda s: all(s.servo_online_check[m] == ServoOnlineCheck.READY
+                                      for m in chosen), epoch, 2.0)):
+                    return False, IssueMessage(
+                        'Motors are online but their configuration check has not finished. '
+                        'Check the motor bus and retry.', 'HOST_MOTORS_NOT_READY')
                 if cancelled() or not self._fresh_application_state() or not operation_device_id:
                     return False, 'ABS zero requires the original connected P4 device'
 
@@ -1329,10 +1345,11 @@ class ApplicationActions(IdResetActions):
                 & VALID_MOTOR_MASK & ~state.servo_route_conflict_bitmap)
         if not state.has_servo_online_status:
             return OperationResult(False, None, 'Waiting for motor firmware and configuration checks')
-        mask &= sum(1 << m for m, status in enumerate(state.servo_online_check) if status == ServoOnlineCheck.READY)
         motors = tuple(m for m in range(MOTOR_COUNT) if mask & (1 << m))
         if not motors:
-            return OperationResult(False, None, 'No online, routable motors to zero')
+            return OperationResult(False, None, IssueMessage(
+                'No online, routable motors to initialize. Check the motor buses.',
+                'HOST_MOTORS_NOT_READY'))
         return self.request_direct_zero(motors=motors)
 
     def request_tendon_step(self, tighten):

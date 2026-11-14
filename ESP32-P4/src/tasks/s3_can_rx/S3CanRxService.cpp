@@ -48,9 +48,10 @@ static_assert(
     "Tactile full payload budget too small.");
 static_assert(CAN_ID_TAC_FULL_DUMP_LAST <= 0x7FF, "Tactile full CAN IDs must fit standard CAN.");
 
-// RX FIFO 卡死判据：快满且 1 秒没有完整编码器快照，连续 1 秒即重建控制器。
-constexpr uint32_t CAN_RX_FIFO_NEAR_FULL = 60;
-constexpr uint32_t CAN_RX_STALL_MS = 1000;
+constexpr uint32_t CAN_RAW_TIMEOUT_MS = 500;
+constexpr uint32_t CAN_RESTART_INTERVAL_MS = 2000;
+constexpr uint32_t CAN_SNAPSHOT_TIMEOUT_MS = 500;
+constexpr uint32_t CAN_FAULT_REPORT_MS = 10000;
 
 typedef struct {
     uint8_t active;                       ///< 1 表示正在等待同一批编码器分帧。
@@ -196,14 +197,68 @@ struct SensorIngressRuntimeContext {
     uint32_t otherFrameCount;
     uint32_t lastCanId;
     uint32_t lastTwaiHealthCheckMs;
-    bool twaiRecoveryRequested;
-    uint32_t stallSinceMs;             ///< RX FIFO 卡死计时起点；0 表示未卡死。
+    uint32_t lastRawFrameMs;
+    uint32_t lastValidSnapshotMs;
+    uint32_t faultSinceMs;
+    uint32_t lastFaultReportMs;
+    uint32_t previousBusErrors;
+    uint32_t previousOverruns;
+    uint32_t faultBusErrors;
+    uint32_t faultOverruns;
+    const char* lastRejectReason;
+    uint8_t lastRejectMask;
+    bool canFaultActive;
+    uint32_t lastTwaiAttemptMs;
+    bool twaiAttempted;
     uint32_t lastCanFrameRuleMs;       ///< COM-6002 最近上报时间。
     uint32_t lastEncoderRuleMs;        ///< COM-6003 最近上报时间。
     uint32_t lastTactileRuleMs;        ///< COM-6004 最近上报时间。
 };
 
 static SensorIngressRuntimeContext g_sensorIngressRuntime;
+
+static void logCanReceiveFault(SensorIngressRuntimeContext& runtime,
+                               const CanControllerStatus& status,
+                               uint32_t fifo, uint32_t nowMs)
+{
+    const uint32_t snapshotAgeMs = nowMs - runtime.lastValidSnapshotMs;
+    if (snapshotAgeMs < CAN_SNAPSHOT_TIMEOUT_MS) {
+        if (runtime.canFaultActive) {
+            FW_LOG_INFO_PRINTF("[P4 CAN RECOVERED] up=%lu outageMs=%lu id=0x%03lX\r\n",
+                (unsigned long)nowMs,
+                (unsigned long)(runtime.lastValidSnapshotMs - runtime.faultSinceMs),
+                (unsigned long)runtime.lastCanId);
+            runtime.canFaultActive = false;
+        }
+    } else {
+        const bool starting = !runtime.canFaultActive;
+        if (starting) {
+            runtime.canFaultActive = true;
+            runtime.faultSinceMs = runtime.lastValidSnapshotMs;
+            runtime.faultBusErrors = runtime.previousBusErrors;
+            runtime.faultOverruns = runtime.previousOverruns;
+        }
+        if (starting || nowMs - runtime.lastFaultReportMs >= CAN_FAULT_REPORT_MS) {
+            runtime.lastFaultReportMs = nowMs;
+            FW_LOG_WARN_PRINTF(
+                "[P4 CAN FAULT] up=%lu rawAge=%lu snapAge=%lu id=0x%03lX state=%d rxQ=%lu fifo=%lu tec=%lu rec=%lu busErrDelta=%lu overrunDelta=%lu reject=%s mask=0x%02X\r\n",
+                (unsigned long)nowMs, (unsigned long)(nowMs - runtime.lastRawFrameMs),
+                (unsigned long)snapshotAgeMs, (unsigned long)runtime.lastCanId,
+                status.valid ? (int)status.state : -1,
+                (unsigned long)status.pendingRxCount, (unsigned long)fifo,
+                (unsigned long)status.txErrorCounter, (unsigned long)status.rxErrorCounter,
+                status.valid ? (unsigned long)(status.busErrorCount - runtime.faultBusErrors) : 0UL,
+                status.valid ? (unsigned long)(status.rxOverrunCount - runtime.faultOverruns) : 0UL,
+                runtime.lastRejectReason ? runtime.lastRejectReason : "none",
+                (unsigned)runtime.lastRejectMask);
+        }
+    }
+    // Keep the counters from before the stale interval, including its first errors.
+    if (status.valid && snapshotAgeMs < 100) {
+        runtime.previousBusErrors = status.busErrorCount;
+        runtime.previousOverruns = status.rxOverrunCount;
+    }
+}
 
 /** CAN 噪声可能连续产生坏帧；同类规则每秒最多记录一次，保留证据但避免事件风暴。 */
 static void reportCommunicationRule(SystemRuntimeContext* sharedData,
@@ -246,6 +301,8 @@ bool initS3CanRxService(SystemRuntimeContext* sharedData, uint32_t nowMs)
     resetTactileFullReassembly(&g_sensorIngressRuntime.tactileFullState);
     g_sensorIngressRuntime.lastCompleteErrorBatchTime = nowMs;
     g_sensorIngressRuntime.lastCanDiagPrintMs = nowMs;
+    g_sensorIngressRuntime.lastRawFrameMs = nowMs;
+    g_sensorIngressRuntime.lastValidSnapshotMs = nowMs;
     g_sensorIngressRuntime.initialized = true;
     return true;
 }
@@ -279,7 +336,6 @@ bool stepS3CanRxService(SystemRuntimeContext* sharedData, uint32_t nowMs)
     auto& otherFrameCount = runtime.otherFrameCount;
     auto& lastCanId = runtime.lastCanId;
     auto& lastTwaiHealthCheckMs = runtime.lastTwaiHealthCheckMs;
-    auto& twaiRecoveryRequested = runtime.twaiRecoveryRequested;
     CanFrame rxMsg;
 
     const uint8_t kAllEncoderFramesMask = (uint8_t)((1U << CAN_ENC_FRAME_COUNT) - 1U);
@@ -288,11 +344,14 @@ bool stepS3CanRxService(SystemRuntimeContext* sharedData, uint32_t nowMs)
 
         while (canDriver.tryReceive(&rxMsg)) {
             lastCanId = rxMsg.identifier;
+            runtime.lastRawFrameMs = nowMs;
 
             if (rxMsg.identifier >= CAN_ID_ENC_BASE && rxMsg.identifier <= CAN_ID_ENC_LAST) {
                 encFrameCount++;
                 if (!p4::safety::communicationLengthValid(
                         rxMsg.dataLength, 8)) {
+                    runtime.lastRejectReason = "dlc";
+                    runtime.lastRejectMask = encoderState.frameMask;
                     reportCommunicationRule(
                         sharedData,
                         SafetyRuleId::CommunicationCanFrameInvalid,
@@ -328,6 +387,8 @@ bool stepS3CanRxService(SystemRuntimeContext* sharedData, uint32_t nowMs)
             } else if (rxMsg.identifier == CAN_ID_ENC_CRC) {
                 if (!p4::safety::communicationLengthValid(
                         rxMsg.dataLength, CAN_ENC_CRC_DLC)) {
+                    runtime.lastRejectReason = "dlc";
+                    runtime.lastRejectMask = encoderState.frameMask;
                     reportCommunicationRule(
                         sharedData,
                         SafetyRuleId::CommunicationCanFrameInvalid,
@@ -344,6 +405,8 @@ bool stepS3CanRxService(SystemRuntimeContext* sharedData, uint32_t nowMs)
                         encoderState.active != 0,
                         encoderState.frameMask,
                         kAllEncoderFramesMask)) {
+                    runtime.lastRejectReason = "missing";
+                    runtime.lastRejectMask = encoderState.frameMask;
                     reportCommunicationRule(
                         sharedData,
                         SafetyRuleId::CommunicationEncoderSnapshotInvalid,
@@ -384,6 +447,7 @@ bool stepS3CanRxService(SystemRuntimeContext* sharedData, uint32_t nowMs)
                         }
                     }
                     rxBuffer.timestamp = nowMs;
+                    runtime.lastValidSnapshotMs = nowMs;
                     rxBuffer.isValid = true;
                     updateEncoderHealthFromSnapshot(sharedData,
                                                     encoderHealth,
@@ -392,6 +456,8 @@ bool stepS3CanRxService(SystemRuntimeContext* sharedData, uint32_t nowMs)
                     sharedData->canRxQueue.overwrite(rxBuffer);
                     encSnapshotCount++;
                 } else {
+                    runtime.lastRejectReason = metadataOk ? "crc" : "metadata";
+                    runtime.lastRejectMask = encoderState.frameMask;
                     reportCommunicationRule(
                         sharedData,
                         SafetyRuleId::CommunicationEncoderSnapshotInvalid,
@@ -659,6 +725,7 @@ bool stepS3CanRxService(SystemRuntimeContext* sharedData, uint32_t nowMs)
         if ((uint32_t)(nowMs - lastCanDiagPrintMs) >= 10000) {
             const CanControllerStatus statusInfo = canDriver.status();
             const bool hasStatus = statusInfo.valid != 0;
+            const TaskCpuScan scan = taskRuntimeLastCpuScan();
             FW_LOG_INFO_PRINTF("[CAN RX] encFrames=%lu encSnap=%lu encCrcErr=%lu tacFrames=%lu tacSnap=%lu tacCrcErr=%lu other=%lu lastId=0x%03lX valid=%u tsAge=%lu firstRaw=%u err0=%u\r\n",
                                 (unsigned long)encFrameCount,
                                 (unsigned long)encSnapshotCount,
@@ -672,14 +739,16 @@ bool stepS3CanRxService(SystemRuntimeContext* sharedData, uint32_t nowMs)
                                 rxBuffer.isValid ? (unsigned long)(nowMs - rxBuffer.timestamp) : 0UL,
                                 (unsigned)rxBuffer.encoderValues[0],
                                 (unsigned)rxBuffer.errorFlags[0]);
-            FW_LOG_INFO_PRINTF("[CAN STATUS] state=%d rxQ=%lu rxMiss=%lu rxOverrun=%lu busErr=%lu rxErr=%lu txErr=%lu\r\n",
+            FW_LOG_INFO_PRINTF("[CAN STATUS] state=%d rxQ=%lu rxMiss=%lu rxOverrun=%lu busErr=%lu rxErr=%lu txErr=%lu up=%lu scanStartUs32=%lu scanUs=%lu scanCore=%d\r\n",
                                 hasStatus ? (int)statusInfo.state : -1,
                                 hasStatus ? (unsigned long)statusInfo.pendingRxCount : 0UL,
                                 hasStatus ? (unsigned long)statusInfo.rxMissedCount : 0UL,
                                 hasStatus ? (unsigned long)statusInfo.rxOverrunCount : 0UL,
                                 hasStatus ? (unsigned long)statusInfo.busErrorCount : 0UL,
                                 hasStatus ? (unsigned long)statusInfo.rxErrorCounter : 0UL,
-                                hasStatus ? (unsigned long)statusInfo.txErrorCounter : 0UL);
+                                hasStatus ? (unsigned long)statusInfo.txErrorCounter : 0UL,
+                                (unsigned long)nowMs, (unsigned long)scan.startedUs,
+                                (unsigned long)scan.elapsedUs, (int)scan.core);
             encFrameCount = 0;
             encSnapshotCount = 0;
             tactileFrameCount = 0;
@@ -699,6 +768,8 @@ bool stepS3CanRxService(SystemRuntimeContext* sharedData, uint32_t nowMs)
             p4::safety::communicationAssemblyExpired(
                 nowMs, encoderState.firstFrameTimeMs,
                 CAN_ENC_REASSEMBLY_TIMEOUT_MS)) {
+            runtime.lastRejectReason = "timeout";
+            runtime.lastRejectMask = encoderState.frameMask;
             reportCommunicationRule(
                 sharedData,
                 SafetyRuleId::CommunicationEncoderSnapshotInvalid,
@@ -741,7 +812,7 @@ bool stepS3CanRxService(SystemRuntimeContext* sharedData, uint32_t nowMs)
         applyEncoderHealthTimeout(sharedData, encoderHealth, nowMs);
 
         if (p4::safety::communicationStreamStale(
-                rxBuffer.isValid, nowMs, rxBuffer.timestamp, 500)) {
+                rxBuffer.isValid, nowMs, rxBuffer.timestamp, CAN_SNAPSHOT_TIMEOUT_MS)) {
             rxBuffer.isValid = false;
             clearEncoderHealth(sharedData, encoderHealth);
             sharedData->canRxQueue.overwrite(rxBuffer);
@@ -752,51 +823,44 @@ bool stepS3CanRxService(SystemRuntimeContext* sharedData, uint32_t nowMs)
         if ((uint32_t)(nowMs - lastTwaiHealthCheckMs) >= 100) {
             lastTwaiHealthCheckMs = nowMs;
             const CanControllerStatus statusInfo = canDriver.status();
-            if (statusInfo.valid) {
-                if (statusInfo.busOff && !twaiRecoveryRequested) {
-                    clearEncoderHealth(sharedData, encoderHealth);
-                    rxBuffer.isValid = false;
-                    sharedData->canRxQueue.overwrite(rxBuffer);
-                    if (canDriver.requestRecovery()) {
-                        twaiRecoveryRequested = true;
-                        FW_LOG_INFO_PRINTLN("[CAN HOTPLUG] bus-off recovery started");
-                    }
-                } else if (twaiRecoveryRequested && statusInfo.stopped) {
-                    if (canDriver.restart()) {
-                        twaiRecoveryRequested = false;
-                        resetEncoderReassembly(&encoderState);
-                        FW_LOG_INFO_PRINTLN("[CAN HOTPLUG] controller restarted after recovery");
-                    }
-                } else if (!statusInfo.busOff && !statusInfo.stopped && !twaiRecoveryRequested) {
-                    const uint32_t fifo = canDriver.rxFifoCount();
-                    const bool stale =
-                        (uint32_t)(nowMs - rxBuffer.timestamp) > CAN_RX_STALL_MS;
-                    if (stale && fifo >= CAN_RX_FIFO_NEAR_FULL) {
-                        if (runtime.stallSinceMs == 0) {
-                            runtime.stallSinceMs = nowMs;
-                        } else if ((uint32_t)(nowMs - runtime.stallSinceMs) >=
-                                   CAN_RX_STALL_MS) {
-                            runtime.stallSinceMs = 0;
-                            if (canDriver.recoverRx()) {
-                                resetEncoderReassembly(&encoderState);
-                                resetErrorDetailReassembly(&errorState);
-                                resetTactileReassembly(&tactileState);
-                                resetTactileFullReassembly(&tactileFullState);
-                                rxBuffer.isValid = false;
-                                clearEncoderHealth(sharedData, encoderHealth);
-                                sharedData->canRxQueue.overwrite(rxBuffer);
-                                FW_LOG_WARN_PRINTF(
-                                    "[CAN HOTPLUG] RX FIFO stalled fifo=%lu; TWAI restarted\r\n",
-                                    (unsigned long)fifo);
-                            } else {
-                                FW_LOG_WARN_PRINTF(
-                                    "[CAN HOTPLUG] RX FIFO stalled; TWAI restart failed\r\n");
-                            }
-                        }
-                    } else {
-                        runtime.stallSinceMs = 0;
-                    }
-                }
+            const uint32_t fifo = statusInfo.valid ? canDriver.rxFifoCount() : 0;
+            logCanReceiveFault(runtime, statusInfo, fifo, nowMs);
+            const uint32_t rawAge = nowMs - runtime.lastRawFrameMs;
+            const bool shouldStop = statusInfo.running && rawAge >= CAN_RAW_TIMEOUT_MS;
+            const bool retryDue = !runtime.twaiAttempted ||
+                nowMs - runtime.lastTwaiAttemptMs >= CAN_RESTART_INTERVAL_MS;
+            if (!retryDue || !(shouldStop || statusInfo.stopped || statusInfo.busOff)) {
+                return true;
+            }
+            runtime.twaiAttempted = true;
+            runtime.lastTwaiAttemptMs = nowMs;
+            FW_LOG_WARN_PRINTF(
+                "[CAN HOTPLUG] up=%lu state=%u rawAge=%lu id=0x%03lX fifo=%lu rxOverrun=%lu\r\n",
+                (unsigned long)nowMs, (unsigned)statusInfo.state, (unsigned long)rawAge,
+                (unsigned long)runtime.lastCanId, (unsigned long)fifo,
+                (unsigned long)statusInfo.rxOverrunCount);
+
+            rxBuffer.isValid = false;
+            clearEncoderHealth(sharedData, encoderHealth);
+            sharedData->canRxQueue.overwrite(rxBuffer);
+            if (statusInfo.busOff) {
+                const int32_t result = canDriver.requestRecovery();
+                FW_LOG_WARN_PRINTF("[CAN HOTPLUG] busOffRecovery=%ld\r\n", (long)result);
+                return true;
+            }
+            const int32_t stopResult = shouldStop ? canDriver.stop() : 0;
+            if (stopResult != 0) {
+                FW_LOG_WARN_PRINTF("[CAN HOTPLUG] stop=%ld\r\n", (long)stopResult);
+                return true;
+            }
+            const int32_t result = canDriver.restart();
+            FW_LOG_WARN_PRINTF(shouldStop ? "[CAN HOTPLUG] stop=0 start=%ld\r\n"
+                                          : "[CAN HOTPLUG] start=%ld\r\n", (long)result);
+            if (result == 0) {
+                resetEncoderReassembly(&encoderState);
+                resetErrorDetailReassembly(&errorState);
+                resetTactileReassembly(&tactileState);
+                resetTactileFullReassembly(&tactileFullState);
             }
         }
 

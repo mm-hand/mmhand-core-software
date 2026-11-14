@@ -53,6 +53,60 @@ def test_every_native_page_builds_and_refreshes_unknown_feedback(page, name):
     confirm.assert_not_called()
     assert client.elements
 
+
+def test_renumber_scan_buttons_and_new_id_for_253(page, monkeypatch):
+    hand, client = page
+    request = Mock()
+    monkeypatch.setattr(hand, 'request_id_scan', request)
+    refresh = renumber_motors.build(hand, lambda action: action())
+    snapshot = hand.application_snapshot()
+    snapshot['busy'] = False
+    snapshot['id_reset']['motor'].update(available=True, scanned=True, rows=[dict(bus=0, id=253)])
+    refresh(snapshot)
+
+    buttons = {element.text: element for element in client.elements.values() if isinstance(element, ui.button)}
+    assert buttons['Scan (0–30)'].enabled
+    assert buttons['Scan (0–253)'].enabled
+    element_event(buttons['Scan (0–30)'], 'click', None)
+    request.assert_called_once_with()
+    request.reset_mock()
+    element_event(buttons['Scan (0–253)'], 'click', None)
+    request.assert_called_once_with(253)
+
+    number = next(element for element in client.elements.values() if isinstance(element, ui.number))
+    assert number.enabled and number.value is None
+
+def test_motor_buzz_hold_stops_on_release_or_expiry(page, monkeypatch):
+    hand, client = page
+    request = Mock()
+    now = [0.0]
+    monkeypatch.setattr(hand, 'request_motor_buzz', request)
+    monkeypatch.setattr(renumber_motors, 'monotonic', lambda: now[0])
+    refresh = renumber_motors.build(hand, lambda action: action())
+    snapshot = hand.application_snapshot()
+    snapshot['id_reset']['motor'].update(available=True, scanned=True, rows=[dict(bus=0, id=1)])
+    refresh(snapshot)
+    button = next(element for element in client.elements.values()
+                  if isinstance(element, ui.button) and element.text == 'Buzz')
+
+    element_event(button, 'pointerdown', 'start')
+    assert request.call_args.args == (0, 1)
+    held = request.call_args.kwargs['held']
+    assert held()
+    now[0] = 0.25
+    element_event(button, 'pointerdown', 'hold')
+    now[0] = 0.6
+    assert held()
+    now[0] = 0.8
+    assert not held()
+
+    element_event(button, 'pointerdown', 'start')
+    held = request.call_args.kwargs['held']
+    assert held()
+    element_event(button, 'pointerdown', 'stop')
+    assert not held()
+
+
 def test_curves_plot_window_is_last_ten_seconds(page):
     hand, client = page
     refresh = plots.build(hand, Mock())
@@ -214,9 +268,9 @@ def slider_controls(page, direct):
     return refresh, snapshot, number, slider, index, request, act
 
 
-def slider_event(slider, event_type, value):
-    event = next(e for e in slider._event_listeners.values() if e.type == event_type)
-    event.handler(GenericEventArguments(sender=slider, client=slider.client, args=value))
+def element_event(element, event_type, value):
+    event = next(e for e in element._event_listeners.values() if e.type == event_type)
+    event.handler(GenericEventArguments(sender=element, client=element.client, args=value))
 
 
 @pytest.mark.parametrize('direct', [False, True])
@@ -224,12 +278,12 @@ def test_slider_drag_only_updates_draft_and_release_sends_final_value_once(page,
     refresh, snapshot, number, slider, index, request, act = slider_controls(page, direct)
     lo, hi = slider._props['min'], slider._props['max']
     for value in (lo, (lo + hi) / 2):
-        slider_event(slider, 'update:modelValue', value)
+        element_event(slider, 'update:modelValue', value)
         assert number.value == value
     request.assert_not_called()
     act.assert_not_called()
     # Release must use its payload even when a throttled drag value is older.
-    slider_event(slider, 'change', hi)
+    element_event(slider, 'change', hi)
     request.assert_called_once_with({index: hi})
     assert number.value == slider.value == hi
     refresh(snapshot)
@@ -246,7 +300,7 @@ def test_slider_drag_has_no_server_echo_or_polling_binding(page, direct, monkeyp
     update = Mock()
     monkeypatch.setattr(slider, 'update', update)
     for value in range(100):
-        slider_event(slider, 'update:modelValue', value)
+        element_event(slider, 'update:modelValue', value)
     assert number.value == slider.value == 99
     update.assert_not_called()
     act.assert_not_called()

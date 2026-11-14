@@ -35,6 +35,8 @@
 /** @brief ESP32-S3与P4之间的TWAI/CAN协议封装。 */
 class HalTWAI {
 public:
+    static constexpr uint32_t kTxQueueLength = 512;
+
     HalTWAI();
     /** @brief 安装并启动1Mbit/s TWAI驱动。 */
     bool begin();
@@ -50,7 +52,7 @@ public:
     /** @brief 将21路详细磁编错误码拆成3帧发送。 */
     void sendErrorStatus(const EncoderData& data);
     /** @brief 检查bus-off/停止状态并尝试恢复，返回总线是否RUNNING。 */
-    bool maintain();
+    bool maintain(twai_status_info_t& status, bool& statusValid);
 
 private:
     /** @brief 发送一帧标准11位ID CAN数据帧。 */

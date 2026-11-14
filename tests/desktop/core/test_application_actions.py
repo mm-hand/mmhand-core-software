@@ -8,7 +8,8 @@ from unittest.mock import Mock
 import pytest
 from desktop.core.application_actions import validate_manual_pair
 from desktop.core.hand_backend import HandBackend
-from desktop.core.protocol import SYSTEM_STATE_READY, SYSTEM_STATE_RUN_DIRECT, HOST_PROTOCOL_VERSION, STATE_SYNC_ALL
+from desktop.core.protocol import (SYSTEM_STATE_READY, SYSTEM_STATE_RUN_DIRECT,
+                                   SYSTEM_STATE_UNCONTROLLABLE, HOST_PROTOCOL_VERSION, STATE_SYNC_ALL)
 from desktop.core.core_logic import HandController, ServoRebaseZeroResult
 from _conftest_support import wait_operation
 
@@ -347,6 +348,50 @@ def test_direct_zero_all_rejects_when_no_motor_is_eligible(hand, monkeypatch):
     hand._controller.current_state.servo_online_bitmap = 0
     result = hand.request_direct_zero_all()
     assert not result.accepted and 'No online, routable motors' in result.message
+    writer.assert_not_called()
+
+
+def test_direct_zero_clears_a_latched_stop_before_waiting_for_the_motor_check(hand, monkeypatch):
+    writer = direct_zero_device(hand, monkeypatch)
+    state = hand._controller.current_state
+    state.system_state = SYSTEM_STATE_UNCONTROLLABLE
+    state.control_enabled = False
+    state.servo_target_owner = 0
+    state.servo_online_check = [0] * 27
+    hand._estop_requested_at = time.time()
+    resets = []
+
+    def reset(epoch):
+        resets.append(epoch)
+        hand._estop_requested_at = 0
+        state.servo_online_check = [1] * 27
+        return True, 'RESET acknowledged'
+
+    monkeypatch.setattr(hand, '_reset_for_operation', reset)
+
+    def next_status_frame(predicate, epoch, timeout=3.0):
+        state.system_status_last_rx_ts = time.time()
+        stamp(state, 'system_status_last_rx_ts')
+        return epoch == hand._application_epoch and bool(predicate(hand.get_state_snapshot()))
+
+    monkeypatch.setattr(hand, '_wait_application', next_status_frame)
+    assert wait_operation(hand, hand.request_direct_zero_all())['status'] == 'SUCCESS'
+    assert resets and writer.called and hand._estop_requested_at == 0
+
+
+def test_direct_zero_reports_a_motor_check_that_never_finishes(hand, monkeypatch):
+    writer = direct_zero_device(hand, monkeypatch)
+    state = hand._controller.current_state
+    state.system_state = SYSTEM_STATE_UNCONTROLLABLE
+    state.control_enabled = False
+    state.servo_target_owner = 0
+    state.servo_online_check = [0] * 27
+    hand._estop_requested_at = time.time()
+    monkeypatch.setattr(hand, '_reset_for_operation', lambda epoch: (True, 'RESET acknowledged'))
+    monkeypatch.setattr(hand, '_wait_application', lambda predicate, epoch, timeout=3.0: False)
+    item = wait_operation(hand, hand.request_direct_zero_all())
+    assert item['status'] == 'FAILED'
+    assert item['user_issue']['code'] == 'HOST_MOTORS_NOT_READY'
     writer.assert_not_called()
 
 

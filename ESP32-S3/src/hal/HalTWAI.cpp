@@ -74,7 +74,7 @@ bool HalTWAI::begin() {
         TWAI_MODE_NORMAL
     );
     // 触觉全量调试一次可产生219帧，因此发送队列预留512深度。
-    g_config.tx_queue_len = 512;
+    g_config.tx_queue_len = kTxQueueLength;
     g_config.rx_queue_len = 10;
 
     twai_timing_config_t t_config = CAN_BAUD_RATE;
@@ -387,10 +387,9 @@ void HalTWAI::sendErrorStatus(const EncoderData &data) {
 }
 
 /** @brief 维护TWAI状态机：bus-off发起恢复、STOPPED尝试重新启动。 */
-bool HalTWAI::maintain() {
-    twai_status_info_t status_info;
-
-    if (twai_get_status_info(&status_info) != ESP_OK) {
+bool HalTWAI::maintain(twai_status_info_t& status_info, bool& statusValid) {
+    statusValid = twai_get_status_info(&status_info) == ESP_OK;
+    if (!statusValid) {
         return false;
     }
 
@@ -406,15 +405,6 @@ bool HalTWAI::maintain() {
             // Keep silent here; caller handles retry rhythm.
         }
         return false;
-    }
-
-    // [待确认是否限频] 计数持续超限时该日志会在4ms CanTask循环中反复打印。
-    if (status_info.tx_error_counter > 100 || status_info.rx_error_counter > 100) {
-        Serial.printf(
-            "[CAN WARN] High Error Count! Tx:%d Rx:%d\n",
-            status_info.tx_error_counter,
-            status_info.rx_error_counter
-        );
     }
 
     return (status_info.state == TWAI_STATE_RUNNING);

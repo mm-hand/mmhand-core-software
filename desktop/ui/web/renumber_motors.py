@@ -8,10 +8,27 @@
 禁止依赖：禁止串口、协议编码或直接硬件操作。
 """
 from pathlib import Path
+from time import monotonic
 from nicegui import app, ui
 from .common import label
 
 IMAGE = Path(__file__).resolve().parents[2] / 'resources' / 'images' / 'joint_motor_ids.png'
+
+HOLD_BUZZ = """event => {
+    if (!event.isPrimary || event.button !== 0) return;
+    const button = event.currentTarget;
+    button.setPointerCapture(event.pointerId);
+    const timer = setInterval(() => emit('hold'), 150);
+    const stop = () => {
+        clearInterval(timer);
+        button.removeEventListener('lostpointercapture', stop);
+        window.removeEventListener('blur', stop);
+        emit('stop');
+    };
+    button.addEventListener('lostpointercapture', stop);
+    window.addEventListener('blur', stop);
+    emit('start');
+}"""
 
 
 def build(hand, act):
@@ -20,8 +37,23 @@ def build(hand, act):
     inputs = {}
     buzz = {}
     generation = [None]
+    held = None
+
+    def holding(key):
+        current = held
+        return current is not None and current[0] == key and monotonic() < current[1]
+
+    def hold_buzz(key, event):
+        nonlocal held
+        if event.args == 'start':
+            held = (key, monotonic() + 0.5)
+            act(lambda: hand.request_motor_buzz(*key, held=lambda: holding(key)))
+        elif holding(key):
+            held = None if event.args == 'stop' else (key, monotonic() + 0.5)
+
     with ui.row().classes('page-toolbar'):
-        scan = ui.button('Scan All Buses', on_click=lambda: act(hand.request_id_scan))
+        scan = ui.button('Scan (0–30)', on_click=lambda: act(hand.request_id_scan))
+        scan_full = ui.button('Scan (0–253)', on_click=lambda: act(lambda: hand.request_id_scan(253)))
         rename = ui.button('Renumber All', on_click=lambda: act(lambda: hand.request_motor_renumber({key: number.value for key, number in inputs.items()})))
     motor_status = label()
     ui.label('Multiple motors with the same ID on one bus cannot be identified or renumbered separately. Connect them separately before renumbering.').classes('text-sm text-amber-800')
@@ -30,16 +62,18 @@ def build(hand, act):
             ui.label('Bus / Current ID / New ID').classes('text-sm font-semibold')
             rows = ui.column().classes('w-full')
             ui.label('Assembly target IDs are shown in the diagram. Product joint bindings remain fixed. IDs above 26 are outside the product control mapping.').classes('text-xs text-slate-500')
-            ui.label('Renumber All also sets every scanned motor: maximum speed (84) = 254, maximum acceleration (85) = 254, acceleration multiplier (86) = 0. All values are read back before success.').classes('text-xs text-slate-700')
-            ui.label('Buzz moves one motor about 6° towards tendon release and back. Motors sharing a BUS and ID move together.').classes('text-xs text-slate-500')
+            ui.label('Hold Buzz to move the motor about 11.25° towards tendon release and back repeatedly. Motors sharing a BUS and ID move together.').classes('text-xs text-slate-500')
         with ui.column().classes('w-full min-w-0'):
             ui.image('/joint-motor-ids.png').props('fit=contain').classes('renumber-motors-diagram')
 
     def refresh(snapshot):
         motor = snapshot['id_reset']['motor']
         idle = not snapshot['busy']
-        scan.set_enabled(motor['available'] and idle)
-        rename.set_enabled(motor['available'] and idle and motor['scanned'] and bool(motor['rows']))
+        ready = motor['available'] and idle
+        scan.set_enabled(ready)
+        scan_full.set_enabled(ready)
+        editable = ready and motor['scanned']
+        rename.set_enabled(editable and bool(motor['rows']))
         motor_status.set_text(motor['message'] if motor['available'] else 'Connect P4 with fresh status to reset motor IDs.')
         if generation[0] != motor['generation']:
             generation[0] = motor['generation']; rows.clear(); inputs.clear(); buzz.clear()
@@ -49,10 +83,14 @@ def build(hand, act):
                     with ui.row().classes('items-center gap-4'):
                         ui.label(f"BUS{row['bus']}").classes('w-14')
                         ui.label(str(row['id'])).classes('w-14')
-                        inputs[key] = ui.number('New ID', value=row.get('new_id',row['id']), min=0, max=252, step=1).props('dense outlined').classes('w-28')
-                        buzz[key] = ui.button('Buzz', on_click=lambda key=key: act(lambda: hand.request_motor_buzz(*key))).props('dense outline')
-                        with buzz[key]:
-                            ui.tooltip('This motor buzzes about 6° towards tendon release and returns.')
-        for number in inputs.values(): number.set_enabled(motor['available'] and idle and motor['scanned'] and not motor['recovering'])
-        for button in buzz.values(): button.set_enabled(motor['available'] and idle and motor['scanned'] and not motor['recovering'])
+                        value = row['id'] if row['id'] <= 252 else None
+                        inputs[key] = ui.number('New ID', value=value, min=0, max=252, step=1).props('dense outlined').classes('w-28')
+                        buzz[key] = ui.button('Buzz').props('dense outline').style('touch-action: none')
+                        buzz[key].on('pointerdown', lambda event, key=key: hold_buzz(key, event), js_handler=HOLD_BUZZ)
+                        buzz[key].on('click', lambda _, key=key: act(lambda: hand.request_motor_buzz(*key)),
+                                     js_handler='event => { if (event.detail === 0) emit(); }')
+        for number in inputs.values():
+            number.set_enabled(editable)
+        for key, button in buzz.items():
+            button.set_enabled(editable or holding(key))
     return refresh

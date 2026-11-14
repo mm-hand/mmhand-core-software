@@ -132,7 +132,7 @@ bool FeetechServoDriver::checkOnlineConfiguration(uint8_t id)
 }
 
 /* bool FeetechServoDriver::buzzMaintenance */
-bool FeetechServoDriver::buzzMaintenance(uint8_t id, uint8_t counts)
+bool FeetechServoDriver::buzzMaintenance(uint8_t id, uint8_t counts, int32_t& origin)
 {
     if (!_serial || id > MAX_SERVO_ID || !_feedback[id].online ||
         _feedback[id].motorStatus != 0 || counts == 0) {
@@ -141,17 +141,21 @@ bool FeetechServoDriver::buzzMaintenance(uint8_t id, uint8_t counts)
     const unsigned long savedTimeout = _sms.IOTimeOut;
     _sms.IOTimeOut = 10;
     const int raw = _sms.readWord(id, SMS_STS_PRESENT_POSITION_L);
+    const bool positionOk = raw >= 0 && _sms.getState() == 0;
     // 寄存器 18 的 0x10 位就是上线检查写的多圈配置位：未开多圈时位置只有 0..4095。
     const int phase = _sms.readByte(id, 18);
+    const bool phaseOk = phase >= 0 && _sms.getState() == 0;
     _sms.IOTimeOut = savedTimeout;
-    if (raw < 0 || phase < 0) {
+    if (!positionOk || !phaseOk) {
         return false;
     }
-    const int32_t origin = (raw & 0x8000) ? -(int32_t)(raw & 0x7fff) : (int32_t)raw;
+    if (origin == INT32_MAX) {
+        origin = (raw & 0x8000) ? -(int32_t)(raw & 0x7fff) : (int32_t)raw;
+    }
     if (origin < kServoHardwareCommandMin || origin > kServoHardwareCommandMax) {
         return false;
     }
-    const int32_t step = counts > 127 ? 127 : counts;
+    const int32_t step = counts > 128 ? 128 : counts;
     int32_t target;
     const int channel = findMotorChannelByServoId(id);
     if (channel >= 0) {
@@ -164,17 +168,16 @@ bool FeetechServoDriver::buzzMaintenance(uint8_t id, uint8_t counts)
         // 没有产品绑定的 ID（27-30、253）没有收绳方向，只避开单圈边界。
         target = origin > 2048 ? origin - step : origin + step;
     }
+    if (target < kServoHardwareCommandMin || target > kServoHardwareCommandMax) return false;
     const bool wasDisabled = _torqueDisabled[id];
     const bool ok = _sms.WritePosEx(id, origin, SERVO_TARGET_SPEED_DEFAULT, 254) > 0
                  && setTorqueEnabled(id, true)
                  && _sms.WritePosEx(id, target, SERVO_TARGET_SPEED_DEFAULT, 254) > 0;
     delay(kMaintenanceBuzzHoldMs);
-    _sms.WritePosEx(id, origin, SERVO_TARGET_SPEED_DEFAULT, 254);
+    const bool returned = _sms.WritePosEx(id, origin, SERVO_TARGET_SPEED_DEFAULT, 254) > 0;
     delay(kMaintenanceBuzzHoldMs);
-    if (wasDisabled) {
-        setTorqueEnabled(id, false);
-    }
-    return ok;
+    const bool restored = !wasDisabled || setTorqueEnabled(id, false);
+    return ok && returned && restored;
 }
 
 /* bool FeetechServoDriver::setTarget */

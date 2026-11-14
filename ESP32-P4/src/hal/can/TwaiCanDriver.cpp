@@ -97,23 +97,22 @@ CanControllerStatus TwaiCanDriver::status() const
     result.txErrorCounter = info.tx_error_counter;
     result.state = (uint8_t)info.state;
     result.valid = 1;
+    result.running = info.state == TWAI_STATE_RUNNING;
     result.busOff = info.state == TWAI_STATE_BUS_OFF ? 1 : 0;
     result.stopped = info.state == TWAI_STATE_STOPPED ? 1 : 0;
     return result;
 }
 
-bool TwaiCanDriver::requestRecovery()
+int32_t TwaiCanDriver::requestRecovery()
 {
-    return installed_ && twai_initiate_recovery() == ESP_OK;
+    return installed_ ? twai_initiate_recovery() : ESP_ERR_INVALID_STATE;
 }
 
-bool TwaiCanDriver::restart()
+int32_t TwaiCanDriver::restart()
 {
-    if (!installed_) {
-        return begin();
-    }
-    started_ = twai_start() == ESP_OK;
-    return started_;
+    const esp_err_t result = installed_ ? twai_start() : ESP_ERR_INVALID_STATE;
+    if (result == ESP_OK) started_ = true;
+    return result;
 }
 
 uint32_t TwaiCanDriver::rxFifoCount() const
@@ -121,15 +120,9 @@ uint32_t TwaiCanDriver::rxFifoCount() const
     return twai_ll_get_rx_msg_count(TWAI_LL_GET_HW(0));
 }
 
-bool TwaiCanDriver::recoverRx()
+int32_t TwaiCanDriver::stop()
 {
-    if (!installed_) {
-        return begin();
-    }
-    if (started_) {
-        twai_stop();
-        started_ = false;
-    }
-    started_ = twai_start() == ESP_OK;
-    return started_;
+    const esp_err_t result = installed_ ? twai_stop() : ESP_ERR_INVALID_STATE;
+    if (result == ESP_OK) started_ = false;
+    return result;
 }

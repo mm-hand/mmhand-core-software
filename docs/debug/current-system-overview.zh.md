@@ -32,7 +32,7 @@
 | 快速换向 | flexion/extension、连续反复换向、锚点补偿、达到位移退出、冷却、无响应超时后保持，不反复累计补偿。 |
 | 实物碰撞 | 500ms武装和500ms检测窗口、q_slow速度、PID持续推进、两个方向阈值、换向重建、碰撞标签、后退解除。尚未以实际阻挡试验测触发时延与误报率。 |
 | 运动中故障注入 | 运动时拔P4 USB、断CAN、丢编码器、断舵机、制造超载、STOP到总线执行的延迟，以及恢复后不自动运动。现有软件测试不能代替这些实测。 |
-| 电机实际改号 | 多台旧→253→新、交换/循环、目标冲突、253占用、跨BUS同ID、改号中取消/断电/断线后恢复。已有算法测试；没有实物完整批次改号验收。 |
+| 电机实际改号 | 直接改号、交换/循环、目标冲突、253占用、跨BUS同ID、改号中取消/断电/断线后的重新扫描。已有算法测试；没有实物完整批次改号验收。 |
 | 同ID硬件场景 | 同一BUS重复地址无法独立识别、不能承诺总能检测出重复；界面已有明确提示，尚未人为接入重复地址做实物试验。 |
 | 触觉图物理对应 | 两型号逐点压触验证测点索引、X/Y朝向、左右手安装旋转/镜像；P4摘要/直连S3全量切换、断开消失的交互组合。 |
 | Joint/Motor Calibration完整重做 | 当前参数恢复通过，但最新完整固件还没有重新跑全手标定、逐关节Set Min/Max及每个故障/取消分支。不能以软件回归替代实测。 |
@@ -43,7 +43,7 @@
 | 长稳与电源异常 | 目前是秒级/分钟级测试，尚未数小时满负荷、反复断电/欠压、全15触觉模块接入及全手同时动作压力测试。 |
 | 文档发布 | AI生成脚本已调整；基于已提交源码的prepare→annotate→validate→publish正式中英文发布尚未完成，现有旧AI README不能当作本轮最新实机证明。 |
 
-建议下一轮顺序：单绳小阶跃→双绳小阶跃/配对恢复→换向→非零Ki→低速碰撞/退让→运动中故障注入→批量改号/断电恢复→ROS2和Replay→长稳。改号试验会真实改变安装地址，应保留当前清单与恢复记录。
+建议下一轮顺序：单绳小阶跃→双绳小阶跃/配对恢复→换向→非零Ki→低速碰撞/退让→运动中故障注入→批量改号及断电后重新扫描→ROS2和Replay→长稳。
 
 ## 2. 代码规模与统计口径
 
@@ -92,9 +92,9 @@ C:/Users/73547/mmhand-core-software/
 │     ├─ maintenance/               触觉USB维护解码/去重/改号/路由核验
 │     ├─ system/                    任务创建、磁编覆盖队列、日志
 │     └─ tasks/                     EncodersTask、TactileTask、CanTask
+├─ run.py                           python run.py入口，唯一进程入口
 ├─ desktop/
-│  ├─ __main__.py                   python -m desktop入口
-│  ├─ app/                          启动、端口、NiceGUI及ROS2装配
+│  ├─ app/                          启动参数、端口、NiceGUI及ROS2装配
 │  ├─ core/
 │  │  ├─ hand_backend.py            GUI/ROS2/Replay共同后端门面
 │  │  ├─ application_actions.py     用户操作事务、授权、模式切换、STOP
@@ -107,7 +107,7 @@ C:/Users/73547/mmhand-core-software/
 │  │  ├─ calibration_snapshot.py    当前整包校准与设备绑定
 │  │  ├─ control_parameters.py      默认/当前JSON、校验、修订和CRC
 │  │  ├─ teleop_input.py            One Euro与静止锚点滞回
-│  │  ├─ id_actions.py              电机批量改号会话/日志/恢复
+│  │  ├─ id_actions.py              电机扫描与批量改号会话
 │  │  ├─ id_protocol.py             电机维护协议和规划器
 │  │  ├─ tactile_geometry.py        厂商坐标→平面手形SVG
 │  │  ├─ console_snapshot.py        生成GUI只读快照和标签
@@ -215,7 +215,7 @@ ACK负载含原命令、执行时模式/状态、结果码；0=同步成功，2=
 - 自动标定算法在上位机执行，P4提供Direct、反馈、归零和结果装载等原语。旧0xCA固件自动标定命令已删除；CC START仍是当前流程需要的就绪命令。
 - 参数F8载荷165字节=`version1+revision4+39×float32+CRC32(4)`；整组仅空闲时应用。39字段中ROS2输入的8字段在主机执行，当前仍作为整组revision/CRC的一部分发给P4，不能因此说P4也运行了One Euro。
 - 电机维护F4载荷12字节：token4、session4、op/bus/old/new各1。op0能力、1开始、2结束、3探测、4改号；1B结果负载16字节，版本3，带stage/status/present。253中转；84/85/86由每次上线检查配置。
-- 电机普通扫描0–30共124地址；253和中断日志中的地址另作核对，超过30的目标也会被专门探测以拒绝冲突。普通快扫不代表遍历所有0–252设备。
+- 四条电机总线支持扫描0–30（124个地址）或0–253（1016个地址）。改号以本次扫描为准，写入前探测相关源和目标地址。交换或循环需要253中转时，检查对应总线的253地址。
 
 ### 4.2 S3 → P4 CAN
 
@@ -342,7 +342,7 @@ S3 RX→触觉解析与USB发送
 | Replay | Import CSV、Play、五指/关节复选框、文件名/帧数/时长/频率、警告、逐关节当前角/目标/误差表、回放状态与进度；取消用全局STOP，无Pause。只读当前支持的CSV字段，不保留旧格式猜测。 |
 | Plot / Curves & Recordings | 最多5个不同关节曲线，实测/目标角；Clear Plot。另选一电机查看P/I/换向/配对恢复counts分量。记录状态、目录、时长、Full tactile data选项；保存总开关在顶栏，不在此重复设置。 |
 | Plot / Tactile | 平面手形、15个安装位置、X/Y/Z/Magnitude切换、手指/模块详情、Fx/Fy/Fz与新鲜度。S3直连FULL按厂商XY显示52或25测点；P4-only SUMMARY显示Σ合力；无新鲜传感器数据不伪造测点，位置灰/无有效数据。数值仍是设备raw单位，不是已标定的N或Pa。 |
-| Settings / Renumber Motor | Scan All Buses、Renumber All、BUS/Current ID/New ID输入表、完整等比电机ID示意图。P4有效连接门禁；文字说明同BUS同ID无法区分，上线检查统一配置84/85/86=254/254/0，改号流程不再操作这些参数。无逐行改号按钮，无新增Reset ID上层。 |
+| Settings / Renumber Motor | Scan (0–30)、Scan (0–253)、Renumber All、BUS/Current ID/New ID输入表、完整等比电机ID示意图。P4有效连接门禁；文字说明同BUS同ID无法区分，上线检查统一配置84/85/86=254/254/0，改号流程不再操作这些参数。无逐行改号按钮，无新增Reset ID上层。 |
 | Settings / Control Parameters | Save Parameters、Restore Defaults、revision/CRC/P4应用状态；Kp config/Ki config/Kd config（AA/MCP/PIP/DIP/CMC五组）、Ki组内共享积分限幅/噪声/确认时间、双腱恢复增益、编码器快慢窗、快速换向、碰撞阈值、最终输出约束、ROS2滤波分组折叠面板。Kp/Ki/Kd按关节类型共用，无每关节覆盖；恢复默认读本机默认JSON。 |
 | Settings / Diagnostics | Clear Faults、在线电机/编码器数量、owner和状态age；问题列表和详情、Operation History；可展开Task Runtime、Routes、Fingerprint、Raw Snapshot，任务统计按需订阅。 |
 

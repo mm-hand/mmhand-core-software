@@ -25,8 +25,6 @@ URDF_DIR = RESOURCE_DIR / "mmhand_urdf"
 # recordings under logs/; the whole tree is gitignored.
 LOG_DIR = Path(os.environ.get("MMHAND_LOG_DIR") or (PROJECT_ROOT / "logs")).resolve()
 RUN_DATA_DIR = LOG_DIR
-# ID renumber transaction journals live with the runtime logs.
-DEVICE_STATE_DIR = LOG_DIR
 
 
 def relative_display(path) -> str:

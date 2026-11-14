@@ -56,6 +56,7 @@ uint32_t g_servoIoSucceeded[TASK_RUNTIME_IO_CHANNEL_COUNT] = {};
 uint32_t g_windowServoIoRequested[TASK_RUNTIME_IO_CHANNEL_COUNT] = {};
 uint32_t g_windowServoIoSucceeded[TASK_RUNTIME_IO_CHANNEL_COUNT] = {};
 portMUX_TYPE g_runtimeLock = portMUX_INITIALIZER_UNLOCKED;
+TaskCpuScan g_lastCpuScan{0, 0, -1};
 uint16_t g_coreIdlePermille[2] = {
     kTaskRuntimeUnknownPermille, kTaskRuntimeUnknownPermille,
 };
@@ -163,8 +164,14 @@ void sampleCpuUsage()
     portEXIT_CRITICAL(&g_runtimeLock);
 
     TaskRuntimeCounterType totalRuntime = 0;
+    const int8_t scanCore = (int8_t)xPortGetCoreID();
+    const uint32_t scanStartUs = (uint32_t)esp_timer_get_time();
     const UBaseType_t count = uxTaskGetSystemState(
         g_taskStatusBuffer, kRuntimeStatusCapacity, &totalRuntime);
+    const uint32_t scanElapsedUs = (uint32_t)esp_timer_get_time() - scanStartUs;
+    portENTER_CRITICAL(&g_runtimeLock);
+    g_lastCpuScan = {scanStartUs, scanElapsedUs, scanCore};
+    portEXIT_CRITICAL(&g_runtimeLock);
     if (count == 0U) return;
 
     TaskRuntimeCounterType idleNow[2] = {0, 0};
@@ -489,6 +496,14 @@ bool taskRuntimeGetSnapshot(uint8_t taskId, TaskRuntimeSnapshot* out)
     if (ready) *out = g_frozenSnapshots[taskId];
     portEXIT_CRITICAL(&g_runtimeLock);
     return ready;
+}
+
+TaskCpuScan taskRuntimeLastCpuScan()
+{
+    portENTER_CRITICAL(&g_runtimeLock);
+    const TaskCpuScan scan = g_lastCpuScan;
+    portEXIT_CRITICAL(&g_runtimeLock);
+    return scan;
 }
 
 uint32_t taskRuntimeGetWindowSequence()

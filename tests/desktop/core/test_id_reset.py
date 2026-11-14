@@ -1,11 +1,11 @@
-"""Motor ID planning, lost-result reconciliation and independent S3 data clocks."""
+"""Motor ID planning, maintenance frames and independent S3 data clocks."""
 import itertools
 import struct
 import threading
 import time
 import pytest
 from desktop.core.id_protocol import (
-    MaintenanceChannel, command_frame, plan_motor_ids, reconcile_motor_journal,
+    MaintenanceChannel, command_frame, plan_motor_ids,
     PROBE, RENAME,
 )
 from desktop.core.comm_layer import TactileSerialComm
@@ -22,11 +22,11 @@ def simulate(rows, moves):
     return occupied
 
 
-def test_batch_uses_one_temporary_id_per_servo():
+def test_batch_moves_directly_to_free_ids():
     rows = [dict(bus=0, id=i) for i in range(5)]
     targets = {(0,i): i+5 for i in range(5)}
     moves = plan_motor_ids(rows, targets)
-    assert moves == [step for i in range(5) for step in ((0,i,253),(0,253,i+5))]
+    assert moves == [(0, i, i + 5) for i in range(5)]
     assert simulate(rows,moves) == {(0,i) for i in range(5,10)}
 
 
@@ -42,24 +42,21 @@ def test_cross_bus_duplicate_old_ids_can_be_resolved():
     assert simulate(rows,plan_motor_ids(rows,{(0,1):0,(1,1):1})) == {(0,0),(1,1)}
 
 
+def test_existing_253_is_moved_before_it_is_used_to_break_a_cycle():
+    rows = [dict(bus=0, id=identifier) for identifier in (1, 2, 3, 253)]
+    moves = plan_motor_ids(rows, {(0, 1): 2, (0, 2): 1, (0, 3): 4, (0, 253): 3})
+    assert moves == [(0, 3, 4), (0, 253, 3), (0, 1, 253), (0, 2, 1), (0, 253, 2)]
+    assert simulate(rows, moves) == {(0, identifier) for identifier in (1, 2, 3, 4)}
+
+
 @pytest.mark.parametrize('targets', [{(0,0):254}, {(0,0):253}, {(0,0):-1}, {(0,0):.5}, {(0,0):None}])
 def test_invalid_id_never_generates_moves(targets):
     with pytest.raises(ValueError): plan_motor_ids([dict(bus=0,id=0)],targets)
 
 
-def test_occupied_temporary_and_duplicate_final_ids_are_rejected():
-    with pytest.raises(ValueError,match='253'):
-        plan_motor_ids([dict(bus=0,id=253)],{(0,253):1})
+def test_duplicate_final_ids_are_rejected():
     with pytest.raises(ValueError,match='unique'):
         plan_motor_ids([dict(bus=0,id=0),dict(bus=1,id=1)],{(0,0):1,(1,1):1})
-
-
-def test_lost_write_result_reconciles_without_replaying():
-    journal = dict(inventory=[dict(bus=0,id=0)], moves=[[0,0,253],[0,253,5]],
-                   completed=0,intent=[0,0,253])
-    assert reconcile_motor_journal(journal,[dict(bus=0,id=0)]) == 0
-    assert reconcile_motor_journal(journal,[dict(bus=0,id=253)]) == 1
-    with pytest.raises(ValueError): reconcile_motor_journal(journal,[dict(bus=0,id=5)])
 
 
 def test_channel_accepts_only_matching_token_and_fields():

@@ -15,7 +15,6 @@ DESKTOP_ROOT = PROJECT_ROOT / "desktop"
 # Check every module in the supported Web GUI runtime.
 TARGET_TOP_LEVEL_FILES = {
     "__init__.py",
-    "__main__.py",
     "paths.py",
 }
 TARGET_PACKAGES = (

@@ -19,6 +19,8 @@ portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 uint8_t request[12], result[16];
 bool queued = false, executing = false, ready = false, sending = false, active = false, cancel = false;
 uint32_t session = 0, lastRequestMs = 0;
+uint16_t buzzAddress = UINT16_MAX;
+int32_t buzzOrigin = INT32_MAX;
 uint32_t changedMask=0;
 // At most 253 final IDs * two moves + begin/end. Probes must not evict writes.
 uint8_t cachedRequests[512][12], cachedResults[512][16];
@@ -84,6 +86,7 @@ bool stepServoMaintenance(SystemRuntimeContext* context, uint32_t nowMs) {
     else if (op == 1) {
         if (!requestedSession || (held && session != requestedSession)) status = 2;
         else {
+            buzzAddress = UINT16_MAX;
             if(cachedSession!=requestedSession) { cachedCount=0; cachedNext=0; cachedSession=requestedSession; }
             portENTER_CRITICAL(&lock); session=requestedSession; active=true; lastRequestMs=nowMs; portEXIT_CRITICAL(&lock);
         }
@@ -105,11 +108,16 @@ bool stepServoMaintenance(SystemRuntimeContext* context, uint32_t nowMs) {
         else if (op == 5) {
             if (newId == 0) status = 3;
             else {
+                const uint16_t address = (uint16_t(bus) << 8) | oldId;
+                if (address != buzzAddress) {
+                    buzzAddress = address;
+                    buzzOrigin = INT32_MAX;
+                }
                 // 振动会阻塞约 0.25 s，先补反馈 grace，避免其它在线电机被误判离线。
                 servoMaintenanceExtendFeedbackGrace(nowMs);
                 if (sharedAtomicLoad(&context->emergency_stop_latched) != 0) status = 2;
                 else if (driver->isFaulted(oldId)) status = 7;
-                else if (!driver->buzzMaintenance(oldId, newId)) status = 7;
+                else if (!driver->buzzMaintenance(oldId, newId, buzzOrigin)) status = 7;
                 else response[13] = 1;
             }
         }

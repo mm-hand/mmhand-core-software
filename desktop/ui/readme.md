@@ -1,6 +1,6 @@
 # MM-Hand NiceGUI UI
 
-Launch with `python -m desktop --no-ros2`, then open `http://127.0.0.1:8080`.
+Launch from the repository root with `python run.py --no-ros2`, then open `http://127.0.0.1:8080`.
 If port 8080 is occupied, the app automatically serves on the next free port
 and prints the chosen port. Omit `--no-ros2` when the ROS2 environment is
 available.

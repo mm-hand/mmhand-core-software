@@ -2,7 +2,7 @@
 
 职责：编码电机维护协议并规划无冲突编号步骤。
 线程：纯函数，由操作工作线程调用。
-输入：设备清单、目标ID及恢复日志。
+输入：设备清单和目标ID。
 输出：维护字节帧、结果和移动序列。
 状态所有权：无设备状态所有权。
 禁止依赖：禁止串口、UI或文件IO。
@@ -13,7 +13,7 @@ import time
 from . import protocol
 
 CAPABILITY, BEGIN, END, PROBE, RENAME, BUZZ = range(6)
-
+TEMPORARY_MOTOR_ID = 253
 
 
 def command_frame(command, token, session, operation, bus=0, old_id=0, new_id=0):
@@ -72,76 +72,33 @@ class MaintenanceChannel:
 
 
 def plan_motor_ids(rows, targets):
-    """Validate the complete inventory and plan collision-free serial moves."""
+    """Validate the scanned inventory and plan collision-free serial moves."""
     locations = {(int(r['bus']), int(r['id'])) for r in rows}
     if len(locations) != len(rows):
         raise ValueError('Duplicate BUS/ID entries; connect same-ID servos separately')
-    if any(i == 253 for _, i in locations):
-        raise ValueError('Temporary ID 253 is occupied')
     if set(targets) != locations:
         raise ValueError('Scan the buses again before renumbering')
     final = {}
     for location, value in targets.items():
-        if isinstance(value, bool) or value is None or int(value) != value or not 0 <= int(value) <= 252:
+        if isinstance(value, bool) or value is None or int(value) != value or not 0 <= int(value) < TEMPORARY_MOTOR_ID:
             raise ValueError('New IDs must be integers in 0..252')
         final[location] = int(value)
     if len(set(final.values())) != len(final):
         raise ValueError('Final IDs must be unique across all buses')
     pending = {k: v for k, v in final.items() if k[1] != v}
-    occupied = set(locations)
+    occupied = locations
     moves = []
     while pending:
-        free = next((k for k, target in pending.items() if (k[0], target) not in occupied), None)
-        if free is not None:
-            target = pending.pop(free)
-            bus, old = free
-            # A cycle's parked servo already owns the temporary ID.
-            if old != 253 and (bus, 253) not in occupied:
-                moves.append((bus, old, 253))
-                moves.append((bus, 253, target))
-            else:
-                moves.append((bus, old, target))
-            occupied.remove(free); occupied.add((bus, target))
-            continue
-        # Park one vertex to break a cycle, then resolve its predecessors.
-        location = next(iter(pending))
+        location = next((key for key, target in pending.items() if (key[0], target) not in occupied), None)
+        if location is None:
+            # With no free target, the remaining moves form cycles.
+            location = next(iter(pending))
+            new = TEMPORARY_MOTOR_ID
+            pending[(location[0], new)] = pending.pop(location)
+        else:
+            new = pending.pop(location)
         bus, old = location
-        moves.append((bus, old, 253))
-        occupied.remove(location); occupied.add((bus, 253))
-        pending[(bus, 253)] = pending.pop(location)
+        moves.append((bus, old, new))
+        occupied.remove(location)
+        occupied.add((bus, new))
     return moves
-
-
-def reconcile_motor_journal(journal, rows):
-    """Resolve a lost write result using a fresh full inventory, never by replaying it."""
-    actual = {(r['bus'], r['id']) for r in rows}
-    expected = {(r['bus'], r['id']) for r in journal['inventory']}
-    moves = [tuple(move) for move in journal['moves']]
-    completed = int(journal['completed'])
-    changed = {(bus, identifier) for bus, old, new in moves for identifier in (old, new)}
-    # Missing motors outside the write sequence cannot affect its recovery.
-    expected &= actual | changed
-    for bus, old, new in moves[:completed]:
-        expected.remove((bus, old)); expected.add((bus, new))
-    if expected == actual:
-        return completed
-    if completed < len(moves) and journal.get('intent') == list(moves[completed]):
-        bus, old, new = moves[completed]
-        after = (expected - {(bus, old)}) | {(bus, new)}
-        if after == actual:
-            return completed + 1
-    raise ValueError('Recorded batch does not match scanned addresses; inspect the wiring before continuing')
-
-
-def motor_recovery_targets(journal, rows):
-    completed = reconcile_motor_journal(journal, rows)
-    positions = {index:(row['bus'],row['id']) for index,row in enumerate(journal['inventory'])}
-    current = None
-    for index,(bus,old,new) in enumerate(journal['moves']):
-        if index == completed:
-            current = dict(positions)
-        actor = next(key for key,location in positions.items() if location==(bus,old))
-        positions[actor] = (bus,new)
-    if current is None:
-        current = dict(positions)
-    return {location:positions[actor][1] for actor,location in current.items()}

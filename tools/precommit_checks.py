@@ -76,7 +76,7 @@ def main(argv=None):
         if args.staged:
             check_staging()
         for script in ('generate_upper_protocol.py', 'generate_robot_model.py', 'generate_p4_safety_catalog.py',
-                       'generate_control_parameters.py'):
+                       'generate_control_parameters.py', 'generate_desktop_safety_catalog.py'):
             command([sys.executable, str(ROOT / 'tools' / script), '--check'], env=env)
         command([sys.executable, str(ROOT / 'tools/check_desktop_architecture.py')], env=env)
         command([sys.executable, str(ROOT / 'tools/p4_architecture/check_p4_architecture.py')], env=env)

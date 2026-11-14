@@ -28,6 +28,7 @@ struct CanControllerStatus {
     uint32_t txErrorCounter;   ///< CAN 发送错误计数器。
     uint8_t state;             ///< ESP-IDF TWAI 状态的无依赖数值表示。
     uint8_t valid;             ///< 1 表示本次状态读取成功。
+    uint8_t running;           ///< 1 表示控制器正在运行。
     uint8_t busOff;            ///< 1 表示控制器处于 Bus-Off。
     uint8_t stopped;           ///< 1 表示恢复完成、等待 restart。
 };
@@ -46,16 +47,16 @@ public:
     CanControllerStatus status() const;
 
     /** Bus-Off 后请求恢复；恢复完成后可调用 restart()。 */
-    bool requestRecovery();
+    int32_t requestRecovery();
 
     /** 重新启动已安装的 TWAI 驱动。 */
-    bool restart();
+    int32_t restart();
 
-    /** 读取硬件 RX FIFO 当前帧数（0..64）。 */
+    /** 读取硬件 RX 消息计数寄存器。 */
     uint32_t rxFifoCount() const;
 
-    /** 停止并重启控制器：清空硬件 FIFO 和软件 RX 队列。 */
-    bool recoverRx();
+    /** 停止控制器，返回 ESP-IDF 错误码。 */
+    int32_t stop();
 
 private:
     bool ensureIoPower();

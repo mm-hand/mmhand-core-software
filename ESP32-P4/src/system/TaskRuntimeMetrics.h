@@ -83,6 +83,12 @@ void taskRuntimeMarkIoSample(uint8_t channel,
                              uint32_t succeededCount);
 void taskRuntimeMarkPeriodResult(uint8_t taskId, bool overrun);
 bool taskRuntimeGetSnapshot(uint8_t taskId, TaskRuntimeSnapshot* out);
+struct TaskCpuScan {
+    uint32_t startedUs;
+    uint32_t elapsedUs;
+    int8_t core;
+};
+TaskCpuScan taskRuntimeLastCpuScan();
 uint32_t taskRuntimeGetWindowSequence();
 void taskRuntimeMarkSystemStatusSent(void);
 void taskRuntimeMarkStopReceived(void);

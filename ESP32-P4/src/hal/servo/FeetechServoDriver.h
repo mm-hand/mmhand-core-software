@@ -162,7 +162,7 @@ public:
      * 维护振动：让一台舵机往松绳方向走 counts 个原生 counts 再回原位。
      * 不写坐标基准，返回前复原扭力状态；阻塞约 2*kMaintenanceBuzzHoldMs。
      */
-    bool buzzMaintenance(uint8_t id, uint8_t counts);
+    bool buzzMaintenance(uint8_t id, uint8_t counts, int32_t& origin);
 
     /** 检查实际 ABS 的范围和信任状态后加入同步写批次。 */
     bool setTarget(uint8_t id, int32_t logicalPosition, uint16_t speed, uint8_t acc);

@@ -103,7 +103,8 @@ def operation_issue(message, *, scope='System', diagnostic_reason=None, details=
         (('servo feedback recovery failed',), 'HOST_FEEDBACK_RECOVERY_FAILED'),
         (('parameters are not applied', 'parameter synchronization', 'parameters have not'), 'HOST_PARAMETERS_PENDING'),
         (('parameters invalid', 'parameter schema', 'expected 0', 'expected 100'), 'HOST_PARAMETERS_INVALID'),
-        (('disconnected', 'serial not connected', 'serial open failed', 'status data is stale'), 'HOST_CONNECTION_LOST'),
+        (('disconnected', 'serial not connected', 'serial open failed', 'status data is stale',
+          'feedback is stale', 'became stale'), 'HOST_CONNECTION_LOST'),
         (('protocol contract', 'firmware version', 'handshake'), 'HOST_FIRMWARE_MISMATCH'),
         (('still finishing', 'operation is busy'), 'HOST_OPERATION_BUSY'),
         (('select joints', 'select motors', 'select at least', 'scope is empty'), 'HOST_SELECTION_EMPTY'),
@@ -111,6 +112,12 @@ def operation_issue(message, *, scope='System', diagnostic_reason=None, details=
         (('missing manual min', 'manual calibration missing', 'manual reference missing'), 'HOST_MANUAL_MISSING'),
         (('motor calibration missing', 'auto calibration missing', 'v4 calibration fields missing'), 'HOST_CALIBRATION_MISSING'),
         (('outside the allowed', 'outside [urdf', 'outside the safe', 'would require clamping'), 'HOST_TARGET_INVALID'),
+        (('no online, routable motors', 'configuration check has not finished',
+          'firmware/configuration check has not passed',
+          'offline, unroutable or turn unknown', 'waiting for motor firmware',
+          'waiting for logical abs', 'full route scan is running',
+          'motor scope setup failed', 'abs zero requires',
+          'route is unavailable', 'scan all buses'), 'HOST_MOTORS_NOT_READY'),
     )
     for markers, code in patterns:
         if any(marker in text for marker in markers):

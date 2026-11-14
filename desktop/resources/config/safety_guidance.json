@@ -722,6 +722,16 @@
         "Select the channels you want to use, then repeat the action."
       ]
     },
+    "HOST_MOTORS_NOT_READY": {
+      "title": "Motors are not ready for this action",
+      "category": "offline",
+      "impact": "The controller has not finished checking these motors, or a latched STOP is blocking the check.",
+      "steps": [
+        "Wait a few seconds for the motor online check to finish, then retry.",
+        "If it persists, check the motor bus and power for the motors shown in Details.",
+        "Reconnect P4 if a latched STOP cannot be cleared."
+      ]
+    },
     "HOST_OPERATION_BUSY": {
       "title": "Another action is still finishing",
       "category": "busy",

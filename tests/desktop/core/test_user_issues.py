@@ -63,6 +63,20 @@ def test_known_operation_outcomes_remain_distinct(message, code):
     assert operation_issue(message).code == code
 
 
+@pytest.mark.parametrize('message', [
+    'No online, routable motors to initialize. Check the motor buses.',
+    'Motors are online but their configuration check has not finished. Check the motor bus and retry.',
+    'selected motor offline, unroutable or Turn Unknown',
+    'selected motor firmware/configuration check has not passed',
+    'waiting for logical ABS and routes',
+    'Motor scope setup failed',
+])
+def test_motor_readiness_rejections_keep_a_specific_explanation(message):
+    issue = operation_issue(message)
+    assert issue.code == 'HOST_MOTORS_NOT_READY'
+    assert issue.severity == 'Blocking' and 1 <= len(issue.steps) <= 3
+
+
 def test_snapshots_coalesce_related_motors_and_keep_history_separate():
     state = HandModel(active_motor_mask=3, servo_online_bitmap=0)
     state.safety_event_history = [dict(rule_id=1008, motor_channel=0, sequence=12)]

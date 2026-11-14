@@ -241,6 +241,10 @@ void Task_Tactile(void* pvParameters) {
     (void)pvParameters;
     const TickType_t xFrequency = pdMS_TO_TICKS(kTactileTaskPeriodMs);
     TickType_t xLastWakeTime = xTaskGetTickCount();
+#if defined(MMHAND_CAN_BURST_TEST) && ENABLE_TACTILE_CAN_RELAY
+    uint32_t lastCanBurstMs = millis();
+    uint8_t canBursts = 0;
+#endif
 
     Serial.println("[Task_Tactile] Started!");
 
@@ -253,6 +257,18 @@ void Task_Tactile(void* pvParameters) {
 #if ENABLE_TACTILE_CAN_RELAY
         // 只把摘要读取成功位图送往P4；全量读取失败不能误判摘要模块离线。
         const uint8_t tactileSeq = twaiBus.sendTactileSummary(data, diag.summaryOkMask);
+#if defined(MMHAND_CAN_BURST_TEST)
+        const uint32_t nowMs = millis();
+        const uint32_t intervalMs = canBursts == 0 ? 30000 : 1000;
+        if (canBursts < 10 && nowMs - lastCanBurstMs >= intervalMs) {
+            lastCanBurstMs = nowMs;
+            FW_LOG_PRINTF(FW_LOG_LEVEL_INFO, "\r\n[S3 CAN BURST] start=%u up=%lu\r\n",
+                          unsigned(++canBursts), (unsigned long)nowMs);
+            twaiBus.sendTactileFullDump(data, tactileSeq);
+            FW_LOG_PRINTF(FW_LOG_LEVEL_INFO, "\r\n[S3 CAN BURST] end=%u up=%lu\r\n",
+                          unsigned(canBursts), (unsigned long)millis());
+        }
+#endif
 #else
         static uint8_t tactileSeqCounter = 0;
         const uint8_t tactileSeq = tactileSeqCounter++;

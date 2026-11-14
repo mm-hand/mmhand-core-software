@@ -12,13 +12,14 @@ direct S3 USB link; only the ID editor is gone.
 
 ## Motor inventory and renumbering
 
-Connect P4 and wait for fresh status. Scan All Buses probes BUS0–BUS3, IDs0–30:
-124 addresses. Enter New IDs and press Renumber All. New IDs are0–252 and
-must be globally unique;253 is the temporary address,254 is broadcast.
-Occupied targets above30 and the temporary address are checked separately.
-The host orders moves, including exchanges and cycles, and journals each intent
-before sending one step to P4. A timeout stops the batch without blindly
-repeating an EEPROM write. Rescan to reconcile actual addresses before recovery.
+Connect P4 and wait for fresh status. **Scan (0–30)** probes 124 addresses
+across BUS0–BUS3. **Scan (0–253)** probes 1016 addresses on the same buses.
+Run either scan after changing which motors are connected.
+Enter New IDs and press **Renumber All**. New IDs range from 0 to 252 and must
+be globally unique. A motor found at 253 can be assigned a new ID.
+The host checks source and target addresses before writing and uses 253 only
+to resolve an exchange or cycle. If a write fails or times out, use
+**Scan (0–253)** to read the current addresses and enter new targets.
 
 Firmware/configuration checks run automatically when a motor comes online.
 Renumber All only changes and verifies IDs. It does not read or write registers
@@ -29,6 +30,9 @@ not change.
 
 **Multiple motors with the same ID on one bus cannot be identified or
 renumbered separately. Connect them separately before renumbering.**
+
+Hold **Buzz** to move the motor about 11.25° away from its starting position and
+back repeatedly. Releasing the button lets the current pulse finish.
 
 ## Control and calibration
 
