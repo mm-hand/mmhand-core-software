@@ -19,6 +19,7 @@ from .config import (
     ENCODER_COUNT, TENDON_LUT_MAX_SAMPLES, kTendonRawSampleCapacity,
     kTendonFitSampleStepDeg, kMinTravelDeg, kMaxTravelDeg, kLutStartDeg,
     kLutZeroDeg, kCalibrationEncoderModulo, kCalibrationEncoderHalfTurn,
+    kMaxSegmentSlopeRatio,
 )
 
 
@@ -300,6 +301,32 @@ def tendon_motor_abs_limits(result: dict, actuator: int, motor: int,
     return extend_motor_abs_limits(motor, *envelope, release_margin, tight_margin)
 
 
+def _drop_slope_spikes(samples: list[tuple[float, int, int]]):
+    """丢掉斜率离谱的采样点（关节已到限位、腱还在走的那一下）。
+
+    判据按点而不是按段：一个点只要还有一边的连线正常，就说明它和趋势一致，
+    保留；两边都离谱（或只有一边且那一边离谱）才丢。这样行程末端的坏点只有
+    一条连线会被丢掉，而中间被两条离谱连线夹住的坏点同样会被丢掉。
+    """
+    if len(samples) < 4:
+        return samples
+    spans = [f32(b[0] - a[0]) for a, b in zip(samples, samples[1:])]
+    if min(spans) <= 0.0:
+        return samples
+    # 主/副两列都参与判定：哪一列出现堵转后继续走绳，整条样本都不可信。
+    slopes = [max(abs(f32(f32(b[k] - a[k]) / span)) for k in (1, 2))
+              for a, b, span in zip(samples, samples[1:], spans)]
+    typical = sorted(slopes)[len(slopes) // 2]
+    if typical <= 0.0:
+        return samples
+    bad = [value > kMaxSegmentSlopeRatio * typical for value in slopes]
+    kept = [sample for index, sample in enumerate(samples)
+            if (index > 0 and not bad[index - 1]) or
+            (index < len(samples) - 1 and not bad[index])]
+    # 丢到不足 3 点时保持原样，让 build_tendon_lut 走原有的失败路径。
+    return kept if len(kept) >= 3 else samples
+
+
 def build_tendon_lut(io, joint: int, result: dict, primary: int,
                      secondary: int, actuator_count: int, raw: TendonRawFitBuffer) -> bool:
     if not result or not 0 <= joint < ENCODER_COUNT or not 1 <= actuator_count <= 2:
@@ -332,6 +359,12 @@ def build_tendon_lut(io, joint: int, result: dict, primary: int,
             samples.pop()
         else:
             samples[index] = entry
+    before = len(samples)
+    samples = _drop_slope_spikes(samples)
+    if len(samples) != before:
+        trace = getattr(io, 'trace', None)
+        if callable(trace):
+            trace('LUT_SLOPE_SPIKE', joint, primary, dropped=before - len(samples))
     if len(samples) < 3 or f32(samples[-1][0] - samples[0][0]) < f32(kTendonFitSampleStepDeg * 2.0):
         return False
     span = f32(urdf_max - urdf_min)

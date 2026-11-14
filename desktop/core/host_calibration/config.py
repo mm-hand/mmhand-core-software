@@ -68,6 +68,8 @@ kReverseMinFollowDeg = 12.0
 kHostTargetResultTimeoutMs = 1000
 kHostRebaseFeedbackTimeoutMs = 3000
 kTendonFitSampleStepDeg = 5.0
+# 相邻两点的斜率超过全表中位斜率的倍数，判为"关节已到底、腱还在走"的坏段。
+kMaxSegmentSlopeRatio = 8.0
 kSingleTendonMaxReleaseCounts = 4096 * 2
 kAngleStallStableSamples = 2
 kPreReleaseSyncTargetToleranceCounts = 40

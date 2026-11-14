@@ -10,12 +10,13 @@ from desktop.core.host_calibration.config import (
     AutoCalibrationParams, kTendonRawSampleCapacity,
 )
 from desktop.core.host_calibration.math import (
-    TendonRawFitBuffer, apply_contact_refinement, build_calibration_result,
-    build_tendon_lut, encoder_count_to_deg, f32,
+    TendonRawFitBuffer, _drop_slope_spikes, apply_contact_refinement,
+    build_calibration_result, build_tendon_lut, encoder_count_to_deg, f32,
     forward_encoder_delta, manual_entry_crc, map_manual_scaled_encoder_to_urdf,
     round_to_int32, tendon_lut_sample_angle, tendon_motor_abs_limits,
     wrap_encoder_delta,
 )
+from desktop.core.protocol import build_calib_load_joint_cmd
 
 
 class MathIO:
@@ -162,6 +163,48 @@ def test_build_tendon_lut_keeps_the_full_5_degree_table():
     assert result["tendonLutMotorAbs"][1] == [0] * 24
     assert tendon_lut_sample_angle(result, 1) == 5.0
     assert tendon_lut_sample_angle(result, 17) == 83.0
+
+
+# 2026-11-13 22:46 J20/M25 的真实采样：最后两点只差 0.023°，电机差 548 counts。
+J20_STALLED_SAMPLES = (
+    (4019, 8496, 432), (3792, 8064, 789), (3564, 7903, 954),
+    (3340, 7740, 1119), (3112, 7573, 1289), (2885, 7413, 1451),
+    (2655, 7241, 1624), (2424, 7078, 1788), (2202, 6921, 1947),
+    (1971, 6765, 2105), (1970, 6217, 2657),
+)
+
+
+def test_stalled_endpoint_spike_is_dropped_before_lut_build():
+    """那对"关节已到底、腱还在走"的点会把 0° 外推成 −71,051 并卡住 int16 上传。"""
+    io = MathIO(limits=(0.0, 54.0), endpoints=(1829, 4148))
+    result = build_calibration_result(io, 20, 1968, 0, 3995, 8496, 391, 6765)
+    assert result
+    raw = TendonRawFitBuffer()
+    for encoder, primary, secondary in J20_STALLED_SAMPLES:
+        assert raw.append(encoder, primary, secondary)
+    assert build_tendon_lut(io, 20, result, 25, 26, 2, raw)
+
+    assert result["tendonLutCount"] == 12
+    row = result["tendonLutMotorAbs"][0][:12]
+    assert row[0] == 6669
+    assert row[-1] == 8741
+    assert all(right > left for left, right in zip(row, row[1:]))
+    # 表里不再有悬崖：任何一段都不能超过中位斜率的 8 倍。
+    slopes = [right - left for left, right in zip(row, row[1:])]
+    assert max(slopes) <= 8 * sorted(slopes)[len(slopes) // 2]
+    # 修复前这里抛 "delta -39896 exceeds int16 compact range"。
+    assert build_calib_load_joint_cmd(result)
+
+
+def test_drop_slope_spikes_keeps_short_and_clean_tables():
+    short = [(0.0, 0, 0), (10.0, 1000, 0)]
+    assert _drop_slope_spikes(short) == short
+    clean = [(0.0, 0, 0), (5.0, 500, 0), (10.0, 1000, 0), (15.0, 1500, 0)]
+    assert _drop_slope_spikes(clean) == clean
+    # 中间被两条离谱连线夹住的坏点（20°）被丢掉，两侧正常点保留。
+    belly = [(0.0, 0, 0), (5.0, 500, 0), (10.0, 1000, 0), (15.0, 1500, 0),
+             (20.0, 20000, 0), (25.0, 2500, 0), (30.0, 3000, 0)]
+    assert _drop_slope_spikes(belly) == [p for p in belly if p[0] != 20.0]
 
 
 def test_tendon_limits_use_full_table_endpoints_with_margins():
