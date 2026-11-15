@@ -122,7 +122,11 @@ class BundleMultiTurnStore:
                 payload = _empty_v7_snapshot()
                 payload.update(identity)
                 payload.update(
-                    scoped_native_abs_motor_mask=format_mask(valid_motor_mask),
+                    # 许可名单登记全部电机，而不是“建包这一刻恰好可信的电机”。
+                    # 建包时某只电机可能还在归零或暂时不可信，名单一旦冻结就再
+                    # 也放不进来（2026-11-15 M26 事件）。名单只是写锚点的许可，
+                    # 真实锚点仍由 multiturn_anchor_valid_bitmap 和可信反馈决定。
+                    scoped_native_abs_motor_mask=format_mask(VALID_MOTOR_MASK),
                     multiturn_anchor_valid_bitmap=format_mask(valid_motor_mask),
                     multiturn_anchor_logical_abs=absolute,
                     multiturn_anchor_saved_at_host_time=time.time(),
