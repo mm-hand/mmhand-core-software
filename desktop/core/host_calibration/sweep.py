@@ -44,6 +44,11 @@ def _motor_abs(io, motor):
     return None if motor is None else io.servo_abs(motor)
 
 
+def _sample_abs(io, motor):
+    # 单腱关节没有副腱列；LUT 采样用 0 占位（None 会让斜率过滤崩掉）。
+    return 0 if motor is None else (io.servo_abs(motor) or 0)
+
+
 def _fail(io, reason, phase, joint, motor, a=0, b=0, c=0, bitmap=0):
     emit = getattr(io, 'diag_if_empty', None) or io.diag
     emit(reason, phase, joint, motor, a, b, c, bitmap)
@@ -156,18 +161,21 @@ def sweep_to_end(io, joint, end, *, motors, pull, release,
                 wound = 0
                 if fit is not None:
                     fit.maybe_append(abs(angle - start_angle), encoder,
-                                     _motor_abs(io, primary), _motor_abs(io, secondary))
+                                     _sample_abs(io, primary), _sample_abs(io, secondary))
             else:
                 still += 1
             window_ms = now
             error = abs(angle - target)
             near = error <= config.kEndToleranceDeg
+            # 纯释放(单腱弹簧回位)没有"拉到某个角度"的能力：腱完全松开后
+            # 关节停在哪，哪就是 Min。只要求它确实被弹回来过，避免起步就误判。
+            returned = abs(angle - start_angle) >= config.kEndToleranceDeg
             io.trace("END_CHECK", joint, motor, angle=round(angle, 3), target_deg=target,
                      error=round(error, 3), moved=round(moved, 3),
                      still=still, near=near, load=load, taut=taut)
             point = EndPoint(angle, int(encoder), _motor_abs(io, primary),
                              _motor_abs(io, secondary), load)
-            if still >= config.kEndStillWindows and near:
+            if still >= config.kEndStillWindows and (near if pull is not None else returned):
                 io.trace("END_REACHED", joint, motor, angle=round(angle, 3),
                          encoder=int(encoder), error=round(error, 3))
                 return SweepOutcome(point)

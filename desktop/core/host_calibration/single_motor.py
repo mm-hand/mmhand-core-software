@@ -82,7 +82,7 @@ def run_single(io, joint: int, params: config.AutoCalibrationParams,
             return _fail(io, protocol.CALIB_DIAG_REASON_RESULT_BUILD_FAILED,
                          protocol.CALIB_DIAG_PHASE_FIND_MIN, joint, motor)
     else:
-        fit.append(tight.point.encoder, tight.point.primary_abs, None)
+        fit.append(tight.point.encoder, tight.point.primary_abs, 0)
         fit.next_travel_deg = config.kTendonFitSampleStepDeg
 
     limit = sweep_to_end(io, joint, END_MIN, motors=motors, pull=None, release=motor,
@@ -98,7 +98,7 @@ def run_single(io, joint: int, params: config.AutoCalibrationParams,
             return _fail(io, protocol.CALIB_DIAG_REASON_RESULT_BUILD_FAILED,
                          protocol.CALIB_DIAG_PHASE_FIND_MIN, joint, motor)
     else:
-        fit.append(limit.point.encoder, limit.point.primary_abs, None)
+        fit.append(limit.point.encoder, limit.point.primary_abs, 0)
 
     span = forward_encoder_delta(limit.point.encoder, tight.point.encoder)
     io.trace("SINGLE_SPAN_CHECK", joint, motor, tight_encoder=tight.point.encoder,

@@ -214,3 +214,54 @@ def test_run_single_aborts_when_the_aa_is_not_ready():
     assert outcome["aborted"] is True
     assert outcome["reason"] == 'AA mapping invalid'
     assert not io.commands
+
+
+def test_release_accepts_where_the_spring_stops():
+    """J10: the spring returns the joint to +3 deg, not to the Manual Min at -9 deg."""
+    io = FakeIO(start_raw=5000)
+    motor = config.joint_motors(1)[0]
+    pose = {"raw": 5000}
+
+    def spring(state, targets, previous):
+        pose["raw"] = max(3550, pose["raw"] - 50)
+        state.encoder_value = pose["raw"]
+        state.loads[motor] = 0
+
+    io.on_publish = spring
+    outcome = sweep.sweep_to_end(io, 1, sweep.END_MIN, motors=(motor,), pull=None, release=motor)
+    assert outcome.point is not None
+    assert outcome.point.angle == pytest.approx(3.0, abs=1.0)
+
+
+def test_release_does_not_accept_the_start_position():
+    io = FakeIO(start_raw=5000)
+    motor = config.joint_motors(1)[0]
+    io.on_publish = frozen(io, 5000)
+    io.loads[motor] = 0
+    outcome = sweep.sweep_to_end(io, 1, sweep.END_MIN, motors=(motor,), pull=None, release=motor)
+    assert outcome.point is None
+    assert outcome.reason == protocol.CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS
+
+
+def test_run_single_accepts_a_spring_that_stops_short():
+    """J10 end to end: the spring returns to raw 3550 and the LUT still builds."""
+    io = FakeIO(start_raw=3500)
+    motor = config.joint_motors(1)[0]
+    mark = {"abs": None}
+
+    def hook(state, targets, previous):
+        current = targets.get(motor, previous.get(motor, 0))
+        if mark["abs"] is None:
+            state.encoder_value = min(5000, 3500 + current)
+            if state.encoder_value >= 5000:
+                mark["abs"] = current
+        else:
+            state.encoder_value = min(5000, max(3550, 5000 - (mark["abs"] - current)))
+        state.loads[motor] = 150
+
+    io.on_publish = hook
+    outcome = run(io)
+    assert outcome["success"] is True
+    assert outcome["result"]["tendonLutValid"] is True
+    assert outcome["result"]["autoMinRaw"] == 3550
+    assert outcome["result"]["autoMaxRaw"] == 5000
