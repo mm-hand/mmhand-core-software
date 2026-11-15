@@ -121,8 +121,10 @@ def sweep_to_end(io, joint, end, *, motors, pull, release,
                 r_cmd = config.motor_apply_tendon_delta(release, r_cmd, -counts)
                 released = config.single_tendon_release_counts(release, start_r_abs, r_cmd)
                 if released > config.kSingleTendonMaxReleaseCounts:
-                    return _fail(io, protocol.CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS,
-                                 phase, joint, release, released,
+                    # 纯释放时"放了两圈还没回来"是弹簧回位不足，不是腱断了。
+                    reason = (protocol.CALIB_DIAG_REASON_WEAK_RETURN if pull is None
+                              else protocol.CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS)
+                    return _fail(io, reason, phase, joint, release, released,
                                  config.kSingleTendonMaxReleaseCounts, released, bitmap)
             targets[release] = r_cmd
         if hold is not None:

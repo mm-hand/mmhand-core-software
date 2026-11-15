@@ -1117,6 +1117,16 @@
         "Check the spool/winding direction and remove any trapped slack in the tendon path.",
         "Recalibrate after the tendon is confirmed to move the joint."
       ]
+    },
+    "HOST_CALIB_37": {
+      "title": "Calibration stopped: the joint did not return after the tendon was released",
+      "category": "mechanical",
+      "impact": "The tendon was released past two turns and the joint still did not reach its minimum, so the return travel cannot be measured.",
+      "steps": [
+        "Move the joint by hand and confirm it returns freely to its minimum (check the spring, the neighbouring finger and the tendon path).",
+        "Re-capture Manual Min/Max if the current endpoints do not match where the joint actually stops.",
+        "Recalibrate once the joint returns on its own."
+      ]
     }
   }
 }

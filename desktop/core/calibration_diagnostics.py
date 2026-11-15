@@ -220,6 +220,11 @@ CALIBRATION_DIAGNOSTICS: Dict[int, CalibrationDiagnosticSpec] = {
         ("wound_counts", "manual_span_counts", "encoder_raw", "motor_mask"),
         "Check that the tendon is attached and follows the motor; remove trapped slack and verify the winding direction.",
     ),
+    protocol.CALIB_DIAG_REASON_WEAK_RETURN: _spec(
+        "Joint did not return when the tendon was released",
+        ("released_counts", "limit_counts", "encoder_raw", "motor_mask"),
+        "The spring or linkage could not bring the joint back. Free the joint, then re-capture Manual Min/Max.",
+    ),
 }
 
 

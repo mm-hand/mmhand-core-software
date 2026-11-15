@@ -162,7 +162,7 @@ def test_sweep_caps_a_runaway_release():
     outcome = sweep.sweep_to_end(io, 1, sweep.END_MIN, motors=(motor,), pull=None,
                                  release=motor, params=params)
     assert outcome.point is None
-    assert outcome.reason == protocol.CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS
+    assert outcome.reason == protocol.CALIB_DIAG_REASON_WEAK_RETURN
 
 
 def test_sweep_propagates_publish_failure():
@@ -240,7 +240,7 @@ def test_release_does_not_accept_the_start_position():
     io.loads[motor] = 0
     outcome = sweep.sweep_to_end(io, 1, sweep.END_MIN, motors=(motor,), pull=None, release=motor)
     assert outcome.point is None
-    assert outcome.reason == protocol.CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS
+    assert outcome.reason == protocol.CALIB_DIAG_REASON_WEAK_RETURN
 
 
 def test_run_single_accepts_a_spring_that_stops_short():
