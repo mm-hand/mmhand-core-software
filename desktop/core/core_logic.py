@@ -158,6 +158,14 @@ _ABS_ZERO_PLAN = _CoordinatePlan(
     invalidation_reason="servo_abs_rebase_zero",
 )
 
+# Release/Manual Prepare 只改变硬件 turn0 并放绳，不产生可用的恢复基准：
+# 旧锚点必须作废，但新坐标不能被写成恢复锚点。否则一次可选记账的写盘失败
+# 会把“待确认坐标”留在内存里，挡住之后所有坐标事务（2026-11-15 事件）。
+_ABS_ZERO_INVALIDATE_PLAN = _ABS_ZERO_PLAN._replace(
+    service_result=lambda self, state: self._service_servo_rebase_zero_invalidate_only(state),
+    success_message="servo ABS rebased; previous anchors invalidated",
+)
+
 class ManualPrepareResult(NamedTuple):
     """Device Check 全手预松事务结果；掩码用于精确失效本地缓存。"""
 
@@ -1897,16 +1905,41 @@ class HandController:
                     with self._multiturn_anchor_capture_lock:
                         self._multiturn_anchor_capture_blocked_mask |= eligible
 
+    def _service_servo_rebase_zero_invalidate_only(self, state: HandModel) -> None:
+        """Release 只作废旧坐标锚点，不把维护动作写成新的多圈恢复锚点。
+
+        放绳后的坐标不是可用的恢复基准，写新锚点只让一次可选记账决定后续
+        坐标事务能否继续；因此这里只失效、不采集、不落盘，也不会留下
+        ``_servo_rebase_zero_capture_mask`` 阻塞下一次事务。
+        """
+        with self._multiturn_io_lock:
+            device_id = self.servo_abs_zero_device_id(state)
+            if not device_id or device_id != self._servo_rebase_zero_device_id:
+                return
+            if self._servo_rebase_zero_request_connection != self._servo_abs_zero_connection_generation:
+                return
+            unresolved = self._servo_rebase_zero_unresolved_mask
+            if not unresolved or not self._servo_abs_zero_result_matches(
+                state, self._servo_rebase_zero_baseline_token,
+                self._servo_rebase_zero_sent_at, unresolved,
+            ):
+                return
+            self._invalidate_servo_rebase_zero_anchors(unresolved)
+            self._servo_rebase_zero_capture_mask = 0
+            self._servo_rebase_zero_unresolved_mask = 0
+
     def rebase_servo_abs_zero(
         self, motor_mask: int, *, cancelled=lambda: False, send_gate=None,
+        capture_anchor: bool = True,
     ) -> ServoRebaseZeroResult:
         """静止时将所选电机当前位置校准到原生 ABS 2048；调用者先释放运动 owner。
 
         P4用0x0B校正并以正常原生反馈确认；主机只提交一次，未知结果仅查询。
+        ``capture_anchor=False`` 供 Release 使用：只作废旧锚点，不采集新锚点。
         """
         return self._set_servo_abs_zero(
             motor_mask, CMD_MOTOR_ABS_ZERO, "servo_rebase_zero",
-            cancelled=cancelled, send_gate=send_gate,
+            cancelled=cancelled, send_gate=send_gate, capture_anchor=capture_anchor,
         )
 
     def zero_direct_motor_abs(
@@ -1944,14 +1977,19 @@ class HandController:
 
     def _set_servo_abs_zero(
         self, motor_mask: int, command_id: int, command_name: str,
-        *, cancelled=lambda: False, send_gate=None,
+        *, cancelled=lambda: False, send_gate=None, capture_anchor: bool = True,
     ) -> ServoRebaseZeroResult:
-        """F0/F1共用一笔P4事务，不从主机重复改写电机。"""
+        """F0/F1共用一笔P4事务，不从主机重复改写电机。
+
+        ``capture_anchor=False`` 只作废旧坐标锚点（Release），不把新坐标写进
+        标定包；标定和 Direct 置零仍按默认值采集新锚点。
+        """
         mask = int(motor_mask)
         if mask <= 0 or mask & ~((1 << MOTOR_COUNT) - 1):
             raise ValueError("servo ABS rebase requires a non-zero valid motor mask")
+        plan = _ABS_ZERO_PLAN if capture_anchor else _ABS_ZERO_INVALIDATE_PLAN
         ok, message, success, failed, token = self._coordinate_transaction(
-            mask, _ABS_ZERO_PLAN, command_name, cancelled, send_gate, SERVO_REBASE_ZERO_ACK_TIMEOUT_S,
+            mask, plan, command_name, cancelled, send_gate, SERVO_REBASE_ZERO_ACK_TIMEOUT_S,
             SERVO_REBASE_ZERO_RESULT_TIMEOUT_S + mask.bit_count(),
         )
         return ServoRebaseZeroResult(ok, message, token, success, failed)
@@ -2172,7 +2210,7 @@ class HandController:
     def _manual_prepare_reset(self, pending_mask, cancelled, motion_gate):
         """归零硬件圈数并作废旧标定；返回 (结果元组, 失败结果)。"""
         result = self.rebase_servo_abs_zero(
-            pending_mask, cancelled=cancelled, send_gate=motion_gate)
+            pending_mask, cancelled=cancelled, send_gate=motion_gate, capture_anchor=False)
         ok, reset_message = result.ok, result.message
         reset_mask, failed_mask = result.success_motor_mask, result.failed_motor_mask
         invalidated_joint_mask = joint_mask_for_motor_mask(reset_mask)
