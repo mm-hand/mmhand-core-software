@@ -29,16 +29,20 @@ inline constexpr uint32_t kStepPeriodMs = 50;       ///< 保持原 Pull Joint in
 inline constexpr int32_t kTightenStepCounts = 60;  ///< 主执行器每步收绳量。
 inline constexpr int32_t kReleaseStepCounts = 30;  ///< 双腱副执行器每步放绳量。
 inline constexpr int32_t kDualTightenStepCounts = 30; ///< 越界阶段双腱同步收/放各 30 counts。
-inline constexpr int32_t kDualTensionStepCounts = 30; ///< 入区后每步收绳 30 counts（600 counts/s）。
+inline constexpr int32_t kDualTensionStepCounts = 45; ///< 入区后每步收绳 45 counts（900 counts/s）。
+// 舵机自身速度参数默认只有 400（约 400 counts/s），张紧步长即使给到
+// 900 counts/s 也会被它卡住；张紧阶段单独下发更高的速度参数。
+inline constexpr uint16_t kDualTensionSpeedCountsPerSec = 900;
 inline constexpr int16_t kDualTargetLoad = 250;
 inline constexpr uint32_t kDualWorkspaceTimeoutMs = 6000;
-inline constexpr uint32_t kDualTensionTimeoutMs = 4000;
+inline constexpr uint32_t kDualTensionTimeoutMs = 6000;
 inline constexpr int32_t kDualWorkspaceEnterMarginCounts = 24; ///< 进入工作区内部的深度，与 READY 入口容差一致。
 inline constexpr uint8_t kInsideStableSamples = 3; ///< READY 连续确认帧数。
 
 bool appendMotorTarget(ServoTargetBatch_t* batch,
                        uint8_t motorChannel,
-                       int32_t targetAbs)
+                       int32_t targetAbs,
+                       uint16_t speed = SERVO_TARGET_SPEED_DEFAULT)
 {
     if (!batch || batch->count >= SERVO_TARGET_BATCH_MAX ||
         !isMotorChannelValid(motorChannel)) {
@@ -47,7 +51,7 @@ bool appendMotorTarget(ServoTargetBatch_t* batch,
     ServoTargetCommand_t& command = batch->commands[batch->count++];
     command.motorChannel = motorChannel;
     command.position = targetAbs;
-    command.speed = SERVO_TARGET_SPEED_DEFAULT;
+    command.speed = speed;
     command.acc = SERVO_TARGET_ACC_DEFAULT;
     return true;
 }
@@ -251,9 +255,9 @@ void stepPullJointIntoWorkspaceController(SystemRuntimeContext* sharedData, uint
         }
         if (phase == 2 && nowMs - runtime.dualPhaseBeginMs[joint] >= kDualTensionTimeoutMs) {
             FW_LOG_INFO_PRINTF(
-                "[PULL JOINT INTO WORKSPACE] tension timeout J%02u M%02u load=%d pos=%ld elapsed=%lu\r\n",
+                "[PULL JOINT INTO WORKSPACE] tension timeout J%02u M%02u load=%d pos=%ld outside=%ld elapsed=%lu\r\n",
                 (unsigned)joint, (unsigned)tight, (int)load,
-                (long)servo.servoAngles[tight],
+                (long)servo.servoAngles[tight], (long)outside,
                 (unsigned long)(nowMs - runtime.dualPhaseBeginMs[joint]));
             finish(sharedData, false, PULL_JOINT_INTO_WORKSPACE_REASON_TIMEOUT, nowMs);
             return;
@@ -310,29 +314,56 @@ void stepPullJointIntoWorkspaceController(SystemRuntimeContext* sharedData, uint
                 (long)appliedTarget,
                 (unsigned long)(nowMs - runtime.dualPhaseBeginMs[joint]));
         }
-        if (!appendMotorTarget(&batch, motor, appliedTarget)) {
+        if (!appendMotorTarget(&batch, motor, appliedTarget,
+                               phase == 2 ? kDualTensionSpeedCountsPerSec
+                                          : SERVO_TARGET_SPEED_DEFAULT)) {
             finish(sharedData, false, PULL_JOINT_INTO_WORKSPACE_REASON_TARGET_PUBLISH_FAILED, nowMs);
             return;
         }
         movedMotorMask |= 1UL << motor;
         if (phase == 1) {
+            const int32_t releaseCurrent = servo.servoAngles[release];
             const int32_t releaseTarget = motorApplyTendonDelta(release,
-                servo.servoAngles[release], -kReleaseStepCounts);
+                releaseCurrent, -kReleaseStepCounts);
             int32_t releaseLow = 0, releaseHigh = 0;
             const bool releaseRange = tendonCalibrationMotorAbsRangeWithMargins(
                 calibration.result, ri, release,
                 parameters[mmhand::control::OutputLutReleaseMarginCounts],
                 parameters[mmhand::control::OutputLutTightMarginCounts],
                 &releaseLow, &releaseHigh);
-            if (!releaseRange || releaseTarget < releaseLow || releaseTarget > releaseHigh) {
+            // Mirror the tightening side: the antagonist can sit outside its
+            // calibrated LUT range after the joint settled on a stop. A release
+            // step that moves it back toward the range is legal, so clamp the
+            // first target onto the boundary instead of rejecting the session.
+            const bool releasingInward =
+                (releaseCurrent > releaseHigh && releaseTarget < releaseCurrent) ||
+                (releaseCurrent < releaseLow && releaseTarget > releaseCurrent);
+            int32_t appliedReleaseTarget = releaseTarget;
+            if (releasingInward) {
+                if (releaseCurrent > releaseHigh && appliedReleaseTarget > releaseHigh) {
+                    appliedReleaseTarget = releaseHigh;
+                }
+                if (releaseCurrent < releaseLow && appliedReleaseTarget < releaseLow) {
+                    appliedReleaseTarget = releaseLow;
+                }
+            }
+            if (!releaseRange ||
+                appliedReleaseTarget < releaseLow || appliedReleaseTarget > releaseHigh) {
                 FW_LOG_INFO_PRINTF(
-                    "[PULL JOINT INTO WORKSPACE] LUT reject J%02u M%02u release target=%ld range=[%ld,%ld]\r\n",
-                    (unsigned)joint, (unsigned)release, (long)releaseTarget,
-                    (long)releaseLow, (long)releaseHigh);
+                    "[PULL JOINT INTO WORKSPACE] LUT reject J%02u M%02u release current=%ld target=%ld range=[%ld,%ld]\r\n",
+                    (unsigned)joint, (unsigned)release, (long)releaseCurrent,
+                    (long)releaseTarget, (long)releaseLow, (long)releaseHigh);
                 finish(sharedData, false, PULL_JOINT_INTO_WORKSPACE_REASON_TARGET_PUBLISH_FAILED, nowMs);
                 return;
             }
-            if (!appendMotorTarget(&batch, release, releaseTarget)) {
+            if (appliedReleaseTarget != releaseTarget) {
+                FW_LOG_INFO_PRINTF(
+                    "[PULL JOINT INTO WORKSPACE] release clamped J%02u M%02u current=%ld target=%ld applied=%ld range=[%ld,%ld]\r\n",
+                    (unsigned)joint, (unsigned)release, (long)releaseCurrent,
+                    (long)releaseTarget, (long)appliedReleaseTarget,
+                    (long)releaseLow, (long)releaseHigh);
+            }
+            if (!appendMotorTarget(&batch, release, appliedReleaseTarget)) {
                 finish(sharedData, false, PULL_JOINT_INTO_WORKSPACE_REASON_TARGET_PUBLISH_FAILED, nowMs);
                 return;
             }

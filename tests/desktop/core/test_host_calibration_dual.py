@@ -35,6 +35,7 @@ class FakeIO:
         self.reject_publish = False
         self.selected_joint_mask = 0
         self.selected_motor_mask = 0
+        self.workspace_helpers = []
 
     def now_ms(self):
         return self.t
@@ -88,6 +89,9 @@ class FakeIO:
 
     def trace(self, *values, **details):
         self.traces.append((values, details))
+
+    def note_workspace_helper(self, joint):
+        self.workspace_helpers.append(joint)
 
     def snapshot(self):
         return {"servo_feedback_age_ms": self.age,
@@ -346,6 +350,22 @@ def test_pose_helper_drives_the_helper_to_its_end(pose, end_raw):
     io.on_publish = link(io, 4, primary, secondary)
     assert machine(io, 0)._pose_helper(4, pose) is True
     assert abs(io.encoder_values[4] - end_raw) <= 8
+
+
+def test_pose_helper_records_the_moved_helper_for_the_finish_pull():
+    io = FakeIO()
+    io.encoder_values[4] = 3500
+    primary, secondary = config.joint_motors(4)
+    io.on_publish = link(io, 4, primary, secondary)
+    assert machine(io, 0)._pose_helper(4, dual.POSE_B) is True
+    assert io.workspace_helpers == [4]
+
+
+def test_pose_helper_skip_leaves_the_helper_out_of_the_finish_pull():
+    io = FakeIO()
+    io.encoder_values[4] = 5000
+    assert machine(io, 0)._pose_helper(4, dual.POSE_B) is True
+    assert io.workspace_helpers == []
 
 
 def test_pose_helper_failure_reports_workspace_diagnostic():

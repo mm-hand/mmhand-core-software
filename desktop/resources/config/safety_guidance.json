@@ -477,13 +477,13 @@
       ]
     },
     "3407": {
-      "title": "The controller could not send the return target",
-      "category": "internal",
-      "impact": "The controller reported an internal problem.",
+      "title": "A recovery motor is outside its calibrated window",
+      "category": "workspace",
+      "impact": "The return movement stopped because a tendon motor sits outside the range recorded by motor calibration.",
       "steps": [
-        "Stop using motion controls and open Details.",
-        "When the hand is safe, restart the controller and reconnect.",
-        "If it happens again, save the session log for support."
+        "Open Motor Calibration and compare the affected motor's ABS with its Min/Max limits.",
+        "Use Direct Control to move that motor back inside its window, or recalibrate the affected joint.",
+        "Retry Enable."
       ]
     },
     "3408": {

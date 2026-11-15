@@ -821,6 +821,35 @@ def test_enable_recovery_uses_p4_result(hand, monkeypatch, outcome):
         assert 'ACK=9' in message
 
 
+def test_enable_recovery_failure_names_the_motor_outside_its_window(hand, monkeypatch):
+    state = hand._controller.current_state
+    state.pull_joint_into_workspace_sequence = 7
+    state.has_servo_angle_data = True
+    state.motor_abs_limit_valid_bitmap = 1 << 6
+    state.motor_abs_limit_min[6] = 2498
+    state.motor_abs_limit_max[6] = 4706
+    state.servo_angles[6] = 4797
+    comm = Mock()
+    hand._controller.comm = comm
+    comm.wait_for_ack.return_value = (0, 0, 2)
+    epoch = hand._application_epoch
+
+    def rope(mask):
+        state.pull_joint_into_workspace_sequence = 8
+        state.pull_joint_into_workspace_joint_mask = mask
+        state.pull_joint_into_workspace_status = 3
+        state.pull_joint_into_workspace_reason = 7
+        state.monotonic_received['system_status_last_rx_ts'] = time.monotonic()
+        return True
+
+    monkeypatch.setattr(hand, 'pull_joint_into_workspace', Mock(side_effect=rope))
+    monkeypatch.setattr(hand, '_wait_application', lambda predicate, *_: predicate(state))
+    ok, message = hand._recover_enable_workspace(1 << 4, epoch, comm)
+    assert not ok
+    assert 'reason=7' in message
+    assert 'M06 ABS 4797 outside [2498,4706]' in message
+
+
 @pytest.mark.parametrize('recover', [False, True])
 def test_enable_uses_p4_readiness_and_holds_actual_angle(hand, monkeypatch, recover):
     from desktop.core.hand_backend import JointCommandResult

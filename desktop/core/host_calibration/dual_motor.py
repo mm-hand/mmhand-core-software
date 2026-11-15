@@ -194,6 +194,9 @@ class _DualMachine:
             return False
         self.io.trace("WORKSPACE_ESTABLISHED", helper, pose=pose,
                       angle=round(outcome.point.angle, 3), encoder=outcome.point.encoder)
+        note_helper = getattr(self.io, 'note_workspace_helper', None)
+        if callable(note_helper):
+            note_helper(helper)
         return True
 
     def prepare_workspace(self):

@@ -978,6 +978,36 @@ def test_host_zero_finish_failure_stops_ordinary_motion(io, monkeypatch):
     io.controller.comm.send_command.assert_called_once_with('stop')
 
 
+def test_finish_session_pulls_moved_workspace_helpers_back(io, monkeypatch):
+    from desktop.core.host_calibration import finish
+
+    state = io.controller.current_state
+    io.selected_joint_mask = 1 << 10
+    state.auto_calibration_valid_bitmap = (1 << 10) | (1 << 4)
+    io.note_workspace_helper(4)
+    io.note_workspace_helper(12)  # 无标定的辅助关节不能进收绳范围
+    monkeypatch.setattr(io, '_release_motion', lambda: True)
+    scope = MagicMock(return_value=True)
+    io.controller.set_active_scope = scope
+    pull_masks = []
+
+    def ack(command, value):
+        if command == runtime.CMD_PULL_JOINT_INTO_WORKSPACE:
+            pull_masks.append(value)
+            state.pull_joint_into_workspace_sequence += 1
+            state.pull_joint_into_workspace_status = 2
+        return True
+
+    monkeypatch.setattr(io, '_ack', ack)
+    monkeypatch.setattr(finish, 'finish_dual_zero', lambda *_args: (True, 'done'))
+    assert io.finish_session(True, 1 << 10, 0) == (True, 'done')
+    motors, joints = scope.call_args.args[:2]
+    assert joints == (1 << 10) | (1 << 4)
+    assert motors == (1 << 5) | (1 << 6) | (1 << 13)
+    assert pull_masks == [('pull_joint_into_workspace', joints)]
+
+
+
 @pytest.mark.parametrize('target', [30000, -30000])
 def test_active_joint_abs_trigger_requests_rebase_retry(io, monkeypatch, target):
     monkeypatch.setattr(io, '_ensure_motion', lambda: True)

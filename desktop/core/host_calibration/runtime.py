@@ -92,6 +92,7 @@ class HostCalibrationIO:
         self._initial_prepared = False
         self._coordinates_prepared = False
         self._helper_restore_mask = 0
+        self._workspace_helpers = set()
         self._motion_started = False
         self._workspace_mask = 0
         self._motion_scope = self.selected_motor_mask
@@ -1239,6 +1240,11 @@ class HostCalibrationIO:
         """本轮 host 生成且已成功写回的数据，收尾不依赖 P4 异步回显。"""
         return deepcopy(self._committed_joint_results.get(int(joint)))
 
+    def note_workspace_helper(self, joint):
+        """让位扫描真正移动过的辅助关节，收尾时一并拉回工作区。"""
+        if 0 <= int(joint) < ENCODER_COUNT:
+            self._workspace_helpers.add(int(joint))
+
     def finish_session(self, success, completed, failed):
         finished_ok = False
         # Pull Joint into Workspace 失败是可预期结果：P4 已断扭矩并停在 JOINT_BEYOND_WORKSPACE/IDLE，
@@ -1264,16 +1270,29 @@ class HostCalibrationIO:
                                     self.selected_motor_mask, self.selected_joint_mask, True)
                             break
                         time.sleep(0.005)
-                return False, 'calibration stopped; completed joints retained'
+                note = ''
+                if self._workspace_helpers:
+                    note = ('; helper joints left at their yield pose: '
+                            + ', '.join(f'J{joint:02d}' for joint in sorted(self._workspace_helpers))
+                            + ' (Enable pulls them back)')
+                return False, 'calibration stopped; completed joints retained' + note
             if not self._release_motion():
                 return False, 'calibration complete; motion owner release failed'
-            if not self.controller.set_active_scope(self.selected_motor_mask,
-                                                    self.selected_joint_mask, True):
+            # 让位过的辅助关节也一起拉回工作区；没有标定的辅助关节不进范围，
+            # 否则 P4 会以 CALIBRATION_REQUIRED 拒绝整次收绳。
+            state = self._state()
+            helpers = sum(1 << joint for joint in self._workspace_helpers
+                          if state.auto_calibration_valid_bitmap & (1 << joint))
+            finish_joints = self.selected_joint_mask | helpers
+            finish_motors = sum(1 << motor for joint in range(ENCODER_COUNT)
+                                if finish_joints & (1 << joint)
+                                for motor in joint_motors(joint))
+            if not self.controller.set_active_scope(finish_motors, finish_joints, True):
                 return False, 'calibration complete; active scope restore failed'
             if not self._ack(CMD_START, 'start'):
                 return False, 'calibration complete; P4 preparation failed'
             baseline = self._state().pull_joint_into_workspace_sequence
-            if not self._ack(CMD_PULL_JOINT_INTO_WORKSPACE, ('pull_joint_into_workspace', self.selected_joint_mask)):
+            if not self._ack(CMD_PULL_JOINT_INTO_WORKSPACE, ('pull_joint_into_workspace', finish_joints)):
                 return False, 'calibration complete; Pull Joint into Workspace start failed'
             if not self._wait(lambda: self._state().pull_joint_into_workspace_sequence != baseline and
                               self._state().pull_joint_into_workspace_status in (2, 3), 30000):

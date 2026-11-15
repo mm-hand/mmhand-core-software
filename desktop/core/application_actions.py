@@ -880,7 +880,22 @@ class ApplicationActions(IdResetActions):
             return False, 'Enable cancelled or workspace recovery result changed'
         if state.pull_joint_into_workspace_status != 2:
             reason = int(state.pull_joint_into_workspace_reason)
-            return False, IssueMessage(f'P4 workspace recovery failed (reason={reason})',
+            beyond = []
+            if state.has_servo_angle_data:
+                for joint in range(ENCODER_COUNT):
+                    if not mask & (1 << joint):
+                        continue
+                    for motor in joint_motors(joint):
+                        if not state.motor_abs_limit_valid_bitmap & (1 << motor):
+                            continue
+                        low = int(state.motor_abs_limit_min[motor])
+                        high = int(state.motor_abs_limit_max[motor])
+                        abs_value = int(state.servo_angles[motor])
+                        if low > high or low <= abs_value <= high:
+                            continue
+                        beyond.append(f'M{motor:02d} ABS {abs_value} outside [{low},{high}]')
+            detail = ('; motors outside their calibrated window: ' + ', '.join(beyond)) if beyond else ''
+            return False, IssueMessage(f'P4 workspace recovery failed (reason={reason}){detail}',
                                        f'ROP-{3400 + reason}' if 1 <= reason <= 9 else 'HOST_ACTION_FAILED')
         return True, ''
 
