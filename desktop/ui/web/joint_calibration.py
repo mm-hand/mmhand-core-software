@@ -9,7 +9,8 @@
 """
 from nicegui import ui
 from .common import (FINGERS, finger_cards, selection, label, show, quality, joint_label, display_joints,
-                     maintenance_allowed, maintenance_button, json_status, select_all_and_request, encoder_badge)
+                     maintenance_allowed, maintenance_button, json_status, select_all_and_request, encoder_badge,
+                     motor_badge)
 
 BADGE_TOOLTIP = ('Manual endpoint state. Release keeps the Manual endpoints; '
                  'automatic calibration state is on Motor Calibration.')
@@ -46,6 +47,7 @@ def build(hand, act, load_calibration, confirm):
                             refreshers.append(selection(hand, 'selected_joints', [j], joint_label(j)))
                             badge = quality()
                             elec = encoder_badge()
+                            loss = motor_badge()
                         with ui.row().classes('items-center gap-2 flex-nowrap'):
                             raw = label().classes('text-base font-bold text-slate-900 whitespace-nowrap')
                             with raw:
@@ -58,7 +60,7 @@ def build(hand, act, load_calibration, confirm):
                                 ui.button('Set Max', on_click=lambda j=j: act(lambda: hand.request_manual_capture(j, 'max'))).props('dense outline'))
                             capture_status = label()
                         info = label().classes('text-xs leading-tight')
-                    def refresh(snapshot, j=j, badge=badge, info=info, raw=raw, elec=elec,
+                    def refresh(snapshot, j=j, badge=badge, info=info, raw=raw, elec=elec, loss=loss,
                                 min_value=min_value, max_value=max_value,
                                 min_button=min_button, max_button=max_button,
                                 capture_status=capture_status):
@@ -77,6 +79,7 @@ def build(hand, act, load_calibration, confirm):
                                     + BADGE_TOOLTIP)
                         badge(row['joint_quality'], hint)
                         elec(row.get('encoder_state'), j)
+                        loss(snapshot, joint=j)
                         info.set_text(detail_text(row))
                     refreshers.append(refresh)
     def refresh(snapshot):

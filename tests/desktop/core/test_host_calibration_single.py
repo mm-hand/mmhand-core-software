@@ -1,338 +1,216 @@
-"""Recorded mechanical paths exercise the original single-tendon decision tree."""
+"""Single-tendon calibration: absolute-angle endpoint sweeps.
 
-from dataclasses import replace
+A single tendon joint is wound to URDF Max, then paid out until the spring
+returns it to URDF Min. Both endpoints are the absolute joint angle freezing
+near the commanded end - there is no travel threshold.
+"""
 
-from desktop.core import protocol as p
-from desktop.core.host_calibration.config import AutoCalibrationParams, kSingleTendonMaxReleaseCounts
-from desktop.core.host_calibration.math import TendonRawFitBuffer
-from desktop.core.host_calibration.time_alignment import TimeAlignmentError
-from desktop.core.host_calibration.single_motor import (
-    AutoCalibState, JointCalibContext, run_single, step_single,
-)
+import pytest
+
+from desktop.core import protocol
+from desktop.core.host_calibration import config, single_motor, sweep
+from desktop.core.host_calibration.math import manual_angle_deg
 
 
 class FakeIO:
-    def __init__(self):
-        self.ms = 0
-        self.abs = 0
-        self.encoder_value = 2000
-        self.raw_value = 2000
-        self.load = 0
-        self.owner = True
-        self.limits = {}
+    def __init__(self, low_raw=3500, high_raw=5000, start_raw=3500):
+        self.t = 0
+        self.stop_at = 10 ** 9
+        self.values = {motor: 0 for motor in range(27)}
+        self.loads = {motor: 0 for motor in range(27)}
+        self.encoder_value = start_raw
+        self.low_raw, self.high_raw = low_raw, high_raw
+        self.commands = []
         self.diags = []
         self.traces = []
-        self.commands = []
-        self.dynamic = False
-        self.publish_ok = True
-        self.holds_ok = True
-        self.range = (-30000, 30000)
+        self.limits = {}
+        self.online = (1 << 27) - 1
+        self.on_publish = None
+        self.reject_publish = False
+        self.hold = {}
+        self.aa_ready = True
+        self.ranges = {motor: (-50000, 50000) for motor in range(27)}
 
     def now_ms(self):
-        return self.ms
+        return self.t
 
-    def sleep_ms(self, value):
-        self.ms += value
-        assert self.ms < 120000, "fixture trajectory did not converge"
+    def sleep_ms(self, ms):
+        self.t += ms
 
     def owns_control(self):
-        return self.owner
-
-    def encoder(self, joint):
-        return self.encoder_value
+        return self.t < self.stop_at
 
     def encoder_raw(self, joint):
-        return self.raw_value
+        return self.encoder_value
+
+    def encoder(self, joint):
+        return self.encoder_raw(joint)
+
+    def angle(self, joint):
+        return manual_angle_deg(self, joint)
 
     def servo_abs(self, motor):
-        return self.abs
+        return self.values.get(motor) if self.online & (1 << motor) else None
 
     def servo_raw(self, motor):
-        return None if self.abs is None else self.abs % 4096
+        value = self.servo_abs(motor)
+        return None if value is None else value % 4096
 
     def servo_load(self, motor):
-        return self.load
+        return self.loads.get(motor) if self.online & (1 << motor) else None
 
     def logical_range(self, motor):
-        return self.range
-
-    def inside_limit(self, motor, target):
-        return self.range[0] <= target <= self.range[1]
-
-    def clear_limits(self, joint):
-        self.limits.clear()
-
-    def set_limit(self, motor, lo, hi):
-        self.limits[motor] = (lo, hi)
-
-    def manual_reference(self, joint):
-        return {"valid": True, "minRaw": 2000, "maxRaw": 6000}
-
-    def urdf_limits(self, joint):
-        return (0.0, 83.0)
-
-    def urdf_config_crc(self):
-        return 0x2BC44010
-
-    def hold_targets_except(self, ordered, active, skip, params):
-        return {} if self.holds_ok else None
-
-    def prepare_finger_aa(self, joint):
-        return True, ''
+        return self.ranges.get(motor)
 
     def publish(self, targets, speed, acc):
-        self.commands.append((self.ms, dict(targets), speed, acc))
-        if self.dynamic and 2 in targets:
-            self.abs = targets[2]
-            self.encoder_value = 2000 + 4 * max(0, min(1000, self.abs))
-            self.raw_value = self.encoder_value
-            self.load = 250 if self.abs >= 1000 else 0
-        return self.publish_ok
+        if self.reject_publish:
+            return False
+        previous = dict(self.values)
+        self.commands.append((self.t, dict(targets), speed, acc))
+        if self.on_publish:
+            self.on_publish(self, targets, previous)
+        self.values.update(targets)
+        return True
 
     def diag(self, *values):
         self.diags.append(values)
 
-    def diag_if_empty(self, *values):
-        if not self.diags:
-            self.diag(*values)
+    def trace(self, *values, **details):
+        self.traces.append((values, details))
 
-    def trace(self, state, joint, motor=255, **details):
-        self.traces.append((state, joint, motor, details))
+    def clear_limits(self, joint):
+        for motor in config.joint_motors(joint):
+            self.limits.pop(motor, None)
+
+    def set_limit(self, motor, minimum, maximum):
+        self.limits[motor] = (minimum, maximum)
+
+    def manual_reference(self, joint):
+        return {"valid": True, "minRaw": self.low_raw, "maxRaw": self.high_raw}
+
+    def urdf_limits(self, joint):
+        return 0.0, 90.0
+
+    def urdf_config_crc(self):
+        return 7
+
+    def prepare_finger_aa(self, joint):
+        return (self.aa_ready, '' if self.aa_ready else 'AA mapping invalid')
+
+    def hold_targets_except(self, joints, active_joint, skip_joint_mask, params):
+        return None if self.hold is None else dict(self.hold)
 
 
-def tighten_context(io):
-    ctx = JointCalibContext(1)
-    step_single(ctx, io, AutoCalibrationParams(), {})
-    assert ctx.state == AutoCalibState.TIGHTEN
-    return ctx
+def link(io, motor, start_raw):
+    """Encoder follows the motor travel; clamped at the two mechanical stops."""
+    pose = {"raw": start_raw, "abs": io.values[motor]}
+
+    def hook(state, targets, previous):
+        current = targets.get(motor, previous.get(motor, pose["abs"]))
+        raw = pose["raw"] + (current - pose["abs"])
+        pose["raw"] = min(io.high_raw, max(io.low_raw, raw))
+        pose["abs"] = current
+        state.encoder_value = pose["raw"]
+        state.loads[motor] = 200
+    return hook
 
 
-def release_context(io):
-    ctx = tighten_context(io)
-    ctx.start_found = True
-    ctx.start_encoder = io.encoder_value
-    ctx.start_servo_abs = io.abs
-    return ctx
+def frozen(io, raw):
+    def hook(state, targets, previous):
+        state.encoder_value = raw
+    return hook
 
 
-def test_tight_end_requires_load_motion_and_stall_in_same_200ms_window():
+def run(io, params=None):
+    return single_motor.run_single(io, 1, params or config.AutoCalibrationParams(),
+                                   (1,), 0, 0, 1 << 1)
+
+
+def test_sweep_reaches_max():
+    io = FakeIO(start_raw=3500)
+    motor = config.joint_motors(1)[0]
+    io.on_publish = link(io, motor, 3500)
+    outcome = sweep.sweep_to_end(io, 1, sweep.END_MAX, motors=(motor,), pull=motor, release=None)
+    assert outcome.point is not None
+    assert abs(outcome.point.angle - 90.0) <= config.kEndToleranceDeg
+
+
+def test_sweep_release_reaches_min_on_the_spring():
+    io = FakeIO(start_raw=5000)
+    motor = config.joint_motors(1)[0]
+    io.on_publish = link(io, motor, 5000)
+    outcome = sweep.sweep_to_end(io, 1, sweep.END_MIN, motors=(motor,), pull=None, release=motor)
+    assert outcome.point is not None
+    assert abs(outcome.point.angle - 0.0) <= config.kEndToleranceDeg
+
+
+def test_sweep_does_not_treat_a_frozen_joint_as_an_endpoint():
+    io = FakeIO(start_raw=4300)
+    motor = config.joint_motors(1)[0]
+    io.on_publish = frozen(io, 4300)
+    io.loads[motor] = 250
+    outcome = sweep.sweep_to_end(io, 1, sweep.END_MAX, motors=(motor,), pull=motor, release=None)
+    assert outcome.point is None
+    assert outcome.reason == protocol.CALIB_DIAG_REASON_END_NOT_REACHED
+
+
+def test_sweep_caps_a_runaway_release():
+    io = FakeIO(start_raw=4300)
+    motor = config.joint_motors(1)[0]
+    io.on_publish = frozen(io, 4300)
+    params = config.AutoCalibrationParams(tightenSpeedCountsPerSec=20000)
+    outcome = sweep.sweep_to_end(io, 1, sweep.END_MIN, motors=(motor,), pull=None,
+                                 release=motor, params=params)
+    assert outcome.point is None
+    assert outcome.reason == protocol.CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS
+
+
+def test_sweep_propagates_publish_failure():
     io = FakeIO()
-    ctx = tighten_context(io)
-    io.ms, io.abs, io.load = 200, 80, 250
-    io.encoder_value += 100
-    step_single(ctx, io, AutoCalibrationParams(), {})
-    assert not ctx.start_found  # load + motion alone does not satisfy angle stall
-    io.ms, io.abs, io.load = 400, 160, 249
-    step_single(ctx, io, AutoCalibrationParams(), {})
-    assert not ctx.start_found  # motion + stall below load threshold
-    io.ms, io.abs, io.load = 600, 200, 250
-    step_single(ctx, io, AutoCalibrationParams(), {})
-    assert not ctx.start_found  # load + stall but servo moved only 40 counts
-    io.ms, io.abs = 800, 250
-    targets = {}
-    step_single(ctx, io, AutoCalibrationParams(), targets)
-    assert ctx.start_found and ctx.state == AutoCalibState.PRE_RELEASE_SYNC
-    assert targets == {2: 250}
+    motor = config.joint_motors(1)[0]
+    io.reject_publish = True
+    outcome = sweep.sweep_to_end(io, 1, sweep.END_MAX, motors=(motor,), pull=motor, release=None)
+    assert outcome.reason == protocol.CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED
 
 
-def test_pre_release_catches_up_to_actual_and_requires_two_stable_windows():
+def test_run_single_builds_result_and_limits():
     io = FakeIO()
-    ctx = tighten_context(io)
-    ctx.state, ctx.start_found = AutoCalibState.PRE_RELEASE_SYNC, True
-    ctx.pre_release_sync_target_abs = 0
-    io.ms, io.abs = 200, 41
-    targets = {}
-    step_single(ctx, io, AutoCalibrationParams(), targets)
-    assert targets == {2: 41}
-    assert ctx.pre_release_sync_stable_samples == 0
-    io.ms = 400
-    step_single(ctx, io, AutoCalibrationParams(), {})
-    assert ctx.pre_release_sync_stable_samples == 1
-    io.ms = 600
-    step_single(ctx, io, AutoCalibrationParams(), {})
-    assert ctx.state == AutoCalibState.TIGHTEN
-    assert (ctx.command_abs, ctx.start_servo_abs, ctx.start_encoder) == (41, 41, 2000)
-    assert ctx.fit_samples.count == 1 and ctx.fit_samples.next_travel_deg == 5.0
-
-
-def test_two_turn_actual_guard_holds_feedback_and_fails_without_new_release():
-    io = FakeIO()
-    ctx = release_context(io)
-    io.ms, io.abs = 20, -8193
-    targets = {}
-    step_single(ctx, io, AutoCalibrationParams(), targets)
-    assert ctx.state == AutoCalibState.FAILED
-    assert targets == {2: -8193}
-    assert io.diags[-1][0] == p.CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS
-    assert io.diags[-1][4:7] == (8193, 8192, 8193)
-
-
-def test_two_turn_command_guard_runs_before_actual_catches_up_and_boundary_is_allowed():
-    io = FakeIO()
-    ctx = release_context(io)
-    params = replace(AutoCalibrationParams(), tightenSpeedCountsPerSec=50)
-    ctx.command_abs = -8191
-    io.ms = 20
-    targets = {}
-    step_single(ctx, io, params, targets)
-    assert targets == {2: -8192} and ctx.state == AutoCalibState.TIGHTEN
-    io.ms = 40
-    targets = {}
-    step_single(ctx, io, params, targets)
-    assert targets == {2: 0} and ctx.state == AutoCalibState.FAILED
-    assert io.diags[-1][4:7] == (0, kSingleTendonMaxReleaseCounts, 8193)
-
-
-def test_release_angle_stall_requires_two_windows_and_at_least_12_degrees():
-    io = FakeIO()
-    ctx = release_context(io)
-    ctx.start_encoder = 4000
-    ctx.window_start_encoder = 3980
-    io.encoder_value = 3980
-    io.ms, io.abs = 200, -80
-    step_single(ctx, io, AutoCalibrationParams(), {})
-    assert ctx.release_angle_stall_stable == 1 and ctx.state == AutoCalibState.TIGHTEN
-    io.ms, io.abs = 400, -160
-    step_single(ctx, io, AutoCalibrationParams(), {})
-    assert ctx.release_angle_stall_stable == 2 and ctx.state == AutoCalibState.TIGHTEN
-    # 两个稳定窗口也不能绕过12°实际磁编进展。
-    io.ms, io.abs, io.encoder_value = 600, -240, 3900
-    step_single(ctx, io, AutoCalibrationParams(), {})
-    assert ctx.release_angle_stall_stable == 0
-
-
-def test_fractional_per_cycle_command_counts_are_accumulated():
-    io = FakeIO()
-    ctx = tighten_context(io)
-    params = replace(AutoCalibrationParams(), tightenSpeedCountsPerSec=333)
-    commands = []
-    for ms in (20, 40, 60):
-        io.ms = ms
-        targets = {}
-        step_single(ctx, io, params, targets)
-        commands.append(targets[2])
-    assert commands == [6, 13, 19]
-    assert ctx.command_remainder == 980
-
-
-def test_initial_feedback_wait_has_original_1200ms_cutoff_and_reason():
-    io = FakeIO()
-    io.encoder_value = io.raw_value = None
-    ctx = JointCalibContext(1)
-    for ms in (0, 1199):
-        io.ms = ms
-        step_single(ctx, io, AutoCalibrationParams(), {})
-        assert ctx.state == AutoCalibState.INIT
-    io.ms = 1200
-    step_single(ctx, io, AutoCalibrationParams(), {})
-    assert ctx.state == AutoCalibState.FAILED
-    assert io.diags[-1][0] == p.CALIB_DIAG_REASON_ENCODER_ERROR
-
-
-def test_full_mechanical_trajectory_runs_search_sync_release_lut_and_holds_auto_min():
-    io = FakeIO()
-    io.dynamic = True
-    outcome = run_single(io, 1, AutoCalibrationParams(), [1], 0, 0, 1 << 1)
-    assert outcome["success"] and not outcome["aborted"]
+    motor = config.joint_motors(1)[0]
+    io.on_publish = link(io, motor, 3500)
+    outcome = run(io)
+    assert outcome["success"] is True
     result = outcome["result"]
-    assert result["success"] and result["tendonLutValid"]
-    assert result["tendonLutMotor"] == [2, 255]
-    assert result["encoderSpan"] == 4000
-    assert result["angleMax"] == 83.0
-    assert "currentMaxDeg" not in result
-    assert result["zeroServoAbs"] == result["startServoAbs"] + 500
+    assert result["tendonLutValid"] is True
+    assert result["encoderSpan"] == pytest.approx(1500, abs=8)
     assert outcome["limits"] == io.limits
-    events = [event[0] for event in io.traces]
-    assert events.index("START_FOUND") < events.index("PRE_RELEASE_SYNC_READY") < events.index("BEGIN_RELEASE")
-    assert events.index("BEGIN_RELEASE") < events.index("SINGLE_DONE_AT_AUTO_MIN")
-    assert io.commands[-1][1] == {2: result["startServoAbs"]}
-    assert all((speed, acc) == (400, 20) for _, _, speed, acc in io.commands)
-    assert not io.diags
+    assert motor in io.limits
 
 
-def test_single_release_uses_only_aligned_samples_including_both_endpoints():
+def test_run_single_requires_the_tendon_to_move_the_joint():
+    io = FakeIO(start_raw=4300)
+    motor = config.joint_motors(1)[0]
+    io.on_publish = frozen(io, 4300)
+    io.loads[motor] = 200
+    outcome = run(io)
+    assert outcome["success"] is False
+    assert outcome["reason"] == protocol.CALIB_DIAG_REASON_END_NOT_REACHED
+
+
+def test_run_single_hold_failure_is_reported():
     io = FakeIO()
-    io.dynamic = True
-    window = object()
-    fit = TendonRawFitBuffer()
-    for encoder, absolute in ((2000, 777), (4000, 888), (6000, 999)):
-        fit.append(encoder, absolute, 0)
-
-    def begin(joint, motors):
-        assert (joint, motors) == (1, (2,))
-        assert io.traces[-1][0] == 'PRE_RELEASE_SYNC'
-        assert io.abs >= 1000  # Begin after the tight-end hold settles.
-        return window
-
-    def finish(value):
-        assert value is window
-        assert io.encoder_value == 2000
-        return fit
-
-    io.begin_lut_sampling, io.finish_lut_sampling = begin, finish
-    outcome = run_single(io, 1, AutoCalibrationParams(), [1], 0, 0, 2)
-    assert outcome['success']
-    assert fit.count == 3
-    result = outcome['result']
-    assert result['tendonLutMotorAbs'][0][0] == 777
-    assert result['tendonLutMotorAbs'][0][result['tendonLutCount'] - 1] == 999
-    assert result['startServoAbs'] != 777  # Mechanical metadata stays measured.
-    assert io.commands[-1][1] == {2: result['startServoAbs']}
-    assert all((speed, acc) == (400, 20) for _, _, speed, acc in io.commands)
+    motor = config.joint_motors(1)[0]
+    io.on_publish = link(io, motor, 3500)
+    io.hold = None
+    outcome = run(io)
+    assert outcome["success"] is False
+    assert outcome["reason"] == protocol.CALIB_DIAG_REASON_HOLD_TARGET_FAILED
 
 
-def test_single_alignment_failure_holds_actual_without_using_old_samples():
+def test_run_single_aborts_when_the_aa_is_not_ready():
     io = FakeIO()
-    io.dynamic = True
-    io.begin_lut_sampling = lambda *_: object()
-
-    def finish(_window):
-        raise TimeAlignmentError('no common valid raw/ABS time interval')
-
-    io.finish_lut_sampling = finish
-    outcome = run_single(io, 1, AutoCalibrationParams(), [1], 0, 0, 2)
-    assert not outcome['success']
-    assert 'no common valid' in outcome['reason']
-    assert outcome['result'] is None
-    assert io.diags[0][0] == p.CALIB_DIAG_REASON_RESULT_BUILD_FAILED
-    assert io.commands[-1][1] == {2: io.abs}
-    assert io.limits == {}
-
-
-def test_control_hold_and_publish_failures_abort_the_outer_sequence():
-    for failure, expected in (("owner", p.CALIB_DIAG_REASON_CONTROL_LOST),
-                              ("holds_ok", p.CALIB_DIAG_REASON_HOLD_TARGET_FAILED),
-                              ("publish_ok", p.CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED)):
-        io = FakeIO()
-        setattr(io, failure, False)
-        outcome = run_single(io, 1, AutoCalibrationParams(), [1], 0, 0, 2)
-        assert outcome["aborted"] and not outcome["success"]
-        assert io.diags[0][0] == expected
-
-
-def test_lost_feedback_preserves_phase_and_range_is_checked_at_publish():
-    io = FakeIO()
-    ctx = tighten_context(io)
-    io.encoder_value = None
-    step_single(ctx, io, AutoCalibrationParams(), {})
-    assert io.diags[-1][:2] == (p.CALIB_DIAG_REASON_FEEDBACK_LOST, p.CALIB_DIAG_PHASE_FIND_MAX)
-    io = FakeIO()
-    ctx = tighten_context(io)
-    io.ms = 20
-    io.range = (-7, 7)
-    targets = {}
-    step_single(ctx, io, AutoCalibrationParams(), targets)
-    assert ctx.state == AutoCalibState.TIGHTEN
-    assert targets == {2: 8}
-    assert not io.diags
-
-
-def test_outer_publish_failure_preserves_execution_timeout_diagnostic():
-    io = FakeIO()
-    io.publish_ok = False
-    io.diag(p.CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT, p.CALIB_DIAG_PHASE_RELEASE,
-            1, 2, 12, 0, 100, 4)
-    outcome = run_single(io, 1, AutoCalibrationParams(), [1], 0, 0, 2)
-    assert outcome["aborted"]
-    assert len(io.diags) == 1
-    assert io.diags[0][:4] == (p.CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT, p.CALIB_DIAG_PHASE_RELEASE, 1, 2)
+    io.aa_ready = False
+    outcome = run(io)
+    assert outcome["success"] is False
+    assert outcome["aborted"] is True
+    assert outcome["reason"] == 'AA mapping invalid'
+    assert not io.commands

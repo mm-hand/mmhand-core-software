@@ -90,10 +90,6 @@ def _success():
 def machines(monkeypatch):
     calls = []
     outcomes = {}
-    monkeypatch.setattr(flow, "reset_dual_workspace_cache",
-                        lambda io: calls.append(("reset_cache",)))
-    monkeypatch.setattr(flow, "invalidate_dual_workspace_cache_joint",
-                        lambda io, joint: calls.append(("invalidate", joint)))
     monkeypatch.setattr(flow, "build_dynamic_workspace_motor_mask",
                         lambda io, joints, **_: 0)
 
@@ -188,8 +184,7 @@ def test_dual_and_single_joints_use_original_speed_and_motion_window(machines):
         if call[0] not in ("single", "dual"):
             continue
         params = call[-1]
-        assert (params.tightenSpeedCountsPerSec, params.servoSpeed,
-                params.windowServoDeltaCounts) == (400, 400, 50)
+        assert (params.tightenSpeedCountsPerSec, params.servoSpeed) == (400, 400)
         assert params.windowMs == 200
         assert params.servoAcc == 20
 
@@ -197,8 +192,7 @@ def test_dual_and_single_joints_use_original_speed_and_motion_window(machines):
 def test_explicit_joint_machine_parameters_are_preserved(machines):
     io = _IO()
     calls, _ = machines
-    params = AutoCalibrationParams(tightenSpeedCountsPerSec=150, servoSpeed=150,
-                                   windowServoDeltaCounts=18)
+    params = AutoCalibrationParams(tightenSpeedCountsPerSec=150, servoSpeed=150)
     session = flow.run(io, 1, _mask((0,)), lambda *_: None, params=params)
     assert session.success
     assert next(call[-1] for call in calls if call[0] == "dual") is params

@@ -10,7 +10,7 @@ from desktop.core.host_calibration.config import (
     AutoCalibrationParams, kTendonRawSampleCapacity,
 )
 from desktop.core.host_calibration.math import (
-    TendonRawFitBuffer, _drop_slope_spikes, apply_contact_refinement,
+    TendonRawFitBuffer, apply_contact_refinement,
     build_calibration_result, build_tendon_lut, encoder_count_to_deg, f32,
     forward_encoder_delta, manual_entry_crc, map_manual_scaled_encoder_to_urdf,
     round_to_int32, tendon_lut_sample_angle, tendon_motor_abs_limits,
@@ -37,9 +37,7 @@ class MathIO:
 def test_original_default_parameters():
     assert vars(AutoCalibrationParams()) == {
         "tightenSpeedCountsPerSec": 400, "servoSpeed": 400, "servoAcc": 20,
-        "loopMs": 20, "windowMs": 200, "traceMs": 200,
-        "windowServoDeltaCounts": 50, "zeroReachAbsTolerance": 200,
-        "stallActualDeg": 0.75, "tightLoadHigh": 250,
+        "loopMs": 20, "windowMs": 200,
     }
 
 
@@ -194,17 +192,6 @@ def test_stalled_endpoint_spike_is_dropped_before_lut_build():
     assert max(slopes) <= 8 * sorted(slopes)[len(slopes) // 2]
     # 修复前这里抛 "delta -39896 exceeds int16 compact range"。
     assert build_calib_load_joint_cmd(result)
-
-
-def test_drop_slope_spikes_keeps_short_and_clean_tables():
-    short = [(0.0, 0, 0), (10.0, 1000, 0)]
-    assert _drop_slope_spikes(short) == short
-    clean = [(0.0, 0, 0), (5.0, 500, 0), (10.0, 1000, 0), (15.0, 1500, 0)]
-    assert _drop_slope_spikes(clean) == clean
-    # 中间被两条离谱连线夹住的坏点（20°）被丢掉，两侧正常点保留。
-    belly = [(0.0, 0, 0), (5.0, 500, 0), (10.0, 1000, 0), (15.0, 1500, 0),
-             (20.0, 20000, 0), (25.0, 2500, 0), (30.0, 3000, 0)]
-    assert _drop_slope_spikes(belly) == [p for p in belly if p[0] != 20.0]
 
 
 def test_tendon_limits_use_full_table_endpoints_with_margins():

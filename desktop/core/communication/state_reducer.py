@@ -463,12 +463,13 @@ class StateReducer:
         emitted = False
         parsed_fault = parse_fault_status_packet(payload)
         if parsed_fault is not None:
-            fault_bitmap, trigger_loads = parsed_fault
+            fault_bitmap, trigger_loads, statuses = parsed_fault
             for i in range(MOTOR_COUNT):
                 faulted = ((fault_bitmap >> i) & 0x01) != 0
                 model.servo_overload_fault[i] = faulted
                 if i < len(trigger_loads):
                     model.servo_overload_trigger_load[i] = trigger_loads[i] if faulted else None
+            model.servo_status = statuses
             model.has_fault_status_data = True
             model.fault_status_last_rx_ts = time.time()
             model.monotonic_received['fault_status_last_rx_ts'] = time.monotonic()

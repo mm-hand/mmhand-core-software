@@ -252,6 +252,18 @@ def test_group_selection_refresh_updates_partial_state_without_selection_command
     selected.assert_not_called()
 
 
+def test_selection_box_is_locked_while_an_operation_runs(page):
+    hand, client = page
+    refresh = selection(hand, 'selected_motors', [0, 1], 'Motors')
+    box = next(e for e in client.elements.values() if isinstance(e, ui.checkbox))
+    refresh({'selected_motors': [0, 1], 'busy': False})
+    assert box.enabled
+    refresh({'selected_motors': [0, 1], 'busy': True})
+    assert not box.enabled
+    refresh({'selected_motors': [], 'busy': False})
+    assert box.enabled
+
+
 def slider_controls(page, direct):
     hand, client = page
     request = Mock()
@@ -624,6 +636,69 @@ def test_control_pages_show_both_workspace_warnings_only_when_present(page):
     assert 'MOTOR BEYOND WORKSPACE' in badges
 
 
+def test_joint_and_direct_rows_show_offline_motor_badges(page):
+    hand, client = page
+    joint_refresh = joint_calibration.build(hand, Mock(), Mock(), Mock())
+    motor_refresh = motor_calibration.build(hand, Mock(), Mock())
+    feedback_refresh = feedback_control.build(hand, Mock())
+    direct_refresh = direct_control.build(hand, Mock(), Mock())
+    snapshot = idle_snapshot(hand)
+    snapshot['direct_zero_required'] = False
+    for row in snapshot['motors']:
+        row['online'] = True
+    motor = snapshot['joints'][4]['motors'][0]
+    snapshot['motors'][motor]['online'] = False
+    for refresh in (joint_refresh, motor_refresh, feedback_refresh, direct_refresh):
+        refresh(snapshot)
+
+    def losses():
+        return [element.text for element in client.elements.values()
+                if isinstance(element, ui.badge) and element.text.endswith(' LOSS')]
+
+    # One badge on each of the four joint-row pages, never on an unrelated joint.
+    assert losses() == [f'M{motor:02d} LOSS'] * 4
+
+    # A stale/disconnected readout is unknown, not a loss.
+    snapshot['motors'][motor]['online'] = None
+    for refresh in (joint_refresh, motor_refresh, feedback_refresh, direct_refresh):
+        refresh(snapshot)
+    assert losses() == []
+
+    # Recovery removes the badge again.
+    snapshot['motors'][motor]['online'] = True
+    for refresh in (joint_refresh, motor_refresh, feedback_refresh, direct_refresh):
+        refresh(snapshot)
+    assert losses() == []
+
+
+def test_joint_and_direct_rows_show_servo_fault_badges(page):
+    hand, client = page
+    joint_refresh = joint_calibration.build(hand, Mock(), Mock(), Mock())
+    motor_refresh = motor_calibration.build(hand, Mock(), Mock())
+    feedback_refresh = feedback_control.build(hand, Mock())
+    direct_refresh = direct_control.build(hand, Mock(), Mock())
+    snapshot = idle_snapshot(hand)
+    snapshot['direct_zero_required'] = False
+    for row in snapshot['motors']:
+        row.update(online=True, fault=0)
+    motor = snapshot['joints'][4]['motors'][0]
+    snapshot['motors'][motor]['fault'] = 0x04
+
+    def fault_badges():
+        return [element.text for element in client.elements.values()
+                if isinstance(element, ui.badge) and element.text.endswith(' OVERTEMP')]
+
+    for refresh in (joint_refresh, motor_refresh, feedback_refresh, direct_refresh):
+        refresh(snapshot)
+    assert fault_badges() == [f'M{motor:02d} OVERTEMP'] * 4
+
+    # 只有电压异常 0x01 时不显示。
+    snapshot['motors'][motor]['fault'] = 0x01
+    for refresh in (joint_refresh, motor_refresh, feedback_refresh, direct_refresh):
+        refresh(snapshot)
+    assert fault_badges() == []
+
+
 def test_control_pages_drop_duplicate_clear_faults_and_explain_handover(page):
     hand, client = page
     feedback_control.build(hand, Mock())
@@ -836,3 +911,34 @@ def test_contact_page_builds_gray_and_blue_models(page):
     models = [obj for obj in scene.objects.values() if obj.parent.id == 'scene']
     assert len(models) == 2
     assert models[0].visible_ and not models[1].visible_
+
+
+def test_errors_button_lists_failed_operations(page):
+    hand, client = page
+    build_page(hand)
+    hand._application_operations.append({
+        'operation_id': 'op1', 'name': 'Enable Direct Control', 'time': '10:00:00',
+        'scope': 'System', 'status': 'FAILED', 'phase': 'failed',
+        'message': 'M10–M14 not responding on the servo bus.',
+        'user_issue': {'code': 'DIR-3102', 'title': 'Selected motors are not ready',
+                       'impact': 'Reliable feedback is needed.', 'steps': ['Power-cycle the servo 12 V.'],
+                       'scope': 'M10–M14', 'detail': 'M10–M14 · no response', 'category': 'offline',
+                       'severity': 'Blocking', 'status': 'Last action failed', 'details': {}, 'count': 1}})
+    tick = next(e for e in client.elements.values() if isinstance(e, ui.timer)
+                and getattr(e.callback, '__qualname__', '') == 'build_page.<locals>.refresh')
+    tick.callback()
+    button = next(e for e in client.elements.values() if isinstance(e, ui.button) and e.text == 'Errors (1)')
+    assert button._props.get('color') == 'negative'
+    table = next(e for e in client.elements.values() if isinstance(e, ui.table)
+                 and any(column.get('name') == 'detail' for column in e.columns))
+    assert table.rows[0]['scope'] == 'M10–M14'
+    assert table.rows[0]['detail'] == 'M10–M14 · no response'
+    assert table.rows[0]['title'] == 'Selected motors are not ready'
+    clear = next(e for e in client.elements.values() if isinstance(e, ui.button) and e.text == 'Clear errors')
+    assert clear.enabled
+    click(clear)
+    tick.callback()
+    assert not clear.enabled
+    assert button.text == 'Errors (0)'
+    assert 'color' not in button._props
+    assert table.rows == []

@@ -10,9 +10,9 @@ import pytest
 
 from desktop.core.host_calibration.config import (
     default_auto_calibration_params, finger_aa_joint, joint_motors,
-    kAaMidpointSpeedCountsPerSec, kAaMidpointToleranceFractionOfRange,
+    kAaMidpointSpeedCountsPerSec, kAaMidpointToleranceDeg,
 )
-from desktop.core.host_calibration.dual_motor import WorkspaceCacheEntry, POSE_A, WORKSPACE_DUAL_JOINTS
+from desktop.core.host_calibration.dual_motor import WORKSPACE_DUAL_JOINTS
 from desktop.core.host_calibration.finish import dual_lut_targets
 from desktop.core.host_calibration import flow, single_motor
 from desktop.core.host_calibration.dependencies import (
@@ -85,12 +85,8 @@ def test_five_finger_midpoint_is_reached_then_held_at_fixed_targets(centered_io,
     assert io.preflight_finger_aa((joint,))
     assert io.finger_aa_motor_mask((joint,)) == sum(1 << m for m in joint_motors(aa))
     before = deepcopy(io.controller.current_state.joint_calib_results)
-    io._dual_workspace_cache = ({aa: WorkspaceCacheEntry(valid=True, current_pose=POSE_A)}
-                                if aa in WORKSPACE_DUAL_JOINTS else {})
     assert io.prepare_finger_aa(joint) == (True, '')
     assert io.now_ms() >= 60  # Three new feedback pairs, not merely command acceptance.
-    if aa in WORKSPACE_DUAL_JOINTS:
-        assert not io._dual_workspace_cache[aa].valid
     assert io._aa_hold[2] == sum(io.urdf_limits(aa)) / 2
     fixed = dict(io._aa_hold[3])
     for motor in fixed:
@@ -169,17 +165,18 @@ def test_whole_finger_sequence_centers_after_joint_prepare_before_each_search(ce
             io._committed_joint_results[aa] = payload
         return True, ''
 
-    def search(ctx, port, params, targets):
-        assert io._aa_hold[0] == aa
+    def search(port, joint, params, ordered, failed, index, selected):
+        assert io.prepare_finger_aa(joint)[0]
+        # AA 中点必须在从属关节开始搜索之前摆好并锁住。
+        assert io._aa_hold is not None and io._aa_hold[0] == aa
         assert io.controller.current_state.encoders[aa].raw_sensor == 8000
-        assert all(targets[m] == value for m, value in io._aa_hold[3].items())
-        events.append(('search', ctx.joint))
-        ctx.state = single_motor.AutoCalibState.DONE
-        ctx.result = {'success': True}
+        events.append(('search', joint))
+        return dict(success=True, aborted=False, reason='',
+                    result={'success': True}, limits={})
 
     monkeypatch.setattr(flow, 'run_dual', dual)
     monkeypatch.setattr(io, 'commit_joint', commit)
-    monkeypatch.setattr(single_motor, 'step_single', search)
+    monkeypatch.setattr(flow, 'run_single', search)
     session = flow.run(io, io.selected_joint_mask, io.selected_motor_mask, lambda *_: None)
     assert session.success
     assert events == [('prepare', aa), ('AA', aa)] + [
@@ -230,7 +227,8 @@ def test_midpoint_failures_never_enter_single_search(centered_io, monkeypatch, f
         io.controller.current_state.motor_abs_limit_max[0] = -40000
     else:
         io.cancel()
-    monkeypatch.setattr(single_motor, 'step_single', Mock(side_effect=AssertionError('search started')))
+    monkeypatch.setattr(single_motor, 'sweep_to_end',
+                        Mock(side_effect=AssertionError('search started')))
     outcome = single_motor.run_single(io, 1, default_auto_calibration_params(), (1,), 0, 0, 2)
     assert not outcome['success'] and outcome['aborted']
     assert 'J00' in outcome['reason']
@@ -273,7 +271,7 @@ def test_encoder_driven_midpoint_handles_slack_from_either_side(centered_io, aa,
     result, center, fixed = io._aa_hold[1:]
     angle = io._finger_aa_feedback(aa, result)[1]
     lo, hi = io.urdf_limits(aa)
-    assert abs(angle - center) <= kAaMidpointToleranceFractionOfRange * (hi - lo)
+    assert abs(angle - center) <= kAaMidpointToleranceDeg
     assert slack[0] == 0
     assert io.now_ms() > 200
     assert fixed == {m: state.servo_angles[m] for m in (primary, secondary)}

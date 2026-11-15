@@ -922,8 +922,9 @@ def test_each_joint_writes_manual_and_lut_once_then_limits_and_anchors(io, monke
     assert sent[1][1][1]['tendonLutCount'] == result['tendonLutCount'] > 2
     assert sent[2][1][1:3] == (4, 4)
     io.snapshot_store.merge_calibration.assert_called_once()
-    io.controller._persist_multiturn_state.assert_called_once_with(
-        io.controller.current_state, force=True)
+    # 锚点持久化只读伺服状态；它在内存状态/快照更新之前完成。
+    io.controller._persist_multiturn_state.assert_called_once()
+    assert io.controller._persist_multiturn_state.call_args.kwargs == {'force': True}
     assert io.controller.current_state.joint_calib_results[1]['success']
     # P4 状态回显可稍后才到；host 收尾仍使用本轮自己的生成结果。
     io.controller.current_state.joint_calib_results[1] = None

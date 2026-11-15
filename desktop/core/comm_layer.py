@@ -1098,6 +1098,7 @@ class LowerComputerComm(_SerialSessionBase):
         model.servo_logical_range_last_rx_ts = 0.0
         model.servo_logical_range_p4_time_ms = 0
         model.has_fault_status_data = False
+        model.servo_status = [0] * MOTOR_COUNT
         model.servo_online_bitmap = 0
         model.has_servo_route_status = False
         model.servo_route_controllable_bitmap = 0

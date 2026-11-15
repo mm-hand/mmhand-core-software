@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "protocol_version": 9,
+  "protocol_version": 10,
   "retired_command_values": [
     202,
     217,
@@ -70,7 +70,7 @@
       "name": "PACKET_TYPE_FAULT_STATUS",
       "value": 7,
       "timestamp": true,
-      "description": "故障与在线位图"
+      "description": "过载位图、触发负载与每路 ERROR 字节"
     },
     {
       "name": "PACKET_TYPE_TACTILE",

@@ -1,23 +1,26 @@
-"""Dual-port trajectory checks against the original P4 branch predicates."""
+"""Dual-joint calibration: absolute-angle endpoint sweeps.
+
+The trajectories below are the contract that replaced the old load/travel
+predicates: a joint reaches an endpoint only when the absolute angle freezes
+near the commanded URDF end. Load is never an endpoint test.
+"""
 
 import pytest
 
 from desktop.core import protocol
-from desktop.core.host_calibration import config, dual_motor as dual
-from desktop.core.host_calibration.math import (
-    TendonRawFitBuffer, manual_entry_crc, tendon_motor_abs_limits,
-    forward_encoder_delta,
-)
-from desktop.core.host_calibration.time_alignment import TimeAlignmentError
+from desktop.core.host_calibration import config, dual_motor as dual, sweep
+from desktop.core.host_calibration.math import manual_angle_deg
 
 
 class FakeIO:
-    def __init__(self, joint=16):
+    def __init__(self, joint=16, low_raw=3500, high_raw=5000, start_raw=3500):
         self.t = 0
-        self.stop_at = 10000
+        self.stop_at = 10 ** 9
         self.values = {motor: 0 for motor in range(27)}
-        self.loads = {motor: 190 for motor in range(27)}
-        self.encoder_value = 5000
+        self.loads = {motor: 0 for motor in range(27)}
+        self.encoder_value = start_raw
+        self.encoder_values = {}
+        self.low_raw, self.high_raw = low_raw, high_raw
         self.commands = []
         self.diags = []
         self.traces = []
@@ -30,6 +33,8 @@ class FakeIO:
         self.on_publish = None
         self.ranges = {motor: (-50000, 50000) for motor in range(27)}
         self.reject_publish = False
+        self.selected_joint_mask = 0
+        self.selected_motor_mask = 0
 
     def now_ms(self):
         return self.t
@@ -42,12 +47,14 @@ class FakeIO:
     def owns_control(self):
         return self.t < self.stop_at
 
-    def encoder(self, joint):
-        return self.encoder_value
-
     def encoder_raw(self, joint):
-        value = self.encoder(joint)
-        return None if value is None else value
+        return self.encoder_values.get(joint, self.encoder_value)
+
+    def encoder(self, joint):
+        return self.encoder_raw(joint)
+
+    def angle(self, joint):
+        return manual_angle_deg(self, joint)
 
     def servo_abs(self, motor):
         return self.values.get(motor) if self.online & (1 << motor) else None
@@ -69,10 +76,11 @@ class FakeIO:
     def publish(self, targets, speed, acc):
         if self.reject_publish:
             return False
+        previous = dict(self.values)
         self.commands.append((self.t, dict(targets), speed, acc))
-        self.values.update(targets)
         if self.on_publish:
-            self.on_publish(self, targets)
+            self.on_publish(self, targets, previous)
+        self.values.update(targets)
         return True
 
     def diag(self, *values):
@@ -87,7 +95,8 @@ class FakeIO:
                 "multi_turn_unknown_bitmap": self.unknown,
                 "servo_multiturn_configured_bitmap": self.configured,
                 "servo_recovery_pending_bitmap": self.pending,
-                "servo_recovery_failed_bitmap": self.failed}
+                "servo_recovery_failed_bitmap": self.failed,
+                "servo_route_conflict_bitmap": 0}
 
     def clear_limits(self, joint):
         for motor in config.joint_motors(joint):
@@ -97,7 +106,7 @@ class FakeIO:
         self.limits[motor] = (minimum, maximum)
 
     def manual_reference(self, joint):
-        return {"valid": True, "minRaw": 3500, "maxRaw": 5000}
+        return {"valid": True, "minRaw": self.low_raw, "maxRaw": self.high_raw}
 
     def urdf_limits(self, joint):
         return 0.0, 90.0
@@ -106,8 +115,34 @@ class FakeIO:
         return 7
 
 
-def machine(io, joint=16):
-    return dual._DualMachine(io, joint, config.AutoCalibrationParams())
+def link(io, joint, primary, secondary=None, taut=210):
+    """Move the joint from the commanded motor travel; clamp at both endpoints."""
+    pose = {"p": io.values[primary],
+            "s": io.values[secondary] if secondary is not None else 0,
+            "raw": io.encoder_raw(joint)}
+
+    def hook(state, targets, previous):
+        p = targets.get(primary, previous.get(primary, pose["p"]))
+        s = targets.get(secondary, previous.get(secondary, pose["s"])) if secondary is not None else pose["s"]
+        raw = pose["raw"] + (p - pose["p"]) - (s - pose["s"])
+        pose["p"], pose["s"] = p, s
+        pose["raw"] = min(io.high_raw, max(io.low_raw, raw))
+        state.encoder_values[joint] = pose["raw"]
+        for motor in (primary, secondary):
+            if motor is not None and motor in targets:
+                state.loads[motor] = taut
+    return hook
+
+
+def freeze(io, raw):
+    """Pin the joint angle at `raw` (a mechanically stuck or still-slack joint)."""
+    def hook(state, targets, previous):
+        state.encoder_values[16] = raw
+    return hook
+
+
+def machine(io, joint=16, params=None):
+    return dual._DualMachine(io, joint, params or config.AutoCalibrationParams())
 
 
 @pytest.mark.parametrize("joint,expected", [
@@ -227,593 +262,171 @@ def test_side_sway_joints_keep_other_fingers_in_safe_order(target):
         for motor in config.joint_motors(joint))
 
 
-def test_helper_preflight_finishes_before_any_workspace_movement():
+@pytest.mark.parametrize("end,target_deg", [(sweep.END_MAX, 90.0), (sweep.END_MIN, 0.0)])
+def test_sweep_reaches_end_by_absolute_angle(end, target_deg):
+    io = FakeIO(start_raw=3500 if end == sweep.END_MAX else 5000)
+    primary, secondary = config.joint_motors(16)
+    io.on_publish = link(io, 16, primary, secondary)
+    pull, release = (primary, secondary) if end == sweep.END_MAX else (secondary, primary)
+    outcome = sweep.sweep_to_end(io, 16, end, motors=(primary, secondary),
+                                 pull=pull, release=release)
+    assert outcome.point is not None
+    assert abs(outcome.point.angle - target_deg) <= config.kEndToleranceDeg
+
+
+def test_sweep_load_alone_is_not_an_endpoint():
+    """Regression: 2026-11-15 J00 hit load 190 while the joint sat at URDF Min."""
+    io = FakeIO(start_raw=3500)
+    primary, secondary = config.joint_motors(16)
+    io.on_publish = freeze(io, 3500)
+    io.loads[primary] = 192
+    outcome = sweep.sweep_to_end(io, 16, sweep.END_MAX, motors=(primary, secondary),
+                                 pull=primary, release=secondary)
+    assert outcome.point is None
+    assert outcome.reason == protocol.CALIB_DIAG_REASON_END_NOT_REACHED
+
+
+def test_sweep_reports_distance_to_the_endpoint():
+    io = FakeIO(start_raw=4100)
+    primary, secondary = config.joint_motors(16)
+    io.on_publish = freeze(io, 4100)
+    io.loads[primary] = 192
+    outcome = sweep.sweep_to_end(io, 16, sweep.END_MAX, motors=(primary, secondary),
+                                 pull=primary, release=secondary)
+    assert outcome.reason == protocol.CALIB_DIAG_REASON_END_NOT_REACHED
+    angle_x1000, distance_x1000, encoder = io.diags[0][4], io.diags[0][5], io.diags[0][6]
+    assert angle_x1000 == pytest.approx(round(36.0 * 1000), abs=1000)
+    assert distance_x1000 > 50 * 1000
+    assert encoder == 4100
+
+
+def test_sweep_reports_slack_runaway():
+    io = FakeIO(start_raw=3500)
+    primary, secondary = config.joint_motors(16)
+    io.on_publish = freeze(io, 3500)
+    io.loads[primary] = 40
+    outcome = sweep.sweep_to_end(io, 16, sweep.END_MAX, motors=(primary, secondary),
+                                 pull=primary, release=secondary)
+    assert outcome.point is None
+    assert outcome.reason == protocol.CALIB_DIAG_REASON_SLACK_TOO_LARGE
+
+
+def test_sweep_stops_when_feedback_vanishes():
     io = FakeIO()
-    # Last helper in the J00 plan lacks load, after two valid earlier helpers.
-    io.loads[config.joint_motors(4)[1]] = None
-    worker = machine(io, 0)
-    assert not worker.prepare_workspace()
-    assert io.t == config.kInitialFeedbackWaitMs
-    assert io.commands == []
-    assert worker.reason == protocol.CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED
+    primary, secondary = config.joint_motors(16)
+    io.online &= ~(1 << primary)
+    outcome = sweep.sweep_to_end(io, 16, sweep.END_MAX, motors=(primary, secondary),
+                                 pull=primary, release=secondary)
+    assert outcome.point is None
+    assert outcome.reason == protocol.CALIB_DIAG_REASON_FEEDBACK_LOST
 
 
-@pytest.mark.parametrize("params", [config.AutoCalibrationParams(),
-                                    config.AutoCalibrationParams(tightenSpeedCountsPerSec=200,
-                                                                 servoSpeed=200, windowMs=400)])
-def test_workspace_fresh_pose_releases_antagonist_before_tightening(params):
+def test_sweep_propagates_publish_failure():
     io = FakeIO()
-    worker = dual._DualMachine(io, 0, params)
-    primary, secondary = config.joint_motors(4)
-    assert worker._ensure_workspace_pose(4, dual.POSE_A)
-    assert all(speed == 400 and acc == 20
-               for _, _, speed, acc in io.commands)
-    first = io.commands[0][1]
-    assert first == {primary: -3200, secondary: 0}
-    entry = dual._cache(io)[4]
-    assert entry.valid and entry.current_pose == dual.POSE_A
-    before = len(io.commands)
-    # Instantaneous load may become zero once the measured posture is reached.
-    io.loads[secondary] = 0
-    assert worker._ensure_workspace_pose(4, dual.POSE_A)
-    assert len(io.commands) == before
+    primary, secondary = config.joint_motors(16)
+    io.reject_publish = True
+    outcome = sweep.sweep_to_end(io, 16, sweep.END_MAX, motors=(primary, secondary),
+                                 pull=primary, release=secondary)
+    assert outcome.point is None
+    assert outcome.reason == protocol.CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED
 
 
-def test_custom_slow_calibration_preserves_workspace_tightening_rate():
+def test_pose_helper_skips_a_helper_already_at_the_end():
     io = FakeIO()
-    params = config.AutoCalibrationParams(tightenSpeedCountsPerSec=200,
-                                          servoSpeed=200, windowMs=400)
-    worker = dual._DualMachine(io, 0, params)
-    primary, secondary = config.joint_motors(4)
-    io.loads[secondary] = 0
-
-    def load_after_tightening(state, targets):
-        if targets.get(secondary, 0) >= 16:
-            state.loads[secondary] = config.kWorkspaceTightLoadThreshold
-
-    io.on_publish = load_after_tightening
-    assert worker._ensure_workspace_pose(4, dual.POSE_A)
-    assert io.commands[0][1] == {primary: -3200, secondary: 0}
-    tightening = [targets[secondary] for _, targets, _, _ in io.commands
-                  if targets[secondary] > 0]
-    assert tightening[:2] == [8, 16]
-    assert all(speed == 400 and acc == 20 for _, _, speed, acc in io.commands)
-
-
-def test_workspace_cache_same_pose_drift_rebuilds_from_actual_abs():
-    io = FakeIO()
-    worker = machine(io, 0)
-    primary, secondary = config.joint_motors(4)
-    assert worker._ensure_workspace_pose(4, dual.POSE_A)
-    io.values[primary] += config.kWorkspaceTargetToleranceCounts + 1
-    actual = io.values[primary]
-    before = len(io.commands)
-    assert worker._ensure_workspace_pose(4, dual.POSE_A)
-    assert io.commands[before][1][primary] == actual - config.kWorkspaceReleaseCounts
-
-
-def test_workspace_a_to_b_and_back_use_cached_release_then_tighten():
-    io = FakeIO()
-    worker = machine(io, 0)
-    primary, secondary = config.joint_motors(4)
-    assert worker._ensure_workspace_pose(4, dual.POSE_A)
-    before = len(io.commands)
-    assert worker._ensure_workspace_pose(4, dual.POSE_B)
-    assert io.commands[before][1] == {primary: -3200, secondary: -3200}
-    before = len(io.commands)
-    assert worker._ensure_workspace_pose(4, dual.POSE_A)
-    assert io.commands[before][1] == {primary: -6400, secondary: -3200}
-
-
-def test_workspace_direct_release_propagates_publish_failure():
-    io = FakeIO()
-    primary = config.joint_motors(4)[0]
-    io.publish = lambda targets, speed, acc: False
-    worker = machine(io, 0)
-    assert not worker._ensure_workspace_pose(4, dual.POSE_A)
-    assert not io.commands
-    assert worker.reason == protocol.CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED
-
-
-def test_reset_and_origin_change_only_invalidate_corresponding_pose():
-    io = FakeIO()
-    cache = dual._cache(io)
-    cache[0].valid = cache[4].valid = True
-    dual.invalidate_dual_workspace_cache_joint(io, 0)
-    assert not dual._cache(io)[0].valid and dual._cache(io)[4].valid
-    dual.reset_dual_workspace_cache(io)
-    assert not any(entry.valid for entry in dual._cache(io).values())
-
-
-@pytest.mark.parametrize("params,step,endpoint", [
-    (config.AutoCalibrationParams(), 8, 152),
-    (config.default_auto_calibration_params(16), 8, 152),
-])
-def test_primary_tight_requires_load_motion_and_two_stalled_windows(params, step, endpoint):
-    io = FakeIO()
-    worker = dual._DualMachine(io, 16, params)
-    result = worker._find_tight(20, 0, 5000, 190)
-    assert result is not None
-    assert io.t == params.windowMs * config.kAngleStallStableSamples
-    assert result[0] == endpoint
-    assert all(speed == params.servoSpeed and acc == params.servoAcc
-               for _, _, speed, acc in io.commands)
-    assert [targets[20] for _, targets, _, _ in io.commands[:3]] == [step, 2 * step, 3 * step]
-    assert io.commands[-1][1][20] == result[0]
-
-
-def test_primary_tight_load_alone_does_not_replace_motion_condition():
-    io = FakeIO()
-    io.stop_at = 600
-    # Servo feedback never moves, despite outgoing monotonically increasing commands.
-    io.on_publish = lambda state, targets: state.values.update({20: 0})
-    worker = machine(io)
-    assert worker._find_tight(20, 0, 5000, 190) is None
-    assert worker.reason == protocol.CALIB_DIAG_REASON_CONTROL_LOST
-
-
-def test_primary_tight_stall_sample_counter_resets_on_angle_progress():
-    io = FakeIO()
-    io.on_sleep = lambda state: setattr(state, "encoder_value", 5100 if state.t >= 400 else 5000)
-    worker = machine(io)
-    assert worker._find_tight(20, 0, 5000, 190) is not None
-    # 200ms stalled, 400ms moved(reset), then 600 and 800ms stalled.
-    assert io.t == 800
-
-
-@pytest.mark.parametrize("load", [799, 800, -800, 1023, -1023])
-def test_dual_batch_does_not_gate_on_load(load):
-    io = FakeIO()
-    io.loads[20] = load
-    worker = machine(io)
-    assert worker._publish({20: 8}, protocol.CALIB_DIAG_PHASE_FIND_MAX, 16, 20)
-
-
-def test_preload_accepts_load_without_encoder_stall_or_extra_motion():
-    io = FakeIO()
-    worker = machine(io)
-    result = worker._find_secondary_preload(21, 0, 20, 120)
-    assert result == (0, 5000, 5000, 190)
-    assert io.t == 0
-    assert io.commands[-1][1] == {21: 0, 20: 120}
-
-
-@pytest.mark.parametrize("params,step,endpoint", [
-    (config.AutoCalibrationParams(), 8, 72),
-    (config.default_auto_calibration_params(16), 8, 72),
-])
-def test_exchange_endpoint_requires_12_degrees_and_both_motors_progress_not_angle_stall(
-        params, step, endpoint):
-    io = FakeIO()
-    io.loads[21] = 250
-    io.on_sleep = lambda state: setattr(state, "encoder_value", 5000 - 3 * state.t)
-    fit = TendonRawFitBuffer()
-    fit.append(5000, 0, 0)
-    fit.next_travel_deg = 5.0
-    worker = dual._DualMachine(io, 16, params)
-    result = worker._find_exchange(21, 0, 20, 0, 5000, fit)
-    assert result is not None and io.t == params.windowMs
-    assert result[3] == 5000 - 3 * params.windowMs
-    assert io.commands[0][1] == {21: step, 20: -step}
-    assert len(fit.samples) >= 3
-    assert result[0] == endpoint and result[1] == -endpoint
-
-
-@pytest.mark.parametrize("stage", ["tight", "exchange"])
-def test_side_sway_sub_fifty_count_feedback_does_not_accept_endpoint(stage):
-    io = FakeIO(joint=12)
-    params = config.default_auto_calibration_params(12)
-    primary, secondary = config.joint_motors(12)
-    io.stop_at = 1000
-    worker = dual._DualMachine(io, 12, params)
-
-    def noisy_feedback(state, _targets):
-        # 在窗口边界形成 36 counts 的跳变，能通过旧 25 门禁，低于原 50 门禁。
-        noise = 36 if (state.t // params.windowMs) % 2 == 0 else 0
-        state.values[primary] = -noise
-        state.values[secondary] = noise
-
-    io.on_publish = noisy_feedback
-    if stage == "tight":
-        result = worker._find_tight(primary, 0, 5000, 190)
-    else:
-        io.loads[secondary] = 250
-        io.on_sleep = lambda state: setattr(state, "encoder_value", 5000 - 3 * state.t)
-        result = worker._find_exchange(secondary, 0, primary, 0, 5000,
-                                       TendonRawFitBuffer())
-    assert result is None
-    assert worker.reason == protocol.CALIB_DIAG_REASON_CONTROL_LOST
-    checks = [details for values, details in io.traces
-              if values[0] == ("CHECK_POS80" if stage == "tight" else
-                               "CHECK_DUAL_EXCHANGE_NEG3")]
-    assert checks
-    assert all(details["window_abs" if stage == "tight" else
-                       "secondary_delta"] < 50 for details in checks)
-
-
-def test_exchange_loaded_but_insufficient_encoder_travel_fails_after_two_stalled_windows():
-    io = FakeIO()
-    io.loads[21] = 250
-    worker = machine(io)
-    assert worker._find_exchange(21, 0, 20, 0, 5000, TendonRawFitBuffer()) is None
-    assert io.t == 400
-    assert worker.reason == protocol.CALIB_DIAG_REASON_DUAL_EXCHANGE_STALLED
-    assert io.commands[-1][1][21] > 0
-
-
-def test_exchange_progress_of_one_motor_is_insufficient():
-    io = FakeIO()
-    io.loads[21] = 250
-    io.stop_at = 600
-    io.on_sleep = lambda state: setattr(state, "encoder_value", 5000 - 3 * state.t)
-    io.on_publish = lambda state, targets: state.values.update({20: 0})
-    worker = machine(io)
-    assert worker._find_exchange(21, 0, 20, 0, 5000, TendonRawFitBuffer()) is None
-    assert worker.reason == protocol.CALIB_DIAG_REASON_CONTROL_LOST
-
-
-@pytest.mark.parametrize("stage", ["tight", "preload", "exchange"])
-def test_feedback_loss_is_root_reason(stage):
-    io = FakeIO()
-    io.encoder_value = None
-    worker = machine(io)
-    if stage == "tight":
-        outcome = worker._find_tight(20, 0, 5000, 190)
-    elif stage == "preload":
-        outcome = worker._find_secondary_preload(21, 0, 20, 0)
-    else:
-        outcome = worker._find_exchange(21, 0, 20, 0, 5000, TendonRawFitBuffer())
-    assert outcome is None
-    assert worker.reason == protocol.CALIB_DIAG_REASON_FEEDBACK_LOST
+    io.encoder_values[4] = 5000
+    assert machine(io, 0)._pose_helper(4, dual.POSE_B) is True
     assert not io.commands
 
 
-def test_complete_thumb_dual_trace_releases_then_searches_preloads_exchanges_and_builds_lut():
+@pytest.mark.parametrize("pose,end_raw", [(dual.POSE_A, 3500), (dual.POSE_B, 5000)])
+def test_pose_helper_drives_the_helper_to_its_end(pose, end_raw):
     io = FakeIO()
-    io.loads[21] = 0
-    observed = {"preload_abs": None, "exchange": False}
+    io.encoder_values[4] = 5000 if end_raw == 3500 else 3500
+    primary, secondary = config.joint_motors(4)
+    io.on_publish = link(io, 4, primary, secondary)
+    assert machine(io, 0)._pose_helper(4, pose) is True
+    assert abs(io.encoder_values[4] - end_raw) <= 8
 
-    def simulate(state, targets):
-        if 21 not in targets or 20 not in targets:
-            return
-        if targets[20] < 152:
-            if observed["preload_abs"] is None:
-                observed["preload_abs"] = targets[21] - 8
-            observed["exchange"] = True
-            state.loads[21] = 250
-            state.encoder_value = 5000 - (targets[21] - observed["preload_abs"]) * 10
-        elif targets[21] >= -3120:
-            state.loads[21] = 190
 
-    io.on_publish = simulate
+def test_pose_helper_failure_reports_workspace_diagnostic():
+    io = FakeIO()
+    io.encoder_values[4] = 4200
+    primary, secondary = config.joint_motors(4)
+    io.on_publish = freeze(io, 4200)
+    io.loads[primary] = 192
+    io.loads[secondary] = 192
+    worker = machine(io, 0)
+    assert worker._pose_helper(4, dual.POSE_B) is False
+    assert worker.reason in (protocol.CALIB_DIAG_REASON_END_NOT_REACHED,
+                            protocol.CALIB_DIAG_REASON_SLACK_TOO_LARGE)
+
+
+def test_run_dual_fails_when_the_joint_cannot_reach_max():
+    io = FakeIO(start_raw=3500)
+    primary, secondary = config.joint_motors(16)
+    io.on_publish = freeze(io, 3500)
+    io.loads[primary] = 192
     outcome = dual.run_dual(io, 16, 0, 1, 1 << 16, config.AutoCalibrationParams())
-    assert outcome["success"] and not outcome["preflight_failed"]
-    assert observed["exchange"]
-    assert io.commands[0][1] == {21: -3200}
-    assert outcome["result"]["mappingVersion"] == 5
-    assert outcome["result"]["tendonLutValid"]
-    assert outcome["result"]["tendonLutMotor"] == [20, 21]
-    assert outcome["result"]["encoderSpan"] >= 546
-    assert io.values[20] < 152  # No extra primary tightening after exchange.
-    assert set(outcome["limits"]) == {20, 21}
-    # 限位来自 LUT 拟合直线两端 + 可配置外延，不再依赖实测 tight 停点。
+    assert outcome["success"] is False
+    assert outcome["reason"] == protocol.CALIB_DIAG_REASON_END_NOT_REACHED
+
+
+def test_run_dual_completes_with_lut_and_limits():
+    io = FakeIO()
+    primary, secondary = config.joint_motors(16)
+    io.on_publish = link(io, 16, primary, secondary)
+    outcome = dual.run_dual(io, 16, 0, 1, 1 << 16, config.AutoCalibrationParams())
+    assert outcome["success"] is True
     result = outcome["result"]
-    for actuator, motor in enumerate(config.joint_motors(16)):
-        assert outcome["limits"][motor] == tendon_motor_abs_limits(
-            result, actuator, motor,
-            config.DEFAULT_OUTPUT_MARGINS[0],
-            config.DEFAULT_OUTPUT_MARGINS[1])
+    assert result["success"] is True
+    assert result["tendonLutValid"] is True
+    assert result["tendonLutCount"] >= 3
+    assert result["encoderSpan"] == pytest.approx(1500, abs=8)
+    assert set(outcome["limits"]) == {primary, secondary}
     assert io.limits == outcome["limits"]
 
 
-def test_target_b_cache_reuse_uses_abs_and_accepts_zero_instantaneous_load(monkeypatch):
-    io = FakeIO(joint=0)
-    primary, secondary = config.joint_motors(0)
-    io.values[primary], io.values[secondary] = 120, -3200
-    io.loads[primary] = 0
-    dual._cache(io)[0] = dual.WorkspaceCacheEntry(
-        valid=True, current_pose=dual.POSE_B, primary_motor=primary,
-        secondary_motor=secondary, primary_tight_abs=120, secondary_release_abs=-3200)
-    worker = machine(io, 0)
-    monkeypatch.setattr(worker, "_wait_motor_target", lambda *args: pytest.fail("duplicate slack"))
-    monkeypatch.setattr(worker, "_find_tight", lambda *args: pytest.fail("duplicate POS80"))
-    # Stop after checking that the preload starts at the cached primary hold.
-    def stop(secondary_motor, start_abs, primary_motor, hold_abs):
-        assert (secondary_motor, start_abs, primary_motor, hold_abs) == (secondary, -3200, primary, 120)
-        return None
-    monkeypatch.setattr(worker, "_find_secondary_preload", stop)
-    assert worker.calibrate() is None
-    assert not io.commands
-
-
-@pytest.mark.parametrize("span,expected_success", [(0, False), (15360, False), (700, True)])
-def test_dual_result_rejects_zero_and_oversized_spans(monkeypatch, span, expected_success):
+def test_run_dual_preflight_failure_keeps_status():
     io = FakeIO()
-    worker = machine(io)
-    monkeypatch.setattr(worker, "_wait_motor_target", lambda *args: True)
-    monkeypatch.setattr(worker, "_find_tight", lambda *args: (120, 5000, 5000, 190))
-    monkeypatch.setattr(worker, "_find_secondary_preload", lambda *args: (20, 5000, 5000, 190))
-    endpoint = (5000 - span) % 16384
-    monkeypatch.setattr(worker, "_find_exchange",
-                        lambda *_args: (80, -60, endpoint, endpoint, 250))
-    result = worker.calibrate()
-    assert (result is not None) is expected_success
-    if not expected_success:
-        assert worker.reason == protocol.CALIB_DIAG_REASON_RESULT_SPAN_INVALID
-        assert io.limits == {}
-
-
-@pytest.mark.parametrize("joint,span,success", [
-    (0, 700, False),    # 被挡住：700 counts = 15 deg，低于 45% URDF 量程
-    (0, 3400, True),    # 正常 AA 行程（75 deg）
-    (16, 700, True),    # 拇指不参与四指 AA 行程门禁
-])
-def test_side_sway_result_requires_most_of_the_urdf_range(monkeypatch, joint, span, success):
-    io = FakeIO(joint)
-    worker = machine(io, joint)
-    monkeypatch.setattr(worker, "_wait_motor_target", lambda *args: True)
-    monkeypatch.setattr(worker, "_find_tight", lambda *args: (120, 5000, 5000, 190))
-    monkeypatch.setattr(worker, "_find_secondary_preload", lambda *args: (20, 5000, 5000, 190))
-    endpoint = (5000 - span) % 16384
-    monkeypatch.setattr(worker, "_find_exchange",
-                        lambda *_args: (80, -60, endpoint, endpoint, 250))
-    result = worker.calibrate()
-    assert (result is not None) is success
-    if not success:
-        assert worker.reason == protocol.CALIB_DIAG_REASON_RESULT_SPAN_INVALID
-
-
-@pytest.mark.parametrize("joint,tight,limit,manual_span", [
-    (16, 10962, 9688, 4108),  # Supplied J16 log: formerly 15110 / 332 degrees.
-    (20, 8307, 5595, 1476),  # Supplied J20 log: formerly 13672 / 300 degrees.
-    (16, 5700, 5000, 1500),
-    (16, 400, 16000, 1500),  # Negative exchange across magnetic zero.
-])
-def test_dual_uses_primary_endpoint_as_urdf_max(
-        monkeypatch, joint, tight, limit, manual_span):
-    io = FakeIO(joint)
-    io.encoder_value = tight
-    worker = machine(io, joint)
-    primary, secondary = config.joint_motors(joint)
-    span = forward_encoder_delta(limit, tight)
-    manual = {"valid": True, "minRaw": limit % 16384,
-              "maxRaw": (limit + manual_span) % 16384}
-    io.manual_reference = lambda _joint: dict(manual)
-    manual_crc = manual_entry_crc(joint, manual)
-    fit = TendonRawFitBuffer()
-    fit.append(tight, 120, 20)
-    fit.append((limit + span // 2) % 16384, 30, 50)
-    fit.append(limit, -60, 80)
-    original_samples = [(s.encoder, s.primary_abs, s.secondary_abs) for s in fit.samples]
-    window = object()
-    io.begin_lut_sampling = lambda *_args: window
-    io.finish_lut_sampling = lambda value: fit if value is window else pytest.fail("wrong window")
-    monkeypatch.setattr(worker, "_wait_motor_target", lambda *_args: True)
-    monkeypatch.setattr(worker, "_find_tight", lambda *_args: (120, tight, tight, 190))
-    monkeypatch.setattr(worker, "_find_secondary_preload",
-                        lambda *_args: (20, tight, tight, 190))
-    monkeypatch.setattr(worker, "_find_exchange",
-                        lambda *_args: (80, -60, limit, limit, 250))
-    original_builder = dual.build_tendon_lut
-
-    def build(calib_io, result_joint, result, p, s, count, raw):
-        assert raw is fit
-        assert [(v.encoder, v.primary_abs, v.secondary_abs) for v in raw.samples] == original_samples
-        return original_builder(calib_io, result_joint, result, p, s, count, raw)
-
-    monkeypatch.setattr(dual, "build_tendon_lut", build)
-    outcome = worker.calibrate()
-    assert outcome is not None
-    result = outcome["result"]
-    assert (result["startEncoder"], result["tightEncoder"]) == (limit, tight)
-    assert result["encoderSpan"] == span
-    assert result["autoSpanCounts"] == span
-    assert result["totalDeg"] == pytest.approx(span * 360 / 16384)
-    assert (result["autoMinRaw"], result["autoMaxRaw"]) == (limit % 16384, tight % 16384)
-    assert result["zeroEncoder"] == (limit + 228) % 16384
-    assert "encoderDirection" not in result
-    assert result["manualSpanCounts"] == manual_span
-    assert result["manualReferenceCrc"] == manual_crc
-    assert result["tendonLutValid"]
-    assert result["tendonLutMotor"] == [primary, secondary]
-    assert result["startServoAbs"] == -60
-    assert result["tightServoAbs"] == 120
-    for actuator, motor in enumerate((primary, secondary)):
-        assert outcome["limits"][motor] == tendon_motor_abs_limits(
-            result, actuator, motor,
-            config.DEFAULT_OUTPUT_MARGINS[0],
-            config.DEFAULT_OUTPUT_MARGINS[1])
-    assert protocol.build_calib_load_joint_cmd(result)
-
-
-@pytest.mark.parametrize("limit,expected_span", [(3800, 1200), (5000, 0)])
-def test_dual_keeps_primary_endpoint_when_preload_moves_joint(monkeypatch, limit, expected_span):
-    io = FakeIO()
-    worker = machine(io)
-    monkeypatch.setattr(worker, "_wait_motor_target", lambda *_args: True)
-    monkeypatch.setattr(worker, "_find_tight", lambda *_args: (120, 5000, 5000, 190))
-
-    def preload(*_args):
-        io.encoder_value = 4400
-        return 20, 4400, 4400, 190
-
-    monkeypatch.setattr(worker, "_find_secondary_preload", preload)
-    monkeypatch.setattr(worker, "_find_exchange",
-                        lambda *_args: (80, -60, limit, limit, 250))
-    outcome = worker.calibrate()
-    checks = [details for values, details in io.traces if values[0] == "DUAL_SPAN_CHECK"]
-    assert len(checks) == 1
-    assert checks[0]["span"] == expected_span
-    if expected_span:
-        assert outcome is not None
-        assert outcome["result"]["encoderSpan"] == expected_span
-        assert outcome["result"]["startEncoder"] == limit
-        assert outcome["result"]["tightEncoder"] == 5000
-    else:
-        assert outcome is None
-        assert worker.reason == protocol.CALIB_DIAG_REASON_RESULT_SPAN_INVALID
-        assert not io.limits
-
-
-def test_dual_rejects_reversed_primary_sweep(monkeypatch):
-    io = FakeIO()
-    worker = machine(io)
-    monkeypatch.setattr(worker, "_wait_motor_target", lambda *_args: True)
-    monkeypatch.setattr(worker, "_find_tight", lambda *_args: (120, 5000, 5000, 190))
-    monkeypatch.setattr(worker, "_find_secondary_preload", lambda *_args: (20, 5000, 5000, 190))
-    monkeypatch.setattr(worker, "_find_exchange",
-                        lambda *_args: (80, -60, 5700, 5700, 250))
-    assert worker.calibrate() is None
-    assert worker.reason == protocol.CALIB_DIAG_REASON_RESULT_SPAN_INVALID
-    assert not io.limits
-
-
-def test_exchange_start_jitter_does_not_abort():
-    # Field 2026-10-25: 3 raw counts of jitter at the exchange start were read
-    # as a whole forward turn and aborted J00 before any sweep. Travel is
-    # signed now; the tight->limit span check still judges the sweep.
-    io = FakeIO()
-    io.loads[21] = 250
-    steps = [0]
-
-    def on_sleep(state):
-        steps[0] += 1
-        state.encoder_value = (5000 + 3 if steps[0] <= 2
-                               else 5000 - 8 * (steps[0] - 2)) % 16384
-
-    io.on_sleep = on_sleep
-    worker = machine(io)
-    assert worker._find_exchange(21, 0, 20, 0, 5000, None) is not None
-    assert worker.reason == protocol.CALIB_DIAG_REASON_NONE
-
-
-@pytest.mark.parametrize("outside,cache_valid", [(-25, False), (-24, True), (0, True)])
-def test_outside_ready_result_is_retained_but_only_in_window_pose_is_cached(monkeypatch, outside, cache_valid):
-    io = FakeIO(joint=0)
-    worker = machine(io, 0)
-    monkeypatch.setattr(worker, "_wait_motor_target", lambda *args: True)
-    monkeypatch.setattr(worker, "_find_tight", lambda *args: (120, 5000, 5000, 190))
-    monkeypatch.setattr(worker, "_find_secondary_preload", lambda *args: (20, 5000, 5000, 190))
-    monkeypatch.setattr(worker, "_find_exchange", lambda *args: (80, -60, 1600, 1600, 250))
-    monkeypatch.setattr(dual, "map_manual_scaled_encoder_to_urdf",
-                        lambda *args: {"valid": True, "outside_counts": outside,
-                                       "urdf_deg": -0.5, "feedback_ready": False})
-    result = worker.calibrate()
-    assert result is not None
-    assert result["requires_pull_joint_into_workspace"] is (not cache_valid)
-    entry = dual._cache(io)[0]
-    assert entry.valid is cache_valid
-    if cache_valid:
-        assert entry.current_pose == dual.POSE_A
-        assert (entry.primary_release_abs, entry.secondary_tight_abs) == (-60, 80)
-
-
-def test_ready_map_invalid_rejects_result_before_any_limit_commit(monkeypatch):
-    io = FakeIO(joint=0)
-    worker = machine(io, 0)
-    monkeypatch.setattr(worker, "_wait_motor_target", lambda *args: True)
-    monkeypatch.setattr(worker, "_find_tight", lambda *args: (120, 5000, 5000, 190))
-    monkeypatch.setattr(worker, "_find_secondary_preload", lambda *args: (20, 5000, 5000, 190))
-    monkeypatch.setattr(worker, "_find_exchange", lambda *args: (80, -60, 1600, 1600, 250))
-    monkeypatch.setattr(dual, "map_manual_scaled_encoder_to_urdf", lambda *args: None)
-    assert worker.calibrate() is None
-    assert worker.reason == protocol.CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED
-    assert io.limits == {}
-
-
-def test_dual_lut_build_failure_keeps_original_mechanical_commit_branch(monkeypatch):
-    io = FakeIO(joint=0)
-    worker = machine(io, 0)
-    monkeypatch.setattr(worker, '_wait_motor_target', lambda *args: True)
-    monkeypatch.setattr(worker, '_find_tight', lambda *args: (120, 5000, 5000, 190))
-    monkeypatch.setattr(worker, '_find_secondary_preload', lambda *args: (20, 5000, 5000, 190))
-    monkeypatch.setattr(worker, '_find_exchange', lambda *args: (80, -60, 1600, 1600, 250))
-    original_builder = dual.build_tendon_lut
-    monkeypatch.setattr(dual, 'build_tendon_lut',
-                        lambda calib_io, joint, result, primary, secondary, count, raw:
-                        original_builder(calib_io, joint, result, primary, secondary,
-                                         count, dual.TendonRawFitBuffer()))
-    monkeypatch.setattr(dual, 'map_manual_scaled_encoder_to_urdf',
-                        lambda *args: {'valid': True, 'outside_counts': 0,
-                                       'urdf_deg': 0, 'feedback_ready': True})
-    outcome = worker.calibrate()
-    assert outcome is not None
-    assert outcome['result']['success']
-    assert not outcome['result']['tendonLutValid']
-    assert outcome['result']['tendonLutCount'] == 0
-    assert len(outcome['limits']) == 2
-
-
-@pytest.mark.parametrize('fail', [False, True])
-def test_dual_exchange_replaces_complete_fit_and_rejects_alignment_failure(monkeypatch, fail):
-    io = FakeIO()
-    worker = machine(io)
-    events = []
-    window = object()
-    fit = TendonRawFitBuffer()
-    for sample in ((4300, 700, 200), (4650, 800, 150), (5000, 900, 100)):
-        fit.append(*sample)
-    monkeypatch.setattr(worker, '_wait_motor_target', lambda *_: True)
-    monkeypatch.setattr(worker, '_find_tight', lambda *_: (120, 5000, 5000, 190))
-
-    def preload(*_args):
-        events.append('preload')
-        return 20, 5000, 5000, 190
-
-    def begin(joint, motors):
-        assert (joint, motors) == (16, (20, 21))
-        events.append('begin')
-        return window
-
-    def exchange(*args):
-        assert args[-1] is None  # Independent getters cannot enter the buffer.
-        events.append('exchange')
-        return 80, -60, 4300, 4300, 250
-
-    def finish(value):
-        assert value is window
-        events.append('finish')
-        if fail:
-            raise TimeAlignmentError('raw/ABS coverage missing')
-        return fit
-
-    monkeypatch.setattr(worker, '_find_secondary_preload', preload)
-    monkeypatch.setattr(worker, '_find_exchange', exchange)
-    io.begin_lut_sampling, io.finish_lut_sampling = begin, finish
-    original_builder = dual.build_tendon_lut
-
-    def build(calib_io, joint, result, primary, secondary, count, raw):
-        assert raw is fit and raw.count == 3
-        assert [(s.primary_abs, s.secondary_abs) for s in raw.samples] == [(700, 200), (800, 150), (900, 100)]
-        return original_builder(calib_io, joint, result, primary, secondary, count, raw)
-
-    monkeypatch.setattr(dual, 'build_tendon_lut', build)
-    result = worker.calibrate()
-    assert events == ['preload', 'begin', 'exchange', 'finish']
-    if fail:
-        assert result is None
-        assert worker.reason == protocol.CALIB_DIAG_REASON_RESULT_BUILD_FAILED
-        assert io.limits == {}
-    else:
-        assert result is not None and result['result']['tendonLutValid']
-        assert fit.count == 3
-        assert set(io.limits) == {20, 21}
-
-
-def test_run_dual_preserves_preflight_failure_status_without_mechanical_commands():
-    io = FakeIO(joint=0)
     io.online &= ~(1 << config.joint_motors(4)[0])
-    outcome = dual.run_dual(io, 0, 0, 1, 1, config.AutoCalibrationParams())
-    assert outcome["preflight_failed"] and not outcome["success"] and not outcome["aborted"]
-    assert outcome["reason"] == protocol.CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED
+    outcome = dual.run_dual(io, 0, 0, 1, 1 << 0, config.AutoCalibrationParams())
+    assert outcome["success"] is False
+    assert outcome["preflight_failed"] is True
     assert not io.commands
 
 
-def test_target_slack_wait_does_not_extend_fixed_3200_count_target():
-    io = FakeIO()
-    io.stop_at = 80
-    io.on_publish = lambda state, targets: state.values.update({21: 0})
-    worker = machine(io)
-    assert not worker._wait_motor_target(21, -3200)
-    assert [targets[21] for _, targets, _, _ in io.commands] == [-3200] * 4
-    assert worker.reason == protocol.CALIB_DIAG_REASON_CONTROL_LOST
+def test_j00_2026_11_15_slack_then_move_reaches_max():
+    """Replay of the failed run: 3400 counts of slack, load 190 before the joint moves."""
+    io = FakeIO(low_raw=22, high_raw=4187, start_raw=48)
+    primary, secondary = config.joint_motors(0)
+    state = {"raw": 48.0}
+
+    def hook(st, targets, previous):
+        travel = targets.get(primary, previous.get(primary, 0))
+        if travel > 3400:
+            state["raw"] = min(4187, 48 + (travel - 3400))
+        st.encoder_values[0] = state["raw"]
+        st.loads[primary] = 192 if travel > 3200 else 120
+        if secondary in targets:
+            st.loads[secondary] = 80
+
+    io.on_publish = hook
+    outcome = sweep.sweep_to_end(io, 0, sweep.END_MAX, motors=(primary, secondary),
+                                 pull=primary, release=secondary)
+    assert outcome.point is not None
+    assert outcome.point.angle > 14.0
+
+
+def test_real_j00_geometry_full_calibration():
+    """Manual 22->4187, URDF -75..16: span and LUT must match the field result (4167)."""
+    io = FakeIO(joint=16, low_raw=22, high_raw=4187, start_raw=48)
+    io.urdf_limits = lambda joint: (-75.0, 16.0)
+    primary, secondary = config.joint_motors(16)
+    io.on_publish = link(io, 16, primary, secondary)
+    outcome = dual.run_dual(io, 16, 0, 1, 1 << 16, config.AutoCalibrationParams())
+    assert outcome["success"] is True
+    result = outcome["result"]
+    assert result["encoderSpan"] == pytest.approx(4165, abs=4)
+    assert result["totalDeg"] == pytest.approx(91.52, abs=0.2)
+    assert result["tendonLutValid"] is True
+    assert result["tendonLutCount"] == 20

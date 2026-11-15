@@ -50,11 +50,12 @@ from .config import (
     kEncoderRecoveryTimeoutMs, kEncoderTrustedSampleMaxAgeMs,
     kFeedbackReadyServoTimeoutMs, kServoRecoveryStableSamples,
     kServoRecoveryTimeoutMs, kHostTargetResultTimeoutMs, kHostRebaseFeedbackTimeoutMs,
-    kAaMidpointSpeedCountsPerSec, kAaMidpointToleranceFractionOfRange,
+    kAaMidpointSpeedCountsPerSec, kAaMidpointToleranceDeg,
     kAbsRebaseTriggerCounts, kTendonFitSampleStepDeg,
 )
 from .math import (TendonRawFitBuffer, encoder_count_to_deg,
-                   wrap_encoder_delta, map_manual_scaled_encoder_to_urdf)
+                   wrap_encoder_delta, map_manual_scaled_encoder_to_urdf,
+                   manual_angle_deg)
 from .dependencies import usable_snapshot_aa_result
 from .finish import dual_lut_targets
 from .time_alignment import TimeAlignmentError, align_feedback
@@ -233,6 +234,10 @@ class HostCalibrationIO:
     def encoder(self, joint):
         return self.encoder_raw(joint)
 
+    def angle(self, joint):
+        """绝对关节角(URDF 度),由编码器与 Manual 端点换算。"""
+        return manual_angle_deg(self, joint)
+
     def servo_abs(self, motor):
         state = self._state()
         if (not state.has_servo_angle_data or
@@ -356,9 +361,8 @@ class HostCalibrationIO:
         return self._contact_kb.get(get_spec(joint).urdf_joint_name)
 
     def _aa_midpoint_tolerance(self, aa):
-        """AA 中点容差(度):关节量程的固定比例,到达和保持共用。"""
-        lo, hi = self.urdf_limits(aa)
-        return kAaMidpointToleranceFractionOfRange * (hi - lo)
+        """AA 中点容差(度):固定值,到达和保持共用。"""
+        return kAaMidpointToleranceDeg
 
     def urdf_config_crc(self):
         return urdf_manual_scaled_mapping_metadata()[1]
@@ -530,8 +534,6 @@ class HostCalibrationIO:
             progress_angle = angle
             deadline = last_command + 60000
             self.trace('AA_MIDPOINT', aa, target_deg=center)
-            from .dual_motor import invalidate_dual_workspace_cache_joint
-            invalidate_dual_workspace_cache_joint(self, aa)
             stable, last = 0, (state.encoder_raw_p4_time_ms, state.servo_feedback_p4_time_ms)
             while self.owns_control() and self.now_ms() <= deadline:
                 state, angle = self._finger_aa_feedback(aa, result)
@@ -1187,6 +1189,23 @@ class HostCalibrationIO:
         warning_mask = state.calibration_warning_bitmap
         reason = int(payload.get('assemblyWarningReason', 0))
         warning_mask = warning_mask | (1 << joint) if reason else warning_mask & ~(1 << joint)
+        if not self._wait(lambda: self._fresh_feedback(self._state(), mask), 3000):
+            return False, 'calibration applied to P4 but trusted native ABS feedback did not return; snapshot not written'
+        state = self._state()
+        with self.controller._multiturn_io_lock:
+            with self.controller._multiturn_anchor_capture_lock:
+                self.controller._multiturn_anchor_capture_blocked_mask &= ~mask
+            try:
+                if not self.controller._persist_multiturn_state(state, force=True):
+                    with self.controller._multiturn_anchor_capture_lock:
+                        self.controller._multiturn_anchor_capture_blocked_mask |= mask
+                    return False, 'calibration applied to P4 but runtime anchor persistence failed; snapshot not written'
+            except Exception:
+                with self.controller._multiturn_anchor_capture_lock:
+                    self.controller._multiturn_anchor_capture_blocked_mask |= mask
+                raise
+        # 先验收(新鲜反馈+锚点落盘)再更新内存状态和快照:否则验收失败会留下
+        # "UI 报 FAILED 但数据已落盘"的自相矛盾状态。
         self._overlay(joint_calib_results=results, motor_abs_limit_min=mins,
                       motor_abs_limit_max=maxs,
                       motor_abs_limit_valid_bitmap=state.motor_abs_limit_valid_bitmap | mask,
@@ -1213,21 +1232,6 @@ class HostCalibrationIO:
             'source': {'transport': 'host_calibration',
                        'identity_contract': 'hand_profile+urdf_crc+manual_entry_crc'},
         }, 1 << joint)
-        if not self._wait(lambda: self._fresh_feedback(self._state(), mask), 3000):
-            return False, 'new joint result saved; waiting for trusted native ABS anchors'
-        state = self._state()
-        with self.controller._multiturn_io_lock:
-            with self.controller._multiturn_anchor_capture_lock:
-                self.controller._multiturn_anchor_capture_blocked_mask &= ~mask
-            try:
-                if not self.controller._persist_multiturn_state(state, force=True):
-                    with self.controller._multiturn_anchor_capture_lock:
-                        self.controller._multiturn_anchor_capture_blocked_mask |= mask
-                    return False, 'new joint result saved; runtime anchor persistence failed'
-            except Exception:
-                with self.controller._multiturn_anchor_capture_lock:
-                    self.controller._multiturn_anchor_capture_blocked_mask |= mask
-                raise
         self._committed_joint_results[joint] = deepcopy(payload)
         return True, f'J{joint:02d} Manual/LUT/limits and multi-turn anchors saved'
 

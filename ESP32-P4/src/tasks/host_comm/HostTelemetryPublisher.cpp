@@ -354,10 +354,11 @@ bool sendTaskRuntimePacket(const TaskRuntimeSnapshot& diag)
     return FW_SERIAL_WRITE(buffer, idx) == idx;
 }
 
-// 上报舵机过载位图和每路锁存的触发 load。
-bool sendFaultStatusPacket(SystemRuntimeContext* sharedData, uint32_t overloadFaultBitmap)
+// 上报舵机过载位图、每路锁存的触发 load 和每路 ERROR 字节。
+bool sendFaultStatusPacket(SystemRuntimeContext* sharedData, uint32_t overloadFaultBitmap,
+                           const ServoTelemetryData_t& telemetry)
 {
-    uint8_t buffer[12 + SERVO_TOTAL_NUM * 2];
+    uint8_t buffer[12 + SERVO_TOTAL_NUM * 3];
     int16_t faultLoads[SERVO_TOTAL_NUM] = {0};
     if (sharedData) {
         SharedSafetyGuard guard;
@@ -379,6 +380,9 @@ bool sendFaultStatusPacket(SystemRuntimeContext* sharedData, uint32_t overloadFa
         const uint16_t encodedLoad = (uint16_t)load;
         buffer[idx++] = (uint8_t)((encodedLoad >> 8) & 0xFF);
         buffer[idx++] = (uint8_t)(encodedLoad & 0xFF);
+    }
+    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+        buffer[idx++] = telemetry.faultStatus[ch];
     }
     appendU32BigEndian(buffer, &idx, p4::platform::time::monotonicMillis());
     buffer[idx++] = PROTOCOL_TAIL;

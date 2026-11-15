@@ -12,6 +12,7 @@ from desktop.core.protocol import (
     MOTOR_COUNT,
     PACKET_TYPE_JOINT_CALIB_SNAPSHOT,
     PACKET_TYPE_SENSOR,
+    parse_fault_status_packet,
     parse_servo_position_packet,
     parse_servo_telem_packet,
 )
@@ -55,6 +56,24 @@ def test_servo_position_packet_contains_only_native_abs() -> None:
     payload = b"".join(struct.pack(">i", value) for value in angles)
     assert parse_servo_position_packet(payload) == angles
     assert parse_servo_position_packet(payload[:-1]) is None
+
+
+def test_fault_status_packet_carries_servo_error_bytes() -> None:
+    statuses = [0] * MOTOR_COUNT
+    statuses[11] = 0x04
+    payload = (struct.pack(">I", 1 << 11)
+               + b"".join(struct.pack(">h", -128) for _ in range(MOTOR_COUNT))
+               + bytes(statuses))
+
+    assert parse_fault_status_packet(payload) == (1 << 11, [-128] * MOTOR_COUNT, statuses)
+    assert parse_fault_status_packet(payload[:-1]) is None
+
+    model = HandModel()
+    reducer = state_reducer.StateReducer()
+    assert reducer._apply_fault_status(None, model, payload, None, 0.0)
+    assert model.servo_overload_fault[11] is True
+    assert model.servo_overload_trigger_load[11] == -128
+    assert model.servo_status[11] == 0x04
 
 
 def test_valid_angle_outside_workspace_updates_instead_of_freezing():

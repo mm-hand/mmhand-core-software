@@ -210,6 +210,16 @@ CALIBRATION_DIAGNOSTICS: Dict[int, CalibrationDiagnosticSpec] = {
         ("load", "load_threshold", "encoder_delta", "motor_mask"),
         "Check primary/secondary tendon preload, winding directions, encoder feedback, and mechanical binding.",
     ),
+    protocol.CALIB_DIAG_REASON_END_NOT_REACHED: _spec(
+        "Joint stopped far from the commanded endpoint",
+        ("angle_deg_x1000", "distance_deg_x1000", "encoder_raw", "motor_mask"),
+        "The joint angle froze while the tendon still pulled. Check for a blocked joint or re-capture Manual Min/Max.",
+    ),
+    protocol.CALIB_DIAG_REASON_SLACK_TOO_LARGE: _spec(
+        "Tendon wound past one joint range without moving the joint",
+        ("wound_counts", "manual_span_counts", "encoder_raw", "motor_mask"),
+        "Check that the tendon is attached and follows the motor; remove trapped slack and verify the winding direction.",
+    ),
 }
 
 
@@ -220,6 +230,7 @@ PHASE_NAMES = {
     protocol.CALIB_DIAG_PHASE_RETURN_ZERO: "Return to zero",
     protocol.CALIB_DIAG_PHASE_DUAL_PRELOAD: "Dual-motor preload",
     protocol.CALIB_DIAG_PHASE_DUAL_EXCHANGE: "Dual-motor exchange test",
+    protocol.CALIB_DIAG_PHASE_FIND_MIN: "Find minimum position",
     protocol.CALIB_DIAG_PHASE_SEQUENCE: "Calibration sequence",
 }
 

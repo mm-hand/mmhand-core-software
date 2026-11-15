@@ -375,10 +375,10 @@ public:
         return id <= MAX_SERVO_ID && _feedback[id].online;
     }
 
-    /** 舵机自身报告故障（过载/过压/磁编/超温/过流）；仍在线、可读遥测。 */
+    /** 舵机自身报告故障（磁编/超温/过流/过载）；0x01 电压异常不参与判定。 */
     bool isFaulted(uint8_t id) const
     {
-        return id <= MAX_SERVO_ID && _feedback[id].motorStatus != 0;
+        return id <= MAX_SERVO_ID && (_feedback[id].motorStatus & 0x3E) != 0;
     }
 
     /** 表示 logical ABS 已由桌面 JSON、ABS设零或标定重新建立可信基准。 */

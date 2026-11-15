@@ -143,6 +143,9 @@ CALIB_DIAG_REASON_RESULT_COMMIT_FAILED = 31
 CALIB_DIAG_REASON_MULTITURN_TRUST_FAILED = 32
 CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT = 33
 CALIB_DIAG_REASON_DUAL_EXCHANGE_STALLED = 34
+# 端点搜索：角度冻结但停在离目标端点很远的地方（卡住），或腱松量超过整段行程。
+CALIB_DIAG_REASON_END_NOT_REACHED = 35
+CALIB_DIAG_REASON_SLACK_TOO_LARGE = 36
 
 CALIB_DIAG_PHASE_NONE = 0
 CALIB_DIAG_PHASE_INIT = 1
@@ -152,6 +155,7 @@ CALIB_DIAG_PHASE_RETURN_ZERO = 4
 CALIB_DIAG_PHASE_DUAL_PRELOAD = 5
 CALIB_DIAG_PHASE_DUAL_EXCHANGE = 6
 CALIB_DIAG_PHASE_SEQUENCE = 7
+CALIB_DIAG_PHASE_FIND_MIN = 8
 
 SERVO_TARGET_OWNER_NONE = 0
 SERVO_TARGET_OWNER_CONTROL = 1
@@ -164,6 +168,7 @@ SERVO_ROUTE_ONLINE = 2
 SERVO_ROUTE_OFFLINE = 3
 SERVO_ROUTE_CONFLICT = 4
 SERVO_ROUTE_BUS_OVERLOADED = 5
+SERVO_ROUTE_FAULTED = 6
 
 # 与协议无关的控制域配置。
 DUAL_TENDON_JOINT_INDICES = (0, 4, 8, 12, 16, 20)
@@ -807,8 +812,9 @@ def parse_adaptive_kp_packet(payload: bytes) -> Optional[dict]:
     return {"enabled": bool(payload[0]), "scale": scale, "effective": effective}
 
 
-def parse_fault_status_packet(payload: bytes) -> Optional[Tuple[int, List[Optional[int]]]]:
-    if len(payload) != 4 + MOTOR_COUNT * 2:
+def parse_fault_status_packet(payload: bytes) -> Optional[Tuple[int, List[Optional[int]], List[int]]]:
+    """过载位图、27 路触发负载和 27 路舵机 ERROR 字节。"""
+    if len(payload) != 4 + MOTOR_COUNT * 3:
         return None
     fault_bitmap = struct.unpack(">I", payload[:4])[0]
     trigger_loads: List[Optional[int]] = [None] * MOTOR_COUNT
@@ -816,7 +822,8 @@ def parse_fault_status_packet(payload: bytes) -> Optional[Tuple[int, List[Option
     for i in range(MOTOR_COUNT):
         trigger_loads[i] = struct.unpack(">h", payload[offset:offset + 2])[0]
         offset += 2
-    return fault_bitmap, trigger_loads
+    statuses = [int(value) for value in payload[offset:offset + MOTOR_COUNT]]
+    return fault_bitmap, trigger_loads, statuses
 
 
 def parse_tactile_packet(

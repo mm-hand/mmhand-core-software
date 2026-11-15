@@ -408,7 +408,7 @@ S3 RX→触觉解析与USB发送
 | 0x03 | PACKET_TYPE_SERVO_POSITION | 27路原生有符号ABS与时间戳，完整帧116字节 |
 | 0x05 | PACKET_TYPE_SERVO_TELEM | 舵机遥测 |
 | 0x06 | PACKET_TYPE_PROTO_ACK | 命令 ACK |
-| 0x07 | PACKET_TYPE_FAULT_STATUS | 故障与在线位图 |
+| 0x07 | PACKET_TYPE_FAULT_STATUS | 过载位图、触发负载与每路 ERROR 字节 |
 | 0x0A | PACKET_TYPE_TACTILE | 五指触觉摘要 |
 | 0x0B | PACKET_TYPE_ENCODER_RAW | 21 路磁编 raw |
 | 0x0C | PACKET_TYPE_SYSTEM_STATUS | 状态机与 owner |

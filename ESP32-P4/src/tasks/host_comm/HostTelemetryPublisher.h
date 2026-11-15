@@ -24,7 +24,8 @@ bool sendSystemStatusPacket(SystemRuntimeContext* sharedData);
 bool sendManualEncoderReferencePacket(SystemRuntimeContext* sharedData);
 bool sendTaskRuntimePacket(const TaskRuntimeSnapshot& diag);
 bool sendFaultStatusPacket(SystemRuntimeContext* sharedData,
-                           uint32_t overloadFaultBitmap);
+                           uint32_t overloadFaultBitmap,
+                           const ServoTelemetryData_t& telemetry);
 bool sendMotorAbsLimitPacket(SystemRuntimeContext* sharedData);
 bool sendServoLogicalRangePacket(SystemRuntimeContext* sharedData);
 bool sendJointCalibSnapshotPacket(uint8_t jointIndex);

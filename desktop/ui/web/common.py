@@ -155,6 +155,37 @@ def encoder_badge():
                 ui.tooltip(f'J{int(joint):02d} encoder: {entry[1]}')
     return refresh
 
+MOTOR_FAULTS = ((0x02, 'ANGLE'), (0x04, 'OVERTEMP'), (0x08, 'OVERCURRENT'), (0x20, 'OVERLOAD'))
+
+def motor_badge():
+    """Offline motors show LOSS; a servo-reported fault shows its label; 0x01 voltage alone is ignored."""
+    container, previous = ui.row().classes('gap-1 items-center'), [None]
+    def refresh(snapshot, *, joint=None, motor=None):
+        rows = [row for row in snapshot.get('motors', ())
+                if (motor is not None and row['motor'] == motor)
+                or (motor is None and (joint is None or row['joint'] == joint))]
+        states = tuple((row['motor'], row.get('online'), row.get('fault')) for row in rows)
+        if previous[0] == states:
+            return
+        previous[0] = states
+        container.clear()
+        for row in rows:
+            status = int(row.get('fault') or 0) & 0x3E
+            labels = [name for bit, name in MOTOR_FAULTS if status & bit]
+            if row.get('online') is False:
+                label, hint = 'LOSS', ("is not responding: no servo feedback on its bus. "
+                                       "Check the servo 12 V supply and the bus connector.")
+            elif labels:
+                label = '/'.join(labels)
+                hint = (f"reports servo status 0x{status:02X} ({label}). "
+                        "Torque is cut until the fault clears.")
+            else:
+                continue
+            with container:
+                with ui.badge(f"M{row['motor']:02d} {label}", color='negative'):
+                    ui.tooltip(f"Motor {row['motor']:02d} (J{int(row['joint']):02d}) {hint}")
+    return refresh
+
 def select_all_and_request(hand, key, request):
     snapshot = hand.application_snapshot(include_curves=False)
     if key == 'selected_motors':
@@ -178,6 +209,9 @@ def selection(hand, key, indices, text):
     box = ui.checkbox(text, on_change=changed).props('dense')
     def refresh(snapshot):
         syncing[0] = True
+        enabled = not snapshot.get('busy')
+        if box.enabled != enabled:
+            box.set_enabled(enabled)
         selected = set(snapshot[key])
         box.set_value(set(indices) <= selected)
         indeterminate = bool(selected.intersection(indices) and not set(indices) <= selected)

@@ -9,7 +9,8 @@
 """
 from nicegui import ui
 from .common import (FINGERS, finger_cards, selection, label, show, quality, table, set_rows, joint_label, display_joints,
-                     maintenance_allowed, maintenance_button, auto_span, request_calibration, select_all_and_request, encoder_badge)
+                     maintenance_allowed, maintenance_button, auto_span, request_calibration, select_all_and_request, encoder_badge,
+                     motor_badge)
 
 
 def detail_text(row, limits='—'):
@@ -45,9 +46,10 @@ def build(hand, act, load_calibration):
                             refreshers.append(selection(hand, 'selected_joints', [j], joint_label(j)))
                             badge = quality()
                             elec = encoder_badge()
+                            loss = motor_badge()
                         motors = table([(k, v) for k, v in [('motor', 'Motor'), ('abs', 'ABS'), ('load', 'Load')]], 'motor')
                         info = label().classes('text-xs leading-tight')
-                    def refresh(snapshot, j=j, badge=badge, motors=motors, info=info, elec=elec):
+                    def refresh(snapshot, j=j, badge=badge, motors=motors, info=info, elec=elec, loss=loss):
                         row, result = snapshot['joints'][j], snapshot['joints'][j]['result']
                         offset, shortfall = result.get('autoMinOffsetCounts'), result.get('autoMaxShortfallCounts')
                         causes = ('tendon friction, preload or mechanical resistance' if len(row['motors']) == 2
@@ -55,6 +57,7 @@ def build(hand, act, load_calibration):
                         hint = 'Transaction failed. See System Log and Operation History for the actual reason.' if 'FAILED' in row['motor_quality'] else f"Return offset: {show(offset)} (warning ≥350); travel shortfall: {show(shortfall)} (warning ≥300) counts. Possible causes: {causes}; forces are not measured."
                         badge(row['motor_quality'], hint)
                         elec(row.get('encoder_state'), j)
+                        loss(snapshot, joint=j)
                         set_rows(motors, [dict(m, motor=f"M{m['motor']:02d}") for m in snapshot['motors'] if m['joint'] == j])
                         limits = ' / '.join(f"M{m['motor']:02d}: {show(m['limits'])}" for m in snapshot['motors'] if m['joint'] == j)
                         info.set_text(detail_text(row, limits))

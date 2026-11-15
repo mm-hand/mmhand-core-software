@@ -6,12 +6,15 @@ import time
 import queue
 from unittest.mock import Mock
 import pytest
-from desktop.core.application_actions import validate_manual_pair
+from desktop.core.application_actions import (validate_manual_pair, motor_readiness,
+                                              direct_enable_issue)
 from desktop.core.hand_backend import HandBackend
 from desktop.core.protocol import (SYSTEM_STATE_READY, SYSTEM_STATE_RUN_DIRECT,
-                                   SYSTEM_STATE_UNCONTROLLABLE, HOST_PROTOCOL_VERSION, STATE_SYNC_ALL)
+                                   SYSTEM_STATE_UNCONTROLLABLE, HOST_PROTOCOL_VERSION, STATE_SYNC_ALL,
+                                   SERVO_ROUTE_ONLINE, SERVO_ROUTE_FAULTED)
 from desktop.core.core_logic import HandController, ServoRebaseZeroResult
 from _conftest_support import wait_operation
+from desktop.core.user_issues import issue_text, operation_issue
 
 
 @pytest.mark.parametrize('kind',['joint','motor'])
@@ -313,6 +316,7 @@ def test_direct_zero_only_selected_motor_without_expanding_joint_scope(hand, mon
 
 def test_direct_zero_all_zeros_every_online_routable_motor(hand, monkeypatch):
     writer = direct_zero_device(hand, monkeypatch)
+    hand._selected_motors = (9, 10)
     state = hand._controller.current_state
     state.servo_online_bitmap &= ~((1 << 3) | (1 << 4))
     state.servo_route_controllable_bitmap &= ~(1 << 5)
@@ -320,6 +324,7 @@ def test_direct_zero_all_zeros_every_online_routable_motor(hand, monkeypatch):
     assert wait_operation(hand, hand.request_direct_zero_all())['status'] == 'SUCCESS'
     expected = ((1 << 27) - 1) & ~((1 << 3) | (1 << 4) | (1 << 5) | (1 << 6))
     assert writer.call_args.args == (expected,)
+    assert hand._selected_motors == ()
     # 归零时会真停一次：P4 锁存 E-STOP，UI 必须显示 Clear Faults。
     hand._controller.stop.assert_called_once()
 
@@ -345,9 +350,11 @@ def test_direct_zero_while_idle_does_not_latch_estop(hand, monkeypatch):
 
 def test_direct_zero_all_rejects_when_no_motor_is_eligible(hand, monkeypatch):
     writer = direct_zero_device(hand, monkeypatch)
+    hand._selected_motors = (9, 10)
     hand._controller.current_state.servo_online_bitmap = 0
     result = hand.request_direct_zero_all()
     assert not result.accepted and 'No online, routable motors' in result.message
+    assert hand._selected_motors == (9, 10)
     writer.assert_not_called()
 
 
@@ -872,6 +879,49 @@ def test_calibration_rejects_unapplied_parameters_before_reset_or_motion(hand, m
     assert not hand._application_operations
 
 
+def test_snapshot_during_calibration_prepare_keeps_operation_alive(hand, monkeypatch):
+    """准备期内 host worker 还没激活，快照轮询不能把操作判成“已取消”。"""
+    state = hand._controller.current_state
+    state.manual_reference_valid_bitmap = 1
+    state.manual_reference_min_raw[0] = 1000
+    state.manual_reference_max_raw[0] = 3000
+    hand._selected_joints = (0,)
+    hand._application_epoch = 1          # 等价于“按过一次 STOP 之后”
+    entered, release = threading.Event(), threading.Event()
+
+    def prepare(_epoch):
+        entered.set(); release.wait(5)
+        return False, 'prepare finished for test'
+
+    monkeypatch.setattr(hand, '_prepare_maintenance_switch', prepare)
+    result = hand.request_calibration()
+    assert result.accepted and entered.wait(5)
+
+    operation = next(row for row in hand.application_snapshot()['operations']
+                     if row['operation_id'] == result.operation_id)
+    assert operation['status'] in ('PENDING', 'RUNNING')
+    assert hand._calibration_operation_id == result.operation_id
+
+    release.set()
+    operation = wait_operation(hand, result)
+    assert operation['status'] == 'FAILED' and operation['message'] == 'prepare finished for test'
+
+
+def test_snapshot_closes_orphaned_calibration_operation(hand):
+    """真正失去 worker 的标定操作仍必须被收尾，不能靠删掉看门狗来修 bug。"""
+    hand._application_epoch = 1
+    hand._calibration_operation_id = hand._application_busy = 'orphan-calibration'
+    hand._application_operations.append(dict(
+        operation_id='orphan-calibration', name='Selected-joint Calibration', time='12:00:00',
+        scope='Joints 0x000001', status='RUNNING', message='Calibrating', phase='joint_started',
+        origin='Motor Calibration', finished_at=None, alert_acknowledged=False))
+    operation = next(row for row in hand.application_snapshot()['operations']
+                     if row['operation_id'] == 'orphan-calibration')
+    assert operation['status'] == 'FAILED'
+    assert operation['message'] == 'Calibration cancelled; completed joints preserved'
+    assert hand._calibration_operation_id is None and hand._application_busy is None
+
+
 @pytest.mark.parametrize('action', ['save', 'defaults'])
 def test_parameter_changes_cannot_change_calibration_margins_mid_operation(hand, monkeypatch, action):
     hand._calibration_operation_id = 'preparing-calibration'
@@ -985,3 +1035,102 @@ def test_contact_capture_requires_fresh_manual_endpoints(hand):
     hand.current_state.manual_reference_valid_bitmap = (1 << 21) - 1
     hand.current_state.encoder_raw_last_rx_ts = time.time() - 5
     assert not hand.begin_contact_capture()['ok']
+
+
+def direct_enable_state(hand, monkeypatch):
+    """P4 状态新鲜、全部电机在线；各用例再制造一种阻塞原因。"""
+    from desktop.core.data_models import HandModel
+    state = hand._controller.current_state
+    state.has_system_status_data = state.has_servo_angle_data = state.has_servo_route_status = True
+    state.has_p4_time = True
+    state.p4_time_ms = state.servo_feedback_p4_time_ms = 1000
+    state.servo_online_bitmap = state.servo_route_controllable_bitmap = (1 << 27) - 1
+    state.servo_route_state = [SERVO_ROUTE_ONLINE] * 27
+    state.servo_bus_device_count = [5, 7, 5, 10]
+    state.system_status_last_rx_ts = time.time()
+    stamp(state, 'system_status_last_rx_ts')
+    state.servo_abs_last_rx_ts = time.time()
+    stamp(state, 'servo_abs_last_rx_ts')
+    monkeypatch.setattr(hand, 'is_comm_connected', lambda: True)
+    monkeypatch.setattr(hand, 'stop_motion', Mock())
+    monkeypatch.setattr(hand, 'enable_direct_hold', Mock())
+    hand._selected_motors = (11,)
+    return state
+
+
+def test_motor_readiness_classifies_each_reason():
+    from desktop.core.data_models import HandModel
+    state = HandModel()
+    state.servo_online_bitmap = ((1 << 27) - 1) & ~(1 << 10)
+    state.servo_route_bus = [2] * 27
+    state.multi_turn_unknown_bitmap = 1 << 11
+    state.servo_route_state[12] = SERVO_ROUTE_FAULTED
+    state.servo_turn_overflow_bitmap = 1 << 13
+    blockers = {row['motor']: row for row in
+                motor_readiness(state, sum(1 << m for m in (10, 11, 12, 13)))}
+    assert blockers[10]['reason'] == 'offline'
+    assert blockers[11]['reason'] == 'unknown'
+    assert blockers[12]['reason'] == 'faulted'
+    assert blockers[13]['reason'] == 'overflow'
+    assert {row['bus'] for row in blockers.values()} == {2}
+
+
+def test_direct_enable_rejects_missing_bus_without_queueing(hand, monkeypatch):
+    state = direct_enable_state(hand, monkeypatch)
+    state.servo_online_bitmap &= ~(1 << 11)
+    state.servo_bus_device_count = [5, 7, 0, 10]
+    result = hand.request_direct_enable()
+    assert result.accepted is False
+    assert hand._application_busy is None
+    assert not hand._application_operations
+    assert not hand.enable_direct_hold.called
+    assert not hand.stop_motion.called
+    # 与 act() 相同路径：失败提示经过 record_operation_issue 落到 toast 文本。
+    issue = hand.record_operation_issue(result.message)
+    assert issue['code'] == 'DIR-3102'
+    assert issue['scope'] == 'M11'
+    assert 'BUS2 0 devices' in issue['detail']
+    assert 'M11 · no response' in issue_text(issue)
+
+
+def test_direct_enable_rejects_unknown_position(hand, monkeypatch):
+    state = direct_enable_state(hand, monkeypatch)
+    state.multi_turn_unknown_bitmap = 1 << 11
+    result = hand.request_direct_enable()
+    issue = operation_issue(result.message)
+    assert result.accepted is False
+    assert issue.code == 'DIR-3103'
+    assert issue.scope == 'M11'
+    assert 'J08' in issue.detail
+
+
+def test_direct_enable_rejects_faulted_motor(hand, monkeypatch):
+    state = direct_enable_state(hand, monkeypatch)
+    state.servo_route_state[11] = SERVO_ROUTE_FAULTED
+    result = hand.request_direct_enable()
+    assert operation_issue(result.message).code == 'DIR-3106'
+
+
+def test_direct_enable_enqueues_when_motors_ready(hand, monkeypatch):
+    direct_enable_state(hand, monkeypatch)
+    monkeypatch.setattr(hand, 'enable_direct_hold',
+                        Mock(return_value=(True, 'Selected motors enabled', [])))
+    monkeypatch.setattr(hand, '_prepare_control_switch', Mock(return_value=(True, '')))
+    monkeypatch.setattr(hand, 'set_active_scope', Mock(return_value=True))
+    result = hand.request_direct_enable()
+    assert result.accepted is True
+    assert wait_operation(hand, result)['status'] == 'SUCCESS'
+
+
+def test_clear_operation_errors_removes_only_failed_records(hand):
+    hand._application_operations.clear()
+    hand._application_operations.append({'operation_id': 'ok', 'name': 'x', 'status': 'SUCCESS',
+                                         'time': '1', 'scope': 'System', 'message': 'ok', 'phase': 'complete'})
+    hand._application_operations.append({'operation_id': 'bad', 'name': 'y', 'status': 'FAILED',
+                                         'time': '2', 'scope': 'System', 'message': 'bad', 'phase': 'failed'})
+    result = hand.clear_operation_errors()
+    assert result.accepted is True
+    assert result.message == 'Cleared 1 error records'
+    assert [op['operation_id'] for op in hand._application_operations] == ['ok']
+    assert hand._application_operations.maxlen == 64
+    assert hand.clear_operation_errors().message == 'Cleared 0 error records'

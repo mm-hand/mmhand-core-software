@@ -70,8 +70,9 @@
       "category": "offline",
       "impact": "Reliable feedback is needed before these motors can be controlled.",
       "steps": [
-        "Check motor power and the affected bus connections.",
-        "Wait for the affected motors to show Online, then retry the original action."
+        "Power-cycle the servo 12 V supply for about 5 s, then re-seat the connector on the affected bus.",
+        "Wait for the affected motors to show Online again (the P4 rescans every 0.5 s; Renumber Motor - Scan forces one).",
+        "Retry the original action."
       ]
     },
     "1009": {
@@ -225,8 +226,9 @@
       "category": "offline",
       "impact": "Reliable feedback is needed before these motors can be controlled.",
       "steps": [
-        "Check motor power and the affected bus connections.",
-        "Wait for the affected motors to show Online, then retry the original action."
+        "Power-cycle the servo 12 V supply for about 5 s, then re-seat the connector on the affected bus.",
+        "Wait for the affected motors to show Online again (the P4 rescans every 0.5 s; Renumber Motor - Scan forces one).",
+        "Retry the original action."
       ]
     },
     "3103": {
@@ -235,7 +237,8 @@
       "impact": "The controller cannot safely interpret the affected motor positions.",
       "steps": [
         "Wait for position recovery to finish.",
-        "If recovery fails, open Motor Calibration and calibrate the affected joints."
+        "If recovery fails, open Motor Calibration, select the joint that owns the affected motors, and calibrate it.",
+        "Retry the action after the motor positions show as known."
       ]
     },
     "3104": {
@@ -261,8 +264,9 @@
       "category": "device_fault",
       "impact": "A device fault is blocking this action.",
       "steps": [
-        "Open Diagnostics and resolve the current fault shown for the affected device.",
-        "After correcting the cause, retry Enable."
+        "Open Diagnostics and read the servo fault reported for the affected motor.",
+        "Power-cycle the servo 12 V supply for about 5 s; if the fault returns under load, inspect the joint and tendon.",
+        "Retry Enable after the fault clears."
       ]
     },
     "3201": {
@@ -1092,6 +1096,26 @@
         "Check the affected motors show Online and that live position readings update.",
         "Check motor power and bus connections.",
         "If a scan finds all motors but live feedback is still missing, save the session log for support."
+      ]
+    },
+    "HOST_CALIB_35": {
+      "title": "Calibration stopped: the joint stopped far from the endpoint",
+      "category": "mechanical",
+      "impact": "The joint angle froze while the tendon was still pulling, so the commanded endpoint was never reached.",
+      "steps": [
+        "Read the reported angle and distance: it is where the joint actually stopped.",
+        "Check for a blocked joint (neighbour finger, palm, tendon path) or re-capture Manual Min/Max if the endpoint was measured wrong.",
+        "Move the joint by hand or in Direct Control and watch the live angle before recalibrating."
+      ]
+    },
+    "HOST_CALIB_36": {
+      "title": "Calibration stopped: the tendon is far too slack",
+      "category": "mechanical",
+      "impact": "The motor wound past one full joint range without the angle moving, so tension never reached the joint.",
+      "steps": [
+        "Check that the tendon is attached and follows the motor (compare motor travel with the live joint angle).",
+        "Check the spool/winding direction and remove any trapped slack in the tendon path.",
+        "Recalibrate after the tendon is confirmed to move the joint."
       ]
     }
   }

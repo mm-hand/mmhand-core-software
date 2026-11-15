@@ -76,7 +76,7 @@ def finish_dual_zero(io, completed_joint_mask):
     # 本轮已提交的 host 结果是收尾数据源；不能等异步 P4 echo 才取得自己的 LUT。
     # 简单机械算法 fake port 可继续提供旧 snapshot 接口。
     results = None if callable(host_result) else io._state().joint_calib_results
-    plan = []
+    plan, skipped = [], []
     for joint in range(ENCODER_COUNT):
         if joint not in DUAL_TENDON_JOINT_INDICES or not selected & (1 << joint):
             continue
@@ -85,8 +85,14 @@ def finish_dual_zero(io, completed_joint_mask):
             results[joint] if joint < len(results) else None)
         targets = dual_lut_targets(result, motors, 0.0)
         if len(motors) != 2 or targets is None:
-            return False, f'J{joint:02d} zero finish requires a valid dual LUT containing 0 degrees'
+            # 数据已经提交，缺 0° 只跳过这次回零，不要把整批降级成 WARN。
+            skipped.append(joint)
+            continue
         plan.append((joint, targets))
+    if skipped:
+        # 缺 0° 的 LUT 时整批跳过：只回零一部分会把整只手停在半个姿势上。
+        return True, ('Pull Joint into Workspace completed; dual LUT zero finish skipped '
+                      '(LUT has no 0 degree): ' + ', '.join(f'J{joint:02d}' for joint in skipped))
     for joint, targets in plan:
         if not io.owns_control():
             return False, f'J{joint:02d} zero finish cancelled or control lost'

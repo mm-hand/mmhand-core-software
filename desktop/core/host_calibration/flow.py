@@ -24,12 +24,7 @@ from ..protocol import (
     VALID_MOTOR_MASK,
 )
 from .config import default_auto_calibration_params, kAbsRebaseRetryCounts
-from .dual_motor import (
-    build_dynamic_workspace_motor_mask,
-    invalidate_dual_workspace_cache_joint,
-    reset_dual_workspace_cache,
-    run_dual,
-)
+from .dual_motor import build_dynamic_workspace_motor_mask, run_dual
 from .single_motor import run_single
 
 
@@ -102,7 +97,6 @@ def run(io, joint_mask: int, motor_mask: int,
     message = ""
     cancelled = False
     terminal_status = "FAILED"
-    reset_dual_workspace_cache(io)
     io.set_workspace_read_mask(0)
     io.session_state("PENDING", progress=0, joint=0xFF, completed=0, failed=0)
     try:
@@ -172,7 +166,6 @@ def run(io, joint_mask: int, motor_mask: int,
                             if not io.rebase_joint_for_retry(joint, joint_motors):
                                 outcome.update(aborted=True, reason=io.feedback_recovery_error)
                                 break
-                            invalidate_dual_workspace_cache_joint(io, joint)
                             message_for_trace = outcome.get("reason") or ""
                             failure_message = getattr(io, "failure_message", None)
                             if callable(failure_message):

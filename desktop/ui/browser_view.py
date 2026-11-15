@@ -15,7 +15,7 @@ from . import refresh_policy as policy
 from .web import renumber_motors, joint_calibration, motor_calibration, feedback_control, direct_control
 from .web import replay, plots, diagnostics, control_parameters, hand as hand_view
 from .web import contact_calibration as contact_view
-from .web.common import show
+from .web.common import show, table, set_rows
 
 TABS = ['Calibration', 'Control', 'Plot', 'Settings']
 SUBTABS = {
@@ -256,6 +256,24 @@ def build_page(hand):
         firmware_message = ui.label().classes('whitespace-pre-wrap text-sm')
         ui.button('Close', on_click=firmware_dialog.close).props('dense')
 
+    # 报错历史：失败操作本身就是证据，这里只做只读回放，不提供重试按钮。
+    errors_state = {}
+    errors_alert = [False]
+    with ui.dialog() as errors_dialog, ui.card().classes('w-[760px] max-w-full'):
+        ui.label('Recent errors').classes('font-semibold')
+        errors_table = table([('time', 'Time'), ('scope', 'Scope'), ('title', 'Problem'), ('detail', 'Detail')], 'operation_id')
+        errors_body = ui.label().classes('text-sm whitespace-pre-wrap')
+        with ui.row().classes('w-full justify-between items-center'):
+            clear_errors = ui.button('Clear errors', on_click=lambda: (errors_body.set_text(''),
+                                                                       pending_calibration_alerts.clear(),
+                                                                       act(hand.clear_operation_errors))).props('dense flat')
+            ui.button('Close', on_click=errors_dialog.close).props('dense')
+
+    def select_error(event):
+        issue = errors_state.get((event.args[1] or {}).get('operation_id'))
+        errors_body.set_text(issue_text(issue) if issue else '')
+    errors_table.on('rowClick', select_error)
+
     def refresh_firmware_alerts(snapshot):
         device = snapshot.get('motor_firmware_device')
         if not snapshot.get('connections', {}).get('p4', {}).get('connected', False) or firmware_alert_device[0] != device:
@@ -373,6 +391,7 @@ def build_page(hand):
                 ages[name] = ui.label('Rx age: —').classes('text-xs whitespace-nowrap')
                 with ages[name]: ui.tooltip('Time since the latest data received on this connection, in milliseconds.')
             ui.space()
+            errors_button = ui.button('Errors (0)', on_click=errors_dialog.open).props('dense outline')
             save = ui.button('Save Data: ON', on_click=lambda: act(lambda: hand.request_recording(not hand.application_snapshot(include_curves=False)['recording']['enabled']))).props('dense outline')
             top_stop = ui.button('■ STOP', on_click=lambda: act(hand.stop_motion), color='negative').props('dense').classes('font-bold px-5')
         with ui.row().classes('status-bar items-center w-full flex-wrap gap-y-1'):
@@ -503,6 +522,23 @@ def build_page(hand):
         set_text('top-stop', top_stop, '■ STOP')
         set_enabled('top-stop', top_stop, online)
         set_text('save', save, 'Save Data: ON' if snapshot['recording']['enabled'] else 'Save Data: OFF')
+        failed = [op for op in reversed(snapshot['operations']) if op.get('status') == 'FAILED']
+        errors_state.clear()
+        for operation in failed[:30]:
+            errors_state[operation['operation_id']] = operation.get('user_issue') or {}
+        set_text('errors', errors_button, f'Errors ({len(failed)})')
+        if errors_alert[0] != bool(failed):
+            errors_alert[0] = bool(failed)
+            if failed:
+                errors_button.props('color=negative')
+            else:
+                errors_button.props(remove='color=negative')
+        set_enabled('errors-clear', clear_errors, bool(failed))
+        set_rows(errors_table, [{'operation_id': op['operation_id'], 'time': op.get('time', ''),
+                                 'scope': (op.get('user_issue') or {}).get('scope') or op.get('scope', ''),
+                                 'title': (op.get('user_issue') or {}).get('title') or op.get('message', ''),
+                                 'detail': (op.get('user_issue') or {}).get('detail') or ''}
+                                for op in failed[:30]])
         preview = snapshot['import_preview']
         if preview and importer.value and preview['token'] != preview_token[0]:
             preview_token[0] = preview['token']

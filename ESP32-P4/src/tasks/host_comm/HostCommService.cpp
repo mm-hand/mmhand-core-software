@@ -340,7 +340,7 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
             }
         }
 
-        ServoTelemetryData_t telemetryData;
+        ServoTelemetryData_t telemetryData = {};
         if (sharedData->servoTelemetryQueue.peek(&telemetryData) &&
             telemetryData.timestamp != lastServoTelemetryTimestampSent)
         {
@@ -371,7 +371,7 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
         const bool heartbeatDue =
             (!faultStatusSentInitialized) || ((nowMs - lastFaultStatusSentMs) >= kFaultStatusHeartbeatMs);
         if (bitmapChanged || heartbeatDue) {
-            if (sendFaultStatusPacket(sharedData, faultBitmap)) {
+            if (sendFaultStatusPacket(sharedData, faultBitmap, telemetryData)) {
                 lastFaultStatusSent = faultBitmap;
                 lastFaultStatusSentMs = nowMs;
                 faultStatusSentInitialized = true;

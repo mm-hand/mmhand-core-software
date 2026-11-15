@@ -24,6 +24,18 @@ normal joint adds nothing.
 | `ENCODER SHORT` | The finger's MISO is shorted or held. |
 | `ENCODER ERROR` | CAN works, but this joint returns no valid raw. |
 
+## Per-joint motor loss badges
+
+On the same four pages each row also gets one red `M<NN> LOSS` badge for every
+motor that a fresh P4 status frame reports offline. Direct Control rows are per
+motor, so only that motor is marked; the other three pages mark every offline
+motor that belongs to the joint, e.g. `M04 LOSS` and `M05 LOSS` on J01.
+
+A motor whose online state is still unknown (P4 disconnected or stale) adds
+nothing: unknown is not a loss. Motor loss is otherwise already reported in
+Diagnostics as rule 1008 "Motor feedback is unavailable", scoped `M00`…`M26`.
+
+
 ## How the class travels over CAN
 
 The S3 probe reads each finger once with the MISO internal pull-up and once

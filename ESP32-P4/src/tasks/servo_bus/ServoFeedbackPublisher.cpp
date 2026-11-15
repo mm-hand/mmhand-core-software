@@ -195,6 +195,7 @@ void publishFeedback(SystemRuntimeContext* sharedData,
             telemetryData.current[ch] = feedback.current;
             telemetryData.voltage[ch] = feedback.voltage;
             telemetryData.temperature[ch] = feedback.temperature;
+            telemetryData.faultStatus[ch] = static_cast<uint8_t>(feedback.motorStatus);
             telemetryData.onlineStatus[ch] = 1;
 
             if (driver->isMultiTurnConfigured(id) &&

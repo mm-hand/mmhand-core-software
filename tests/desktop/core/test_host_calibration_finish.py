@@ -122,7 +122,8 @@ def test_missing_current_host_result_cannot_fall_back_to_an_old_p4_lut():
     io = _IO((0,))
     io.calibration_result = lambda joint: None
     success, message = finish_dual_zero(io, io.selected_joint_mask)
-    assert not success and 'valid dual LUT' in message
+    # 缺本轮结果时整批跳过回零：绝不回退到上一轮的 LUT。
+    assert success and 'skipped' in message and 'J00' in message
     assert io.commands == [] and io.releases == 0
 
 
@@ -143,7 +144,8 @@ def test_invalid_lut_cannot_start_zero_finish(changes):
     io = _IO((0, 4))
     io.state.joint_calib_results[4].update(changes)
     success, message = finish_dual_zero(io, io.selected_joint_mask)
-    assert not success and 'J04' in message
+    # 数据已提交，缺 0° 只跳过整批回零，不把整批降级成 WARN。
+    assert success and 'J04' in message and 'skipped' in message
     assert io.commands == [] and io.releases == 0
 
 

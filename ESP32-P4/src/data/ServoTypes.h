@@ -41,6 +41,7 @@ struct ServoTelemetryData_t {
     int16_t current[SERVO_TOTAL_NUM];
     uint8_t voltage[SERVO_TOTAL_NUM];     ///< Present Voltage 原始值。
     uint8_t temperature[SERVO_TOTAL_NUM]; ///< Present Temperature，单位摄氏度。
+    uint8_t faultStatus[SERVO_TOTAL_NUM]; ///< 飞特 ERROR 字节；0 表示无故障。
     uint8_t onlineStatus[SERVO_TOTAL_NUM]; ///< 遥测字段对应舵机在线标志。
     uint32_t timestamp;                    ///< 完整遥测快照发布时间。
     ServoFeedbackCycleMeta_t cycle; ///< 与位置共享的同轮采样标识。

@@ -7,7 +7,7 @@ import pytest
 from desktop.core.data_models import HandModel
 from desktop.core.safety_rules import safety_rule_table
 from desktop.core.user_issues import (
-    IssueMessage, guidance, host_issue, operation_issue, rule_issue, snapshot_issues,
+    IssueMessage, guidance, host_issue, issue_text, operation_issue, rule_issue, snapshot_issues,
 )
 
 
@@ -133,3 +133,24 @@ def test_user_issue_does_not_mutate_event_evidence():
     issue = rule_issue(1008, details=event).to_dict()
     issue['details']['nested']['value'] = 100
     assert event['nested']['value'] == 4
+
+
+def test_issue_text_puts_detail_above_impact():
+    issue = rule_issue(3102, scope='M10-M14', detail='M10-M14 · BUS2 0 devices').to_dict()
+    assert issue_text(issue).splitlines()[:2] == ['Selected motors are not ready', 'M10-M14 · BUS2 0 devices']
+
+
+def test_motor_guidance_tells_the_user_to_power_cycle():
+    for rule_id in (1008, 3102, 3106):
+        steps = ' '.join(rule_issue(rule_id).steps).lower()
+        assert 'power-cycle' in steps
+
+
+def test_snapshot_issues_lists_faulted_motor():
+    state = HandModel()
+    state.servo_online_bitmap = 1 << 11
+    state.servo_route_state[11] = 6
+    snapshot = {'selected_motors': [11], 'joints': [], 'operations': [],
+                'connections': {'p4': {'port': '/dev/null'}}}
+    issues = snapshot_issues(state, snapshot, fresh=True)
+    assert any(issue['code'] == 'DIR-3106' and 'M11' in issue['scope'] for issue in issues)

@@ -32,6 +32,7 @@ class UserIssue:
     category: str = 'action'
     scope: str = 'System'
     status: str = 'Last action failed'
+    detail: str = ''
     details: dict = field(default_factory=dict)
     count: int = 1
 
@@ -39,26 +40,29 @@ class UserIssue:
         return asdict(self)
 
     def text(self):
-        return '\n'.join((self.title, self.impact, *(f'{i}. {step}' for i, step in enumerate(self.steps, 1))))
+        return '\n'.join(part for part in (self.title, self.detail, self.impact,
+                                          *(f'{i}. {step}' for i, step in enumerate(self.steps, 1))) if part)
 
 
 class IssueMessage(str):
     """Preserve an explicit cause through existing string-based result APIs."""
-    def __new__(cls, text, issue_code):
+    def __new__(cls, text, issue_code, *, scope=None, detail=''):
         value = super().__new__(cls, text)
         value.issue_code = issue_code
+        value.issue_scope = scope
+        value.issue_detail = detail
         return value
 
 
-def host_issue(code, *, scope='System', status='Last action failed', details=None):
+def host_issue(code, *, scope='System', status='Last action failed', details=None, detail=''):
     definition = guidance()['host'].get(code, guidance()['host']['HOST_ACTION_FAILED'])
     return UserIssue(code=code, **{k: definition[k] for k in ('title', 'impact', 'category')},
-                     steps=tuple(definition['steps']), scope=scope, status=status,
+                     steps=tuple(definition['steps']), scope=scope, status=status, detail=detail,
                      severity='Info' if definition['category'] == 'cancelled' else 'Blocking',
                      details=deepcopy(details or {}))
 
 
-def rule_issue(rule_id, *, scope='System', status='History', details=None):
+def rule_issue(rule_id, *, scope='System', status='History', details=None, detail=''):
     from .safety_rules import safety_rule_table, safety_rule_archive
     rule_id = int(rule_id)
     table = safety_rule_table()
@@ -75,23 +79,27 @@ def rule_issue(rule_id, *, scope='System', status='History', details=None):
         evidence['historical_rule'] = deepcopy(archived)
         status = 'History'
     if not definition:
-        issue = host_issue('HOST_ACTION_FAILED', scope=scope, status=status, details=evidence)
+        issue = host_issue('HOST_ACTION_FAILED', scope=scope, status=status, details=evidence, detail=detail)
         return UserIssue(**{**asdict(issue), 'code': f'P4-{rule_id}',
                             'title': 'An older or unrecognized device event was received'})
     return UserIssue(code=row['code'], title=definition['title'], impact=definition['impact'],
                      steps=tuple(definition['steps']), severity=row['severity'], category=definition['category'],
-                     scope=scope, status=status, details=evidence)
+                     scope=scope, status=status, detail=detail, details=evidence)
 
 
 def operation_issue(message, *, scope='System', diagnostic_reason=None, details=None):
     evidence = {**(details or {}), 'original_message': str(message)}
+    # IssueMessage 自带范围与摘要，优先于操作本身的范围，保证提示写到具体电机。
+    scope = getattr(message, 'issue_scope', None) or scope
+    detail = getattr(message, 'issue_detail', '') or ''
     explicit = getattr(message, 'issue_code', None)
     if explicit and '-' in explicit and explicit.rsplit('-', 1)[-1].isdigit():
-        return rule_issue(int(explicit.rsplit('-', 1)[-1]), scope=scope, status='Last action failed', details=evidence)
+        return rule_issue(int(explicit.rsplit('-', 1)[-1]), scope=scope, status='Last action failed',
+                          details=evidence, detail=detail)
     if explicit:
-        return host_issue(explicit, scope=scope, details=evidence)
+        return host_issue(explicit, scope=scope, details=evidence, detail=detail)
     if diagnostic_reason is not None:
-        return host_issue(f'HOST_CALIB_{int(diagnostic_reason)}', scope=scope, details=evidence)
+        return host_issue(f'HOST_CALIB_{int(diagnostic_reason)}', scope=scope, details=evidence, detail=detail)
     # Adapt known legacy result phrases only. Unknown results retain a neutral
     # explanation; they never acquire a guessed physical cause or an automatic retry.
     text = str(message).lower()
@@ -121,18 +129,19 @@ def operation_issue(message, *, scope='System', diagnostic_reason=None, details=
     )
     for markers, code in patterns:
         if any(marker in text for marker in markers):
-            return host_issue(code, scope=scope, details=evidence)
+            return host_issue(code, scope=scope, details=evidence, detail=detail)
     # An explicit app-side latch message is evidence; a generic reset failure isn't.
     if text.startswith(('device is stopped (e-stop latched)', 'clear faults explicitly before enabling after stop')):
-        return rule_issue(1005, scope=scope, status='Last action failed', details=evidence)
-    return host_issue('HOST_ACTION_FAILED', scope=scope, details=evidence)
+        return rule_issue(1005, scope=scope, status='Last action failed', details=evidence, detail=detail)
+    return host_issue('HOST_ACTION_FAILED', scope=scope, details=evidence, detail=detail)
 
 
 def issue_text(issue):
     if not issue:
         return ''
-    return '\n'.join((issue['title'], issue['impact'],
-                      *(f'{i}. {step}' for i, step in enumerate(issue['steps'], 1))))
+    return '\n'.join(part for part in (
+        issue['title'], issue.get('detail', ''), issue['impact'],
+        *(f'{i}. {step}' for i, step in enumerate(issue['steps'], 1))) if part)
 
 
 def _scope(motor=255, joint=255):
@@ -152,8 +161,10 @@ def snapshot_issues(state, snapshot, *, fresh):
         offline = motor_mask & ~int(state.servo_online_bitmap)
         for motor in range(27):
             bit = 1 << motor
+            # 3106（舵机自报故障）排在 1009 之前：在线但不可控时，可断电重试的是故障本身。
             rule = (1008 if offline & bit else 1003 if state.servo_route_conflict_bitmap & motor_mask & bit
                     else 1013 if state.servo_turn_overflow_bitmap & motor_mask & bit
+                    else 3106 if state.servo_route_state[motor] == 6
                     else 1009 if state.multi_turn_unknown_bitmap & motor_mask & bit else None)
             if rule:
                 current.append(rule_issue(rule, scope=f'M{motor:02d}', status='Current issue',
@@ -207,8 +218,8 @@ def snapshot_issues(state, snapshot, *, fresh):
         group = groups[key]
         severity_order = {'Emergency': 0, 'Blocking': 1, 'Warning': 2, 'Info': 3}
         if severity_order.get(issue['severity'], 3) < severity_order.get(group['severity'], 3):
-            for field in ('code', 'title', 'impact', 'steps', 'severity'):
-                group[field] = issue[field]
+            for field in ('code', 'title', 'impact', 'steps', 'severity', 'detail'):
+                group[field] = issue.get(field, '')
         group['count'] += issue.get('count', 1)
         if issue['scope'] not in group['scopes']: group['scopes'].append(issue['scope'])
         group['scope'] = ', '.join(group['scopes'])

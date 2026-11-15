@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 
 from .config import (
     ENCODER_COUNT, TENDON_LUT_MAX_SAMPLES, kTendonRawSampleCapacity,
-    kTendonFitSampleStepDeg, kMinTravelDeg, kMaxTravelDeg, kLutStartDeg,
+    kTendonFitSampleStepDeg, kMaxTravelDeg, kLutStartDeg,
     kLutZeroDeg, kCalibrationEncoderModulo, kCalibrationEncoderHalfTurn,
     kMaxSegmentSlopeRatio,
 )
@@ -127,6 +127,41 @@ def apply_contact_refinement(io, joint: int, result: dict) -> bool:
     return True
 
 
+def manual_angle_deg(io, joint: int, raw: int | None = None) -> float | None:
+    """Absolute URDF joint angle from the encoder and the Manual endpoints.
+
+    Uses the same k0/b0 baseline as ``apply_manual_scaled_mapping`` (manual span
+    maps onto the URDF range), so it needs no stored calibration result: Manual
+    Min/Max are already a calibration precondition. Values outside the range are
+    extrapolated on purpose - the endpoint search must see "where the joint
+    stopped", not a clamped value.
+    """
+    if not 0 <= joint < ENCODER_COUNT:
+        return None
+    manual = io.manual_reference(joint)
+    lo, hi = _manual_endpoints(manual)
+    if raw is None:
+        raw = io.encoder_raw(joint) if hasattr(io, 'encoder_raw') else io.encoder(joint)
+    if raw is None or not manual.get("valid", False):
+        return None
+    raw = int(raw)
+    if not all(0 <= value < kCalibrationEncoderModulo for value in (lo, hi, raw)):
+        return None
+    span = forward_encoder_delta(lo, hi)
+    urdf_min, urdf_max = (float(value) for value in io.urdf_limits(joint))
+    if not 0 < span < kCalibrationEncoderModulo:
+        return None
+    if not math.isfinite(urdf_min) or not math.isfinite(urdf_max):
+        return None
+    forward = forward_encoder_delta(lo, raw)
+    coordinate = forward
+    if forward > span:
+        above, below = forward - span, kCalibrationEncoderModulo - forward
+        coordinate = -below if below < above else forward
+    angle = urdf_min + (urdf_max - urdf_min) * coordinate / span
+    return angle if math.isfinite(angle) else None
+
+
 def map_manual_scaled_encoder_to_urdf(io, joint: int, result: dict,
                                     raw: int) -> dict | None:
     """原 mapManualScaledEncoderToUrdf；Auto 不参与反馈角比例。"""
@@ -216,8 +251,7 @@ def build_calibration_result(io, joint: int, taut_encoder: int,
     del zero_encoder
     span = forward_encoder_delta(taut_encoder, tight_encoder)
     total_deg = encoder_count_to_deg(span)
-    if (span <= 0 or not math.isfinite(total_deg)
-            or total_deg < kMinTravelDeg or total_deg >= kMaxTravelDeg):
+    if span <= 0 or not math.isfinite(total_deg) or total_deg >= kMaxTravelDeg:
         return None
     zero_fraction = f32(f32(kLutZeroDeg - kLutStartDeg) / total_deg)
     if zero_fraction <= 0.0 or zero_fraction >= 1.0:

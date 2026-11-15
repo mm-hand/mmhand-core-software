@@ -764,15 +764,17 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
                 const ServoFeedbackInternal& feedback =
                     driver->getFeedback(route.servoId);
                 const uint32_t bit = 1UL << motor;
-                // 舵机自报过载：立即断开这台电机的扭矩（卸载后状态位才会清）。
-                if ((feedback.motorStatus & 0x20) != 0 &&
-                    !driver->isTorqueDisabled(route.servoId)) {
+                // 舵机自报故障（isFaulted 已排除 0x01 电压）：立即卸载扭矩，状态位才会清。
+                if (!driver->isTorqueDisabled(route.servoId)) {
                     driver->setTorqueEnabled(route.servoId, false);
                 }
                 {
                     SharedSafetyGuard guard;
-                    sharedAtomicFetchOr(&sharedData->overload_fault_bitmap, bit);
-                    sharedData->overload_fault_load[motor] = feedback.load;
+                    // 只有过载位进入过载诊断，其余故障不得冒充 Overload。
+                    if ((feedback.motorStatus & 0x20) != 0) {
+                        sharedAtomicFetchOr(&sharedData->overload_fault_bitmap, bit);
+                        sharedData->overload_fault_load[motor] = feedback.load;
+                    }
                 }
                 // 立刻退出可控集合（安全侧），遥测保留；
                 // 排一次定向探测，状态位清零后由扫描自动恢复 Online。

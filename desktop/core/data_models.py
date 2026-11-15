@@ -511,6 +511,8 @@ class HandModel:
     # 伺服过载保护锁存状态（来自 PACKET_TYPE_FAULT_STATUS，按 motor channel 位图映射）
     servo_overload_fault: List[bool] = field(default_factory=lambda: [False] * MOTOR_COUNT)
     servo_overload_trigger_load: List[Optional[int]] = field(default_factory=lambda: [None] * MOTOR_COUNT)
+    # 舵机自报 ERROR 字节（来自 PACKET_TYPE_FAULT_STATUS）；0 表示无故障。
+    servo_status: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
 
     @property
     def angles(self) -> List[float]:

@@ -43,7 +43,7 @@ from .protocol import (
     SYSTEM_STATE_JOINT_BEYOND_WORKSPACE,
     STATE_SYNC_ALL,
     CMD_RESET, CMD_CONTROL_RELEASE, CMD_PULL_JOINT_INTO_WORKSPACE, PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED,
-    SERVO_TARGET_OWNER_CONTROL,
+    SERVO_TARGET_OWNER_CONTROL, SERVO_ROUTE_FAULTED,
 )
 
 # 串口枚举在 Windows 上每次约 20-100ms；0.2s 轮询会持续占用 ~12% 单核。
@@ -86,6 +86,81 @@ def validate_manual_pair(minimum: int, maximum: int) -> int:
         raise ValueError('Manual endpoints are equal or reversed. Capture again; endpoints are never swapped automatically.')
     return span
 
+# 电机不能动的分类：同一套口径用于点击前的拒绝和报错历史，避免两处各写一套文案。
+_READINESS_RULES = (
+    ('offline', 'DIR-3102', 'not responding on the servo bus'),
+    ('conflict', 'DIR-3102', 'sharing a servo ID with another motor'),
+    ('faulted', 'DIR-3106', 'reporting a servo fault'),
+    ('overflow', 'DIR-3103', 'outside the servo position range'),
+    ('unknown', 'DIR-3103', 'multi-turn position not recovered'),
+)
+
+
+def _motor_scope(motors):
+    """M10–M14：连续区间折叠，避免 27 个名字刷屏。"""
+    runs, start, previous = [], None, None
+    for motor in sorted(motors):
+        if start is None:
+            start = previous = motor
+        elif motor == previous + 1:
+            previous = motor
+        else:
+            runs.append((start, previous))
+            start = previous = motor
+    if start is not None:
+        runs.append((start, previous))
+    return ', '.join(f'M{low:02d}' if low == high else f'M{low:02d}–M{high:02d}' for low, high in runs)
+
+
+def motor_readiness(state, mask):
+    """选中电机里不能动的那些：{motor, bus, reason}。空列表表示可以尝试使能。"""
+    blockers = []
+    for motor in range(MOTOR_COUNT):
+        bit = 1 << motor
+        if not mask & bit:
+            continue
+        reason = ('offline' if not state.servo_online_bitmap & bit
+                  else 'conflict' if state.servo_route_conflict_bitmap & bit
+                  else 'faulted' if state.servo_route_state[motor] == SERVO_ROUTE_FAULTED
+                  else 'overflow' if state.servo_turn_overflow_bitmap & bit
+                  else 'unknown' if state.multi_turn_unknown_bitmap & bit
+                  else None)
+        if reason:
+            blockers.append({'motor': motor, 'bus': int(state.servo_route_bus[motor]), 'reason': reason})
+    return blockers
+
+
+def direct_enable_issue(state, mask):
+    """把阻塞原因变成一条带具体电机/总线/关节的 IssueMessage；无阻塞返回 None。"""
+    from .motor_mapping import MOTOR_TO_JOINT_INDEX
+    blockers = motor_readiness(state, mask)
+    if not blockers:
+        return None
+    scope = _motor_scope(b['motor'] for b in blockers)
+    reasons = {reason: [] for reason, _code, _words in _READINESS_RULES}
+    for blocker in blockers:
+        reasons[blocker['reason']].append(blocker['motor'])
+    parts, codes = [], []
+    for reason, code, words in _READINESS_RULES:
+        if not reasons[reason]:
+            continue
+        codes.append(code)
+        parts.append(f"{_motor_scope(reasons[reason])} {words}")
+    detail = []
+    if reasons['offline'] or reasons['conflict']:
+        counts = list(state.servo_bus_device_count)
+        silent = [f'BUS{bus}' for bus, count in enumerate(counts) if count == 0]
+        dead_buses = ', '.join(silent) + ' 0 devices' if 0 < len(silent) < len(counts) else ''
+        detail.append('no response' + (f' · {dead_buses}' if dead_buses else ''))
+    if reasons['faulted']:
+        detail.append('servo fault')
+    if reasons['overflow']:
+        detail.append('position outside range')
+    if reasons['unknown']:
+        joints = sorted({MOTOR_TO_JOINT_INDEX[motor] for motor in reasons['unknown']})
+        detail.append('position not recovered (' + ', '.join(f'J{joint:02d}' for joint in joints) + ')')
+    return IssueMessage('; '.join(parts) + '.', codes[0], scope=scope, detail=f"{scope} · " + ' · '.join(detail))
+
 
 class ApplicationActions(IdResetActions):
     """HandBackend 的应用能力；复用同一控制器和标定事务。"""
@@ -124,6 +199,7 @@ class ApplicationActions(IdResetActions):
         self._recording_error = ''
         self._last_operation_message = 'Select a device to connect. Startup does not authorize motion.'
         self._calibration_operation_id = None
+        self._calibration_prepare_thread = None
         self._estop_requested_at = 0.0
         self._direct_sequence = 0
         self._selected_motors = ()
@@ -330,6 +406,16 @@ class ApplicationActions(IdResetActions):
 
     def log_operation(self, message):
         log_session('APP', message)
+
+    def clear_operation_errors(self):
+        """只删除失败记录，供报错历史里的 Clear errors 使用；不动成功历史和设备状态。"""
+        with self._application_lock:
+            removed = sum(1 for item in self._application_operations if item.get('status') == 'FAILED')
+            self._application_operations = deque(
+                (item for item in self._application_operations if item.get('status') != 'FAILED'),
+                maxlen=self._application_operations.maxlen)
+        log_session('APP', f'Cleared {removed} failed operation records')
+        return OperationResult(True, None, f'Cleared {removed} error records')
 
     def record_operation_issue(self, message, *, name='Request rejected', scope='System'):
         """Persist a synchronous rejection for the same Details/history as async failures."""
@@ -1070,9 +1156,9 @@ class ApplicationActions(IdResetActions):
                     with self._application_lock:
                         self._calibration_operation_id = None
 
-            threading.Thread(
-                target=start_calibration, name='mmhand-calibration-prepare',
-                daemon=True).start()
+            self._calibration_prepare_thread = threading.Thread(
+                target=start_calibration, name='mmhand-calibration-prepare', daemon=True)
+            self._calibration_prepare_thread.start()
             return OperationResult(True, operation_id, 'Selected-joint calibration accepted')
 
     def _application_calibration_event(self, event):
@@ -1191,10 +1277,34 @@ class ApplicationActions(IdResetActions):
             return OperationResult(False, None, str(exc))
         return self.submit_operation('Motor Targets', lambda epoch: self._application_direct(values, epoch), scope=' / '.join(f'M{m:02d}' for m in values))
 
+    def _direct_enable_blocked(self, mask):
+        """点击时先判一次：命中就同步拒绝，不排队、不发 STOP。"""
+        if not self._fresh_application_state():
+            return None
+        state = self.get_state_snapshot()
+        scope = _motor_scope([m for m in range(MOTOR_COUNT) if mask & (1 << m)])
+        if state.servo_route_scan_state == 1:
+            return IssueMessage('P4 is still scanning the servo buses; wait for the scan to finish.',
+                                'DIR-3101', scope=scope,
+                                detail=f"{scope} · bus scan {int(state.servo_route_scan_progress)}%")
+        if not state.has_servo_angle_data or not state.has_servo_route_status:
+            return IssueMessage('Servo feedback is not available yet; wait for the next feedback frame.',
+                                'DIR-3101', scope=scope, detail=f'{scope} · waiting for servo feedback')
+        issue = direct_enable_issue(state, mask)
+        if issue is not None:
+            return issue
+        if not self._controller.direct_abs_feedback_ready(state, mask):
+            return IssueMessage('Motor position feedback is not fresh; wait for the next feedback frame.',
+                                'DIR-3101', scope=scope, detail=f'{scope} · waiting for fresh position feedback')
+        return None
+
     def request_direct_enable(self):
         if not self._selected_motors:
             return OperationResult(False, None, 'Select motors before enabling')
         mask = sum(1 << m for m in self._selected_motors)
+        blocked = self._direct_enable_blocked(mask)
+        if blocked is not None:
+            return OperationResult(False, None, blocked)
         def enable(epoch):
             switched, message = self._prepare_control_switch(epoch)
             if not switched:
@@ -1350,7 +1460,11 @@ class ApplicationActions(IdResetActions):
             return OperationResult(False, None, IssueMessage(
                 'No online, routable motors to initialize. Check the motor buses.',
                 'HOST_MOTORS_NOT_READY'))
-        return self.request_direct_zero(motors=motors)
+        result = self.request_direct_zero(motors=motors)
+        if result.accepted:
+            with self._application_lock:
+                self._selected_motors = ()
+        return result
 
     def request_tendon_step(self, tighten):
         delta = 2048 if tighten else -2048
@@ -1673,7 +1787,10 @@ class ApplicationActions(IdResetActions):
                                'manual_max': state.manual_reference_max_raw[j], 'manual_valid': bool(state.manual_reference_valid_bitmap & (1 << j)),
                                'auto_valid': bool(state.auto_calibration_valid_bitmap & (1 << j)), 'draft': draft})
             # 被取消的标定 worker 先收尾，然后释放应用操作门。
-            if self._calibration_operation_id and not host_active and self._application_epoch and state.calib_status not in ('PENDING', 'RUNNING'):
+            # 准备线程存活期间 host worker 还没激活，这是合法空档，不是 worker 消失。
+            prepare_thread = self._calibration_prepare_thread
+            if (self._calibration_operation_id and not (prepare_thread and prepare_thread.is_alive())
+                    and not host_active and self._application_epoch and state.calib_status not in ('PENDING', 'RUNNING')):
                 self._finish_application_operation(self._calibration_operation_id, False, 'Calibration cancelled; completed joints preserved')
                 self._calibration_operation_id = None
             snapshot = {
@@ -1696,6 +1813,7 @@ class ApplicationActions(IdResetActions):
                 'motors': [{'motor': m, 'abs_zero_generation': self._displayed_motor_abs_zero_generations[m],
                             'abs': state.servo_angles[m] if fresh and state.has_servo_angle_data and state.servo_online[m] and 0 <= now - state.servo_abs_last_rx_ts <= 0.6 else None,
                             'online': state.servo_online[m] if fresh else None,
+                            'fault': state.servo_status[m] if fresh and state.has_fault_status_data else None,
                             'current': state.servo_current[m] if fresh and state.servo_telem_online[m] and 0 <= now - state.servo_telem_last_rx_ts <= 0.6 else None,
                             'load': state.servo_load[m] if fresh and state.servo_telem_online[m] and 0 <= now - state.servo_telem_last_rx_ts <= 0.6 else None,
                             'telem_age_ms': max(0, int((now - state.servo_telem_last_rx_ts) * 1000)) if state.servo_telem_last_rx_ts else None}

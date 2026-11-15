@@ -11,7 +11,7 @@
 #include "../config/DimensionsConfig.h"
 
 inline constexpr uint8_t PROTOCOL_HEADER = 0xFE;
-inline constexpr uint8_t kHostProtocolVersion = 9;
+inline constexpr uint8_t kHostProtocolVersion = 10;
 inline constexpr uint8_t PROTOCOL_TAIL = 0xFF;
 inline constexpr int16_t PROTOCOL_DISCONNECT_SENTINEL = 32767;
 inline constexpr size_t kP4TimestampBytes = 4;
@@ -39,7 +39,7 @@ inline constexpr uint8_t PACKET_TYPE_SENSOR = 0x01; ///< 21 关节映射角
 inline constexpr uint8_t PACKET_TYPE_SERVO_POSITION = 0x03; ///< 27路原生有符号ABS，不携带独立单圈数组
 inline constexpr uint8_t PACKET_TYPE_SERVO_TELEM = 0x05; ///< 舵机遥测
 inline constexpr uint8_t PACKET_TYPE_PROTO_ACK = 0x06; ///< 命令 ACK
-inline constexpr uint8_t PACKET_TYPE_FAULT_STATUS = 0x07; ///< 故障与在线位图
+inline constexpr uint8_t PACKET_TYPE_FAULT_STATUS = 0x07; ///< 过载位图、触发负载与每路 ERROR 字节
 inline constexpr uint8_t PACKET_TYPE_TACTILE = 0x0A; ///< 五指触觉摘要
 inline constexpr uint8_t PACKET_TYPE_ENCODER_RAW = 0x0B; ///< 21 路磁编 raw
 inline constexpr uint8_t PACKET_TYPE_SYSTEM_STATUS = 0x0C; ///< 状态机与 owner
