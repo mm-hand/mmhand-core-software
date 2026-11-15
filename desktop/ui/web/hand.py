@@ -25,7 +25,7 @@ ARROW_MIN = 5.0
 POINT_SIZE = 0.0032
 # 贴面热力图用 NiceGUI 的 texture 原语；关掉即退回放大后的点阵。
 HEATMAP = True
-# 贴图加载失败时仍能看见触觉：点阵默认保留。
+# 点阵常显：未连接时也画零压力灰点，只有数据到达才改颜色。
 SHOW_POINTS = True
 _PLACEHOLDER_PNG = (b'\x89PNG\r\n\x1a\n' + bytes.fromhex(
     '0000000d49484452000000010000000108060000001f15c4890000000a4944415478'
@@ -74,6 +74,7 @@ def build(hand):
     shown = False
     reset.on_click(lambda: scene.move_camera(**CAMERA))
     tactile = {}
+    painted = {}  # key -> 点阵是否已涂上实时数据；用于数据中断后回到零压力点阵
 
     def add_marker(key, parent, points):
         finger, segment = key
@@ -125,33 +126,36 @@ def build(hand):
             view.apply('target', [row.get('target') for row in rows])
             view.show('current', True)
             view.show('target', bool(control and online))
-        for module in tactile_state.get('modules') or []:
-            marker = tactile.get((module['finger'], module['module']))
-            if marker is None:
-                continue
-            cloud, arrow, dot, surface, points, center = marker
+        modules = {(module['finger'], module['module']): module
+                   for module in tactile_state.get('modules') or []}
+        for key, (cloud, arrow, dot, surface, points, center) in tactile.items():
+            module = modules.get(key) or {}
             taxels = module.get('taxels')
             full = bool(module.get('valid') and tactile_state.get('level') == 'FULL' and taxels)
             if full:
                 values = np.asarray(taxels, float)[..., 2].reshape(-1)
                 try:
-                    png = render_png('tip' if module['module'] == 0 else 'pad', values)
+                    png = render_png('tip' if key[1] == 0 else 'pad', values)
                 except Exception:
                     png = None
                 if png is not None:
-                    slot, previous, version = frame_slot[(module['finger'], module['module'])]
+                    slot, previous, version = frame_slot[key]
                     if png != previous:
                         slot = 1 - slot
                         version += 1
-                        frame_dir.joinpath(
-                            f"{module['finger']}-{module['module']}-{slot}.png").write_bytes(png)
+                        frame_dir.joinpath(f'{key[0]}-{key[1]}-{slot}.png').write_bytes(png)
                         # 带版本号查询串，避免浏览器复用上一个槽位的缓存。
                         surface.set_url(
-                            f"/tactile-frames/{module['finger']}-{module['module']}-{slot}.png?v={version}")
-                        frame_slot[(module['finger'], module['module'])] = [slot, png, version]
+                            f"/tactile-frames/{key[0]}-{key[1]}-{slot}.png?v={version}")
+                        frame_slot[key] = [slot, png, version]
                 if SHOW_POINTS:
                     cloud.set_points(points.tolist(), colormap(values))
-            cloud.visible(SHOW_POINTS and full)
+                painted[key] = True
+            elif painted.pop(key, False) and SHOW_POINTS:
+                # 数据断了：点阵退回零压力灰点，不留上一次读数假装还在更新。
+                cloud.set_points(points.tolist(), colormap(np.zeros(len(points))))
+            # 点阵常显：连接与否都画，只有数据到达才改颜色和合力箭头。
+            cloud.visible(SHOW_POINTS)
             surface.visible(HEATMAP and full)
             force = module.get('force') if module.get('valid') else None
             rotation, magnitude = (None, 0.0) if force is None else _rotation_from_force(force)

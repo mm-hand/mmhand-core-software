@@ -189,6 +189,55 @@ def test_hand_view_paints_full_tactile_heatmap(page):
     assert any(hand_view._FRAME_DIR.glob('0-0-*.png'))
 
 
+def test_hand_view_keeps_tactile_point_matrix_without_data(page):
+    hand, client = page
+    refresh = hand_view.build(hand)
+    scene = next(element for element in client.elements.values() if isinstance(element, ui.scene))
+    init_handlers = [event.handler for event in scene._event_listeners.values() if event.type == 'init']
+    init_handlers[-1]()
+    clouds = [obj for obj in scene.objects.values() if type(obj).__name__ == 'PointCloud']
+    arrows = [obj for obj in scene.objects.values() if type(obj).__name__ == 'Cylinder']
+    surfaces = [obj for obj in scene.objects.values() if type(obj).__name__ == 'Texture']
+    assert len(clouds) == len(arrows) == len(surfaces) == 15
+    baseline_points = [list(map(list, cloud.args[0])) for cloud in clouds]
+    baseline_colors = [cloud.args[1] for cloud in clouds]
+
+    # 未连接：15 个点阵始终显示，合力箭头和无数据热力图不显示。
+    refresh(hand.application_snapshot())  # 完全没有 tactile 数据
+    assert all(cloud.visible_ for cloud in clouds)
+    assert not any(arrow.visible_ for arrow in arrows)
+    snapshot = hand.application_snapshot()
+    snapshot['tactile'] = {'level': 'NONE', 'modules': [
+        {'finger': finger, 'module': module, 'valid': False, 'force': None, 'taxels': None}
+        for finger in range(5) for module in range(3)]}
+    for _ in range(3):
+        refresh(snapshot)
+    assert all(cloud.visible_ for cloud in clouds)
+    assert not any(arrow.visible_ for arrow in arrows)
+    assert not any(surface.visible_ for surface in surfaces)
+    assert [list(map(list, cloud.args[0])) for cloud in clouds] == baseline_points
+
+    # 数据到达：点阵上色，合力箭头出现；数据中断后回到零压力点阵，箭头消失。
+    def full_modules(valid):
+        return {'level': 'FULL', 'modules': [
+            {'finger': finger, 'module': module, 'valid': valid,
+             'force': [0, 0, 100] if valid else None,
+             'taxels': [[0.0, 0.0, 100.0]] * (52 if module == 0 else 25) if valid else None}
+            for finger in range(5) for module in range(3)]}
+    snapshot['tactile'] = full_modules(True)
+    refresh(snapshot)
+    assert all(cloud.visible_ for cloud in clouds)
+    assert all(cloud.args[1] != baseline for cloud, baseline in zip(clouds, baseline_colors))
+    assert all(arrow.visible_ for arrow in arrows)
+    assert all(surface.visible_ for surface in surfaces)
+    snapshot['tactile'] = full_modules(False)
+    refresh(snapshot)
+    assert all(cloud.visible_ for cloud in clouds)
+    assert all(cloud.args[1] == baseline for cloud, baseline in zip(clouds, baseline_colors))
+    assert not any(arrow.visible_ for arrow in arrows)
+    assert not any(surface.visible_ for surface in surfaces)
+
+
 def test_adaptive_kp_is_one_expansion_after_kd_with_one_enable_button(page):
     hand, client = page
     hand.request_apply_control_parameters = Mock()
