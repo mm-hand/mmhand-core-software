@@ -430,3 +430,41 @@ def test_real_j00_geometry_full_calibration():
     assert result["totalDeg"] == pytest.approx(91.52, abs=0.2)
     assert result["tendonLutValid"] is True
     assert result["tendonLutCount"] == 20
+
+
+def test_sweep_commands_counts_by_elapsed_time():
+    """Regression: a fixed 8 counts per loop halved the real speed (publish costs ~100ms)."""
+    class SlowPublishIO(FakeIO):
+        def publish(self, targets, speed, acc):
+            ok = super().publish(targets, speed, acc)
+            self.t += 80
+            return ok
+
+    io = SlowPublishIO(start_raw=3500)
+    primary, secondary = config.joint_motors(16)
+    io.on_publish = link(io, 16, primary, secondary)
+    sweep.sweep_to_end(io, 16, sweep.END_MAX, motors=(primary, secondary),
+                       pull=primary, release=secondary)
+    deltas = [b[1][primary] - a[1][primary]
+              for a, b in zip(io.commands, io.commands[1:])
+              if primary in a[1] and primary in b[1]]
+    # 100 ms 一次循环 × 400 counts/s → 每次 40 counts（固定步长只有 8）。
+    assert max(deltas) == pytest.approx(40, abs=2)
+
+
+def test_sweep_keeps_going_while_the_joint_creeps():
+    """Regression: J01/J02 were declared stuck while still creeping at 0.2 deg per window."""
+    io = FakeIO(low_raw=3500, high_raw=5000, start_raw=3500)
+    motor = config.joint_motors(1)[0]
+    pose = {"raw": 3500}
+
+    def creep(state, targets, previous):
+        pose["raw"] = min(5000, pose["raw"] + 1)
+        state.encoder_value = pose["raw"]
+        state.loads[motor] = 150
+
+    io.on_publish = creep
+    outcome = sweep.sweep_to_end(io, 1, sweep.END_MAX, motors=(motor,),
+                                 pull=motor, release=None)
+    assert outcome.point is not None
+    assert abs(outcome.point.angle - 90.0) <= config.kEndToleranceDeg

@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 
 from .. import protocol
@@ -73,7 +74,7 @@ def sweep_to_end(io, joint, end, *, motors, pull, release,
     span = forward_encoder_delta(int(manual['minRaw']), int(manual['maxRaw']))
     max_wind = int(config.kSlackRunFactor * span) if span > 0 else 0
 
-    step = max(1, int(p.tightenSpeedCountsPerSec) * int(p.loopMs) // 1000)
+    speed = max(1, int(p.tightenSpeedCountsPerSec))
     start_angle = io.angle(joint)
     p_cmd = io.servo_abs(pull) if pull is not None else None
     r_cmd = io.servo_abs(release) if release is not None else None
@@ -88,20 +89,31 @@ def sweep_to_end(io, joint, end, *, motors, pull, release,
     still = 0
     wound = 0
     taut = pull is None
-    window_angle = start_angle
+    recent = deque(maxlen=config.kEndStillWindows)
+    remainders = 0
+    last_command = io.now_ms()
     window_ms = io.now_ms()
     io.trace("END_BEGIN", joint, motor, end="MAX" if at_max else "MIN",
              target_deg=target, start_deg=round(start_angle, 3))
 
     while io.owns_control():
+        # 步长按真实经过时间折算：publish 的执行确认会拉长循环，
+        # 固定步长会把 400 counts/s 拖成 ~80 counts/s。
+        now = io.now_ms()
+        counts = 0
+        if now - last_command >= p.loopMs:
+            counts, remainders = divmod(
+                (now - last_command) * speed + remainders, 1000)
+            last_command = now
         targets = {}
         if pull is not None:
-            p_cmd = config.motor_apply_tendon_delta(pull, p_cmd, step)
+            if counts:
+                p_cmd = config.motor_apply_tendon_delta(pull, p_cmd, counts)
+                wound += counts
             targets[pull] = p_cmd
-            wound += step
         if release is not None:
-            if taut:
-                r_cmd = config.motor_apply_tendon_delta(release, r_cmd, -step)
+            if taut and counts:
+                r_cmd = config.motor_apply_tendon_delta(release, r_cmd, -counts)
                 released = config.single_tendon_release_counts(release, start_r_abs, r_cmd)
                 if released > config.kSingleTendonMaxReleaseCounts:
                     return _fail(io, protocol.CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS,
@@ -125,18 +137,20 @@ def sweep_to_end(io, joint, end, *, motors, pull, release,
             return _fail(io, protocol.CALIB_DIAG_REASON_FEEDBACK_LOST,
                          phase, joint, motor, bitmap=bitmap)
         load = config.load_magnitude(load_raw) if load_raw is not None else 0
-        now = io.now_ms()
         engaged = load >= config.kTautLoadCounts or abs(angle - start_angle) > config.kEndToleranceDeg
         if pull is not None and not taut and engaged:
             # 腱已绷紧(或关节已经被带着走了):开始放对侧腱。
             # 重新给冻结计数,给关节留出 1 秒破静摩擦的时间。
             taut = True
             still = 0
-            window_angle = angle
+            recent.clear()
             window_ms = now
 
         if now - window_ms >= p.windowMs:
-            moved = abs(angle - window_angle)
+            recent.append(angle)
+            # 单窗口的角度变化会被编码器抖动(±0.11°)盖住；看最近几个窗口的总漂移，
+            # 慢速爬升的关节不会被误判成"停住"。
+            moved = (max(recent) - min(recent)) if len(recent) > 1 else 0.0
             if moved > config.kEndStillDeg:
                 still = 0
                 wound = 0
@@ -145,7 +159,6 @@ def sweep_to_end(io, joint, end, *, motors, pull, release,
                                      _motor_abs(io, primary), _motor_abs(io, secondary))
             else:
                 still += 1
-            window_angle = angle
             window_ms = now
             error = abs(angle - target)
             near = error <= config.kEndToleranceDeg
