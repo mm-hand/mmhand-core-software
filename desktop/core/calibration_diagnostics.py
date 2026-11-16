@@ -225,6 +225,12 @@ CALIBRATION_DIAGNOSTICS: Dict[int, CalibrationDiagnosticSpec] = {
         ("released_counts", "limit_counts", "encoder_raw", "motor_mask"),
         "The spring or linkage could not bring the joint back. Free the joint, then re-capture Manual Min/Max.",
     ),
+    protocol.CALIB_DIAG_REASON_PAST_MANUAL_ENDPOINT: _spec(
+        "Motor Calibration went past the Manual endpoint",
+        ("past_manual_counts", "manual_endpoint_raw", "encoder_raw", "motor_mask"),
+        "The joint stopped outside the Manual Min/Max range. Re-capture this joint's "
+        "Manual Min/Max at the mechanical stops, then run Motor Calibration again.",
+    ),
 }
 
 

@@ -10,7 +10,7 @@
 判据只有两条,缺一不可:
   * 关节角度冻结（连续 kEndStillWindows 个窗口内变化 ≤ kEndStillDeg）
   * 冻结位置离命令端点 ≤ kEndToleranceDeg
-负载只用于"腱已经绷紧,可以把对侧腱放出来"这一个用途,从不判断端点。
+负载只用于两件事:判断腱已绷紧可以放对侧腱,以及在"停住且已越过 Manual 端点"时确认仍在拉;从不判断端点。
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 from .. import protocol
 from . import config
-from .math import forward_encoder_delta
+from .math import forward_encoder_delta, wrap_encoder_delta
 
 END_MIN, END_MAX = 0, 1
 
@@ -76,7 +76,10 @@ def sweep_to_end(io, joint, end, *, motors, pull, release,
     motor = pull if pull is not None else (release if release is not None else 255)
 
     manual = io.manual_reference(joint)
-    span = forward_encoder_delta(int(manual['minRaw']), int(manual['maxRaw']))
+    manual_min = int(manual['minRaw'])
+    manual_max = int(manual['maxRaw'])
+    manual_end = manual_max if at_max else manual_min
+    span = forward_encoder_delta(manual_min, manual_max)
     max_wind = int(config.kSlackRunFactor * span) if span > 0 else 0
 
     speed = max(1, int(p.tightenSpeedCountsPerSec))
@@ -181,6 +184,13 @@ def sweep_to_end(io, joint, end, *, motors, pull, release,
                 io.trace("END_REACHED", joint, motor, angle=round(angle, 3),
                          encoder=int(encoder), error=round(error, 3))
                 return SweepOutcome(point)
+            # 停住、不在目标附近、已越过 Manual 端点且仍在拉：Manual 端点记错了。
+            past = (wrap_encoder_delta(manual_min, encoder) if not at_max
+                    else wrap_encoder_delta(encoder, manual_max))
+            if still >= config.kEndStillWindows and not near and past > 0 and load >= config.kPastManualAbortLoad:
+                io.trace("END_PAST_MANUAL", joint, motor, past_counts=past, load=load)
+                return _fail(io, protocol.CALIB_DIAG_REASON_PAST_MANUAL_ENDPOINT,
+                             phase, joint, motor, past, manual_end, int(encoder), bitmap)
             # 纯释放（单腱弹簧回位）没有"卡住"判据：弹簧慢一些不该误报，
             # 由两圈上限兜底。只有被主动拉向端点时才判卡住。
             if pull is not None and still >= config.kStuckWindows and taut and not near:

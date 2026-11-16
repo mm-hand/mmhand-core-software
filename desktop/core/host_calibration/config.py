@@ -39,6 +39,7 @@ kEndStillDeg = 0.3               # 每 windowMs 的角度冻结阈值（编码�
 kEndStillWindows = 3             # 连续冻结窗口数 → 到达端点
 kStuckWindows = 5                # 连续冻结窗口数 → 卡住（绷紧却不在端点）
 kEndToleranceDeg = 8.0           # 距目标端点容差（约 350 counts，与装配告警同量级）
+kPastManualAbortLoad = 300       # 停住却越过 Manual 端点、且仍在此负载以上 → Manual 端点记错
 kSlackRunFactor = 1.5            # 未绷紧却卷动 > 1.5×Manual 行程 → 空行程异常
 
 # 结果与 LUT。

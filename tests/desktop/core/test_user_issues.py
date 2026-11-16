@@ -137,7 +137,39 @@ def test_user_issue_does_not_mutate_event_evidence():
 
 def test_issue_text_puts_detail_above_impact():
     issue = rule_issue(3102, scope='M10-M14', detail='M10-M14 · BUS2 0 devices').to_dict()
-    assert issue_text(issue).splitlines()[:2] == ['Selected motors are not ready', 'M10-M14 · BUS2 0 devices']
+    assert issue_text(issue).splitlines()[:2] == [
+        'What you see: Selected motors are not ready', 'M10-M14 · BUS2 0 devices']
+
+
+def test_issue_text_uses_three_labelled_paragraphs():
+    lines = issue_text(rule_issue(3102, scope='M10-M14', detail='M10-M14 · BUS2 0 devices').to_dict()).splitlines()
+    assert lines[0] == 'What you see: Selected motors are not ready'
+    assert lines[1] == 'M10-M14 · BUS2 0 devices'
+    assert lines[2].startswith('Cause: ')
+    assert lines[3] == 'Fix:'
+    assert lines[4].startswith('1. ')
+    assert issue_text(None) == ''
+
+
+@pytest.mark.parametrize(('message', 'code'), (
+    ('Wait for calibration to finish before changing control parameters', 'HOST_OPERATION_BUSY'),
+    ('P4 did not acknowledge control handover', 'HOST_OPERATION_BUSY'),
+    ('A maintenance or recovery operation owns the device', 'HOST_OPERATION_BUSY'),
+    ('An operation is running. Wait for it to finish before authorizing ROS Input.', 'HOST_OPERATION_BUSY'),
+    ('P4 is still scanning the servo buses; wait for the scan to finish.', 'HOST_MOTORS_NOT_READY'),
+    ('Servo feedback is not available yet; wait for the next feedback frame.', 'HOST_MOTORS_NOT_READY'),
+    ('Motor position feedback is not fresh; wait for the next feedback frame.', 'HOST_MOTORS_NOT_READY'),
+    ('No motors were found', 'HOST_MOTORS_NOT_READY'),
+    ('Current ABS is stale or untrusted', 'HOST_MOTORS_NOT_READY'),
+    ('Joint selection is out of range', 'HOST_SELECTION_EMPTY'),
+    ('Select a valid joint scope', 'HOST_SELECTION_EMPTY'),
+    ('Targets must contain 21 finite angle values', 'HOST_SELECTION_EMPTY'),
+    ('Select a device. The port is never changed automatically.', 'HOST_SELECTION_EMPTY'),
+    ('Cannot reset motor positions while Stop is active. Check the hand, click Clear Faults, then retry the original action.',
+     'ACT-1005'),
+))
+def test_common_fallbacks_now_name_their_cause(message, code):
+    assert operation_issue(message).code == code
 
 
 def test_motor_guidance_tells_the_user_to_power_cycle():

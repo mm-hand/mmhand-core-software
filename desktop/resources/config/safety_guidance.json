@@ -1127,6 +1127,16 @@
         "Re-capture Manual Min/Max if the current endpoints do not match where the joint actually stops.",
         "Recalibrate once the joint returns on its own."
       ]
+    },
+    "HOST_CALIB_38": {
+      "title": "Calibration stopped: the joint went past its Manual endpoint",
+      "category": "mechanical",
+      "impact": "The joint stopped outside the Manual Min/Max range while the tendon was still pulling, so the Manual endpoint is recorded short of the real mechanical stop.",
+      "steps": [
+        "Push the joint by hand to the real mechanical stop for this end and read the Raw encoder value.",
+        "Re-capture this joint's Manual Min/Max on the Joint Calibration page at those stops.",
+        "Run Motor Calibration again for this joint."
+      ]
     }
   }
 }

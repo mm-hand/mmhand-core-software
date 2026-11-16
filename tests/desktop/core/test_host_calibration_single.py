@@ -154,6 +154,23 @@ def test_sweep_does_not_treat_a_frozen_joint_as_an_endpoint():
     assert outcome.reason == protocol.CALIB_DIAG_REASON_END_NOT_REACHED
 
 
+def test_sweep_aborts_when_the_joint_stops_past_the_manual_endpoint():
+    io = FakeIO(start_raw=3500)
+    motor = config.joint_motors(1)[0]
+    # 机械端点比 Manual Max 远 500 counts：Manual 端点比真实端点靠里。
+    io.manual_reference = lambda joint: {"valid": True, "minRaw": 3500, "maxRaw": 5000}
+    io.high_raw = 5500
+    move = link(io, motor, 3500)
+
+    def move_loaded(state, targets, previous):
+        move(state, targets, previous)
+        state.loads[motor] = 1000
+    io.on_publish = move_loaded
+    outcome = sweep.sweep_to_end(io, 1, sweep.END_MAX, motors=(motor,), pull=motor, release=None)
+    assert outcome.point is None
+    assert outcome.reason == protocol.CALIB_DIAG_REASON_PAST_MANUAL_ENDPOINT
+
+
 def test_sweep_caps_a_runaway_release():
     io = FakeIO(start_raw=4300)
     motor = config.joint_motors(1)[0]

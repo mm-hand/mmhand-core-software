@@ -40,8 +40,7 @@ class UserIssue:
         return asdict(self)
 
     def text(self):
-        return '\n'.join(part for part in (self.title, self.detail, self.impact,
-                                          *(f'{i}. {step}' for i, step in enumerate(self.steps, 1))) if part)
+        return issue_text(self.to_dict())
 
 
 class IssueMessage(str):
@@ -126,22 +125,38 @@ def operation_issue(message, *, scope='System', diagnostic_reason=None, details=
           'waiting for logical abs', 'full route scan is running',
           'motor scope setup failed', 'abs zero requires',
           'route is unavailable', 'scan all buses'), 'HOST_MOTORS_NOT_READY'),
+        (('wait for calibration to finish', 'maintenance or recovery operation owns',
+          'control handover', 'old control owner', 'ros2 enable blocked',
+          'before authorizing ros input'), 'HOST_OPERATION_BUSY'),
+        (('still scanning the servo buses', 'servo feedback is not available yet',
+          'motor position feedback is not fresh', 'no motors were found',
+          'current abs is stale or untrusted'), 'HOST_MOTORS_NOT_READY'),
+        (('selection is out of range', 'select valid joints', 'select a valid joint scope',
+          'finite angle values', 'select a device.'), 'HOST_SELECTION_EMPTY'),
     )
     for markers, code in patterns:
         if any(marker in text for marker in markers):
             return host_issue(code, scope=scope, details=evidence, detail=detail)
     # An explicit app-side latch message is evidence; a generic reset failure isn't.
-    if text.startswith(('device is stopped (e-stop latched)', 'clear faults explicitly before enabling after stop')):
+    if text.startswith(('device is stopped (e-stop latched)', 'clear faults explicitly before enabling after stop',
+                        'cannot reset motor positions while stop is active')):
         return rule_issue(1005, scope=scope, status='Last action failed', details=evidence, detail=detail)
     return host_issue('HOST_ACTION_FAILED', scope=scope, details=evidence, detail=detail)
 
 
 def issue_text(issue):
+    """Render one issue as the three paragraphs the UI shows: what, cause, fix."""
     if not issue:
         return ''
-    return '\n'.join(part for part in (
-        issue['title'], issue.get('detail', ''), issue['impact'],
-        *(f'{i}. {step}' for i, step in enumerate(issue['steps'], 1))) if part)
+    lines = [f"What you see: {issue['title']}"]
+    if issue.get('detail'):
+        lines.append(issue['detail'])
+    lines.append(f"Cause: {issue['impact']}")
+    steps = issue.get('steps') or ()
+    if steps:
+        lines.append('Fix:')
+        lines.extend(f'{index}. {step}' for index, step in enumerate(steps, 1))
+    return '\n'.join(lines)
 
 
 def _scope(motor=255, joint=255):
