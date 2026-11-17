@@ -54,7 +54,18 @@ def build(hand, act, load_calibration):
                         offset, shortfall = result.get('autoMinOffsetCounts'), result.get('autoMaxShortfallCounts')
                         causes = ('tendon friction, preload or mechanical resistance' if len(row['motors']) == 2
                                   else 'weak spring return, tendon friction, preload or mechanical resistance')
-                        hint = 'Transaction failed. See System Log and Operation History for the actual reason.' if 'FAILED' in row['motor_quality'] else f"Return offset: {show(offset)} (warning ≥350); travel shortfall: {show(shortfall)} (warning ≥300) counts. Possible causes: {causes}; forces are not measured."
+                        manual_suspect = (bool(result.get('assemblyWarningReason'))
+                                          or (offset or 0) >= 350 or (shortfall or 0) >= 300)
+                        if 'FAILED' in row['motor_quality']:
+                            hint = 'Transaction failed. See System Log and Operation History for the actual reason.'
+                        elif manual_suspect:
+                            hint = (f"Manual endpoints look wrong for J{j:02d} (offset {show(offset)}, "
+                                    f"shortfall {show(shortfall)}). Re-capture this joint's Manual Min/Max, "
+                                    "then run Motor Calibration again.")
+                        else:
+                            hint = (f"Return offset: {show(offset)} (warning ≥350); travel shortfall: "
+                                    f"{show(shortfall)} (warning ≥300) counts. Possible causes: {causes}; "
+                                    "forces are not measured.")
                         badge(row['motor_quality'], hint)
                         elec(row.get('encoder_state'), j)
                         loss(snapshot, joint=j)

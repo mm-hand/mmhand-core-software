@@ -151,10 +151,10 @@ def test_sweep_does_not_treat_a_frozen_joint_as_an_endpoint():
     io.loads[motor] = 250
     outcome = sweep.sweep_to_end(io, 1, sweep.END_MAX, motors=(motor,), pull=motor, release=None)
     assert outcome.point is None
-    assert outcome.reason == protocol.CALIB_DIAG_REASON_END_NOT_REACHED
+    assert outcome.reason == protocol.CALIB_DIAG_REASON_END_TIMEOUT
 
 
-def test_sweep_aborts_when_the_joint_stops_past_the_manual_endpoint():
+def test_sweep_ignores_a_joint_that_walks_past_the_manual_endpoint():
     io = FakeIO(start_raw=3500)
     motor = config.joint_motors(1)[0]
     # 机械端点比 Manual Max 远 500 counts：Manual 端点比真实端点靠里。
@@ -168,10 +168,10 @@ def test_sweep_aborts_when_the_joint_stops_past_the_manual_endpoint():
     io.on_publish = move_loaded
     outcome = sweep.sweep_to_end(io, 1, sweep.END_MAX, motors=(motor,), pull=motor, release=None)
     assert outcome.point is None
-    assert outcome.reason == protocol.CALIB_DIAG_REASON_PAST_MANUAL_ENDPOINT
+    assert outcome.reason == protocol.CALIB_DIAG_REASON_OVERLOAD
 
 
-def test_sweep_caps_a_runaway_release():
+def test_sweep_times_out_a_runaway_release():
     io = FakeIO(start_raw=4300)
     motor = config.joint_motors(1)[0]
     io.on_publish = frozen(io, 4300)
@@ -179,7 +179,7 @@ def test_sweep_caps_a_runaway_release():
     outcome = sweep.sweep_to_end(io, 1, sweep.END_MIN, motors=(motor,), pull=None,
                                  release=motor, params=params)
     assert outcome.point is None
-    assert outcome.reason == protocol.CALIB_DIAG_REASON_WEAK_RETURN
+    assert outcome.reason == protocol.CALIB_DIAG_REASON_END_TIMEOUT
 
 
 def test_sweep_propagates_publish_failure():
@@ -210,7 +210,7 @@ def test_run_single_requires_the_tendon_to_move_the_joint():
     io.loads[motor] = 200
     outcome = run(io)
     assert outcome["success"] is False
-    assert outcome["reason"] == protocol.CALIB_DIAG_REASON_END_NOT_REACHED
+    assert outcome["reason"] == protocol.CALIB_DIAG_REASON_END_TIMEOUT
 
 
 def test_run_single_hold_failure_is_reported():
@@ -228,7 +228,8 @@ def test_run_single_aborts_when_the_aa_is_not_ready():
     io.aa_ready = False
     outcome = run(io)
     assert outcome["success"] is False
-    assert outcome["aborted"] is True
+    assert outcome["aborted"] is False
+    assert outcome["finger_blocked"] is True
     assert outcome["reason"] == 'AA mapping invalid'
     assert not io.commands
 
@@ -250,14 +251,14 @@ def test_release_accepts_where_the_spring_stops():
     assert outcome.point.angle == pytest.approx(3.0, abs=1.0)
 
 
-def test_release_does_not_accept_the_start_position():
+def test_release_times_out_when_the_joint_never_returns():
     io = FakeIO(start_raw=5000)
     motor = config.joint_motors(1)[0]
     io.on_publish = frozen(io, 5000)
     io.loads[motor] = 0
     outcome = sweep.sweep_to_end(io, 1, sweep.END_MIN, motors=(motor,), pull=None, release=motor)
     assert outcome.point is None
-    assert outcome.reason == protocol.CALIB_DIAG_REASON_WEAK_RETURN
+    assert outcome.reason == protocol.CALIB_DIAG_REASON_END_TIMEOUT
 
 
 def test_run_single_accepts_a_spring_that_stops_short():
@@ -274,7 +275,7 @@ def test_run_single_accepts_a_spring_that_stops_short():
                 mark["abs"] = current
         else:
             state.encoder_value = min(5000, max(3550, 5000 - (mark["abs"] - current)))
-        state.loads[motor] = 150
+        state.loads[motor] = 210
 
     io.on_publish = hook
     outcome = run(io)

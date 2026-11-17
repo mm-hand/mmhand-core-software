@@ -642,6 +642,36 @@ def test_motor_page_has_compact_motor_columns_and_auto_fields(page):
     assert 'Route' not in texts and 'SavedRaw' not in texts and 'BUS' not in texts
 
 
+def test_motor_page_points_at_a_suspect_manual_endpoint(page):
+    hand, client = page
+    refresh = motor_calibration.build(hand, Mock(), Mock())
+    snapshot = idle_snapshot(hand)
+    for row in snapshot['joints']:
+        row.update(motor_quality=['READY'],
+                   result=dict(row.get('result') or {},
+                               autoMinOffsetCounts=10, autoMaxShortfallCounts=20))
+    # J00 的回程偏移超过 350：先怀疑 Manual 端点量偏了，而不是摩擦。
+    snapshot['joints'][0].update(motor_quality=['OFFSET'],
+                                 result=dict(snapshot['joints'][0]['result'],
+                                             autoMinOffsetCounts=500))
+    refresh(snapshot)
+
+    def hints():
+        return [element.text for element in client.elements.values()
+                if isinstance(element, ui.tooltip)]
+
+    assert [hint for hint in hints() if hint.startswith('Manual endpoints look wrong')] == [
+        "Manual endpoints look wrong for J00 (offset 500, shortfall 20). "
+        "Re-capture this joint's Manual Min/Max, then run Motor Calibration again."]
+    # 其余关节仍然显示原来的摩擦/预紧解释。
+    assert sum(hint.startswith('Return offset: 10') for hint in hints()) == 20
+
+    snapshot['joints'][0]['result'] = dict(snapshot['joints'][0]['result'],
+                                           autoMinOffsetCounts=10)
+    refresh(snapshot)
+    assert not [hint for hint in hints() if hint.startswith('Manual endpoints look wrong')]
+
+
 def test_motor_calibrate_selected_passes_page_origin_and_disables_while_controlling(page):
     hand, client = page
     hand.request_calibration = Mock()

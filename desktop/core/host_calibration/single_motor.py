@@ -46,8 +46,9 @@ def run_single(io, joint: int, params: config.AutoCalibrationParams,
     """Serial single-tendon calibration; caller handles the Manual/LUT commit."""
     prepared, message = io.prepare_finger_aa(joint)
     if not prepared:
-        return {"success": False, "aborted": True, "reason": message,
-                "result": None, "limits": {}}
+        # 摆动基准摆不过去：本指剩下的关节也标不了，但不要拖累其他手指。
+        return {"success": False, "aborted": False, "finger_blocked": True,
+                "reason": message, "result": None, "limits": {}}
     motors = config.joint_motors(joint)
     if len(motors) != 1:
         return _fail(io, protocol.CALIB_DIAG_REASON_MOTOR_MAPPING_INVALID,
@@ -64,7 +65,9 @@ def run_single(io, joint: int, params: config.AutoCalibrationParams,
         return io.hold_targets_except(ordered_joints, joint, failed_joint_mask, params)
 
     tight = sweep_to_end(io, joint, END_MAX, motors=motors, pull=motor, release=None,
-                         hold=hold, params=params)
+                         hold=hold, params=params,
+                         endpoint_load=config.kTautLoadCounts,
+                         timeout_ms=config.kMaxSweepTimeoutMs)
     if tight.point is None or tight.point.primary_abs is None:
         return _fail(io, tight.reason or protocol.CALIB_DIAG_REASON_JOINT_STEP_FAILED,
                      protocol.CALIB_DIAG_PHASE_FIND_MAX, joint, motor)
@@ -86,7 +89,9 @@ def run_single(io, joint: int, params: config.AutoCalibrationParams,
         fit.next_travel_deg = config.kTendonFitSampleStepDeg
 
     limit = sweep_to_end(io, joint, END_MIN, motors=motors, pull=None, release=motor,
-                         fit=None if window is not None else fit, hold=hold, params=params)
+                         fit=None if window is not None else fit, hold=hold, params=params,
+                         near_deg=config.kSpringReturnToleranceDeg,
+                         timeout_ms=config.kMinSweepTimeoutMs)
     if limit.point is None or limit.point.primary_abs is None:
         return _fail(io, limit.reason or protocol.CALIB_DIAG_REASON_JOINT_STEP_FAILED,
                      protocol.CALIB_DIAG_PHASE_FIND_MIN, joint, motor)
@@ -104,10 +109,6 @@ def run_single(io, joint: int, params: config.AutoCalibrationParams,
     io.trace("SINGLE_SPAN_CHECK", joint, motor, tight_encoder=tight.point.encoder,
              limit_encoder=limit.point.encoder, span=span,
              tight_deg=round(tight.point.angle, 3), limit_deg=round(limit.point.angle, 3))
-    if not 0 < span < config.kCalibrationEncoderHalfTurn:
-        return _fail(io, protocol.CALIB_DIAG_REASON_RESULT_SPAN_INVALID,
-                     protocol.CALIB_DIAG_PHASE_FIND_MIN, joint, motor,
-                     span, tight.point.encoder, limit.point.encoder, 1 << motor)
     zero_abs = config.motor_apply_tendon_delta(motor, limit.point.primary_abs,
                                                config.kServoZeroPullCounts)
     result = build_calibration_result(io, joint, limit.point.encoder, 0, tight.point.encoder,
@@ -125,10 +126,6 @@ def run_single(io, joint: int, params: config.AutoCalibrationParams,
         return _fail(io, protocol.CALIB_DIAG_REASON_RESULT_BUILD_FAILED,
                      protocol.CALIB_DIAG_PHASE_FIND_MIN, joint, motor,
                      result["tendonLutCount"], result["tendonLutMotor"][0], 0, 1 << motor)
-    if result["encoderSpan"] >= config.kRejectNearFullWrapSpanCounts:
-        return _fail(io, protocol.CALIB_DIAG_REASON_WRAP_TOO_LARGE,
-                     protocol.CALIB_DIAG_PHASE_FIND_MIN, joint, motor,
-                     result["encoderSpan"], limit.point.encoder, tight.point.encoder, 1 << motor)
     limit_abs = tendon_motor_abs_limits(
         result, 0, motor, *config.calibration_margins(io))
     if limit_abs is None:

@@ -230,13 +230,13 @@ def test_midpoint_failures_never_enter_single_search(centered_io, monkeypatch, f
     monkeypatch.setattr(single_motor, 'sweep_to_end',
                         Mock(side_effect=AssertionError('search started')))
     outcome = single_motor.run_single(io, 1, default_auto_calibration_params(), (1,), 0, 0, 2)
-    assert not outcome['success'] and outcome['aborted']
+    assert not outcome['success'] and outcome['finger_blocked']
+    assert outcome['aborted'] is False
     assert 'J00' in outcome['reason']
     assert io._aa_hold is None
     if fault == 'stall':
-        assert 'did not follow' in outcome['reason']
-        assert '40 seconds' in outcome['reason']
-        assert 40000 <= io.now_ms() <= 40100
+        assert 'timed out' in outcome['reason']
+        assert 60000 <= io.now_ms() <= 60100
         assert max(abs(call.args[0][0]) for call in io.publish.call_args_list) <= 40
     if fault == 'limit':
         assert 'limits' in outcome['reason']

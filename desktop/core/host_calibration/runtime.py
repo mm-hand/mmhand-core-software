@@ -531,8 +531,7 @@ class HostCalibrationIO:
             targets = {m: state.servo_angles[m] for m in motors}
             speed = min(kAaMidpointSpeedCountsPerSec, params.servoSpeed)
             tolerance = self._aa_midpoint_tolerance(aa)
-            last_command = progress_at = self.now_ms()
-            progress_angle = angle
+            last_command = self.now_ms()
             deadline = last_command + 60000
             self.trace('AA_MIDPOINT', aa, target_deg=center)
             stable, last = 0, (state.encoder_raw_p4_time_ms, state.servo_feedback_p4_time_ms)
@@ -542,15 +541,11 @@ class HostCalibrationIO:
                 if stamp[0] != last[0] and stamp[1] != last[1]:
                     last = stamp
                     now = self.now_ms()
-                    if abs(angle - progress_angle) >= 0.5:
-                        progress_at, progress_angle = now, angle
                     if abs(angle - center) <= tolerance:
                         targets = {m: state.servo_angles[m] for m in motors}
                         stable += 1
                     else:
                         stable = 0
-                        if now - progress_at >= 40000:
-                            raise ValueError('AA angle did not follow tendon movement for 40 seconds')
                         step = max(1, speed * min(now - last_command, 100) // 1000)
                         for motor, direction in zip(motors, response):
                             delta = step if (direction > 0) == (angle < center) else -step

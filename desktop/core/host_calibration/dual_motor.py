@@ -156,16 +156,58 @@ class _DualMachine:
         emit = getattr(self.io, 'diag_if_empty', None) or self.io.diag
         emit(reason, phase, self.joint if joint is None else joint, motor, a, b, c, bitmap)
 
-    def _sweep(self, end, fit=None):
+    def _sweep(self, end, fit=None, **limits):
         motors = _dual_motors(self.joint)
         pull, release = _end_motors(motors, end)
         outcome = sweep_to_end(self.io, self.joint, end, motors=motors, pull=pull,
-                               release=release, fit=fit, params=self.params)
+                               release=release, fit=fit, params=self.params, **limits)
         if outcome.point is None:
             phase = (protocol.CALIB_DIAG_PHASE_FIND_MAX if int(end) == END_MAX
                      else protocol.CALIB_DIAG_PHASE_FIND_MIN)
             self._diag(outcome.reason, phase, motor=pull)
         return outcome.point
+
+    def _preload_secondary(self, tight):
+        """主腱保持不动，副腱收到绷紧，两根绳都带张力后再开始交换。"""
+        primary, secondary = _dual_motors(self.joint)
+        hold = int(tight.primary_abs)
+        cmd = self.io.servo_abs(secondary)
+        if cmd is None:
+            self._diag(protocol.CALIB_DIAG_REASON_FEEDBACK_LOST,
+                       protocol.CALIB_DIAG_PHASE_DUAL_PRELOAD, motor=secondary)
+            return False
+        p = self.params
+        speed = max(1, int(p.tightenSpeedCountsPerSec))
+        deadline = self.io.now_ms() + config.kPreloadTimeoutMs
+        last = self.io.now_ms()
+        remainders = 0
+        bitmap = (1 << primary) | (1 << secondary)
+        self.io.trace("DUAL_PRELOAD_BEGIN", self.joint, secondary, hold_abs=hold)
+        while self.io.owns_control() and self.io.now_ms() < deadline:
+            now = self.io.now_ms()
+            if now - last >= p.loopMs:
+                counts, remainders = divmod((now - last) * speed + remainders, 1000)
+                last = now
+                cmd = config.motor_apply_tendon_delta(secondary, cmd, counts)
+            if not self.io.publish({primary: hold, secondary: cmd}, p.servoSpeed, p.servoAcc):
+                self._diag(protocol.CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
+                           protocol.CALIB_DIAG_PHASE_DUAL_PRELOAD, motor=secondary)
+                return False
+            load = config.load_magnitude(self.io.servo_load(secondary) or 0)
+            hold_load = config.load_magnitude(self.io.servo_load(primary) or 0)
+            if max(load, hold_load) >= config.kOverloadLoadCounts:
+                self._diag(protocol.CALIB_DIAG_REASON_OVERLOAD,
+                           protocol.CALIB_DIAG_PHASE_DUAL_PRELOAD, motor=secondary,
+                           a=load, b=config.kOverloadLoadCounts, c=0, bitmap=bitmap)
+                return False
+            if load >= config.kTautLoadCounts:
+                self.io.trace("DUAL_PRELOAD_DONE", self.joint, secondary, load=load)
+                return True
+            self.io.sleep_ms(p.loopMs)
+        self._diag(protocol.CALIB_DIAG_REASON_END_TIMEOUT,
+                   protocol.CALIB_DIAG_PHASE_DUAL_PRELOAD, motor=secondary,
+                   a=config.kPreloadTimeoutMs, b=0, c=0, bitmap=bitmap)
+        return False
 
     def _pose_helper(self, helper, pose):
         motors = _dual_motors(helper)
@@ -185,7 +227,9 @@ class _DualMachine:
             return True
         pull, release = _end_motors(motors, end)
         outcome = sweep_to_end(self.io, helper, end, motors=motors, pull=pull,
-                               release=release, params=self.workspace_params)
+                               release=release, params=self.workspace_params,
+                               endpoint_load=config.kTautLoadCounts,
+                               timeout_ms=config.kMaxSweepTimeoutMs)
         if outcome.point is None:
             # 具体原因（停在几度/腱太松）比笼统的"让位失败"更有用。
             self._diag(outcome.reason, protocol.CALIB_DIAG_PHASE_DUAL_PRELOAD, helper,
@@ -220,8 +264,11 @@ class _DualMachine:
                        a=self.joint, b=-1, c=-1)
             return None
         self.io.clear_limits(self.joint)
-        tight = self._sweep(END_MAX)
+        tight = self._sweep(END_MAX, endpoint_load=config.kTautLoadCounts,
+                            timeout_ms=config.kMaxSweepTimeoutMs)
         if tight is None or tight.primary_abs is None or tight.secondary_abs is None:
+            return None
+        if not self._preload_secondary(tight):
             return None
         fit = TendonRawFitBuffer()
         window = None
@@ -239,7 +286,9 @@ class _DualMachine:
         else:
             fit.append(tight.encoder, tight.primary_abs, tight.secondary_abs)
             fit.next_travel_deg = config.kTendonFitSampleStepDeg
-        limit = self._sweep(END_MIN, fit=None if window is not None else fit)
+        limit = self._sweep(END_MIN, fit=None if window is not None else fit,
+                            endpoint_load=config.kDualLimitLoadCounts,
+                            timeout_ms=config.kMinSweepTimeoutMs)
         if limit is None or limit.primary_abs is None or limit.secondary_abs is None:
             return None
         if window is not None:
@@ -258,12 +307,6 @@ class _DualMachine:
                       tight_encoder=tight.encoder, limit_encoder=limit.encoder,
                       span=span, tight_deg=round(tight.angle, 3),
                       limit_deg=round(limit.angle, 3))
-        if not 0 < span < config.kCalibrationEncoderHalfTurn:
-            self._diag(protocol.CALIB_DIAG_REASON_RESULT_SPAN_INVALID,
-                       protocol.CALIB_DIAG_PHASE_FIND_MIN, motor=motors[0],
-                       a=span, b=tight.encoder, c=limit.encoder,
-                       bitmap=sum(1 << m for m in motors))
-            return None
         result = build_calibration_result(
             self.io, self.joint, limit.encoder, 0, tight.encoder,
             limit.primary_abs, tight.primary_abs, tight.primary_abs)

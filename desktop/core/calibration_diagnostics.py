@@ -114,7 +114,13 @@ CALIBRATION_DIAGNOSTICS: Dict[int, CalibrationDiagnosticSpec] = {
     ),
     protocol.CALIB_DIAG_REASON_OVERLOAD: _spec(
         "Overload during calibration", ("load", "limit", "raw_load", "motor_mask"),
-        "Remove external load, check for an over-tight tendon or mechanical jam, clear the fault, and recalibrate.",
+        "Check for an over-tight tendon or mechanical jam. If the endpoints look right, "
+        "re-capture this joint's Manual Min/Max and raise the calibration load limit.",
+    ),
+    protocol.CALIB_DIAG_REASON_END_TIMEOUT: _spec(
+        "Endpoint search timed out", ("elapsed_ms", "angle_deg_x1000", "encoder_raw", "motor_mask"),
+        "The tendon never reached the expected load or the joint never arrived. "
+        "Remove trapped slack, then re-capture this joint's Manual Min/Max and retry.",
     ),
     protocol.CALIB_DIAG_REASON_ZERO_CROSS_INVALID: _spec(
         "Invalid zero-position estimate", ("taut", "zero", "tight", "motor_mask"),

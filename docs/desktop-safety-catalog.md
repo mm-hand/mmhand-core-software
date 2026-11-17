@@ -196,23 +196,23 @@ are not listed. f-string messages are templates.
 | 163 | faults=0x{…}, route conflicts=0x{…} | HOST_ACTION_FAILED ⚠ fallback |
 | 171 | state={…}, owner={…}, token={…}/{…}, result={…} | HOST_ACTION_FAILED ⚠ fallback |
 | 176 | not stopped: state={…}, owner={…} | HOST_ACTION_FAILED ⚠ fallback |
-| 1153 | device or model identity changed before calibration commit | HOST_ACTION_FAILED ⚠ fallback |
-| 1155 | invalid host joint calibration result | HOST_ACTION_FAILED ⚠ fallback |
-| 1158 | mechanical result retained in host diagnostics; LUT build invalid, not uploaded | HOST_ACTION_FAILED ⚠ fallback |
-| 1163 | could not release motion before Manual/LUT commit | HOST_ACTION_FAILED ⚠ fallback |
-| 1167 | Manual writeback failed | HOST_ACTION_FAILED ⚠ fallback |
-| 1170 | joint LUT writeback failed | HOST_ACTION_FAILED ⚠ fallback |
-| 1177 | calibration motor limits incomplete | HOST_ACTION_FAILED ⚠ fallback |
-| 1183 | joint ABS limits writeback failed | HOST_ACTION_FAILED ⚠ fallback |
-| 1186 | calibration cancelled after device writeback | HOST_CANCELLED |
-| 1194 | calibration applied to P4 but trusted native ABS feedback did not return; snapshot not written | HOST_ACTION_FAILED ⚠ fallback |
-| 1203 | calibration applied to P4 but runtime anchor persistence failed; snapshot not written | HOST_ACTION_FAILED ⚠ fallback |
-| 1280 | calibration complete; motion owner release failed | HOST_ACTION_FAILED ⚠ fallback |
-| 1291 | calibration complete; active scope restore failed | HOST_ACTION_FAILED ⚠ fallback |
-| 1293 | calibration complete; P4 preparation failed | HOST_ACTION_FAILED ⚠ fallback |
-| 1296 | calibration complete; Pull Joint into Workspace start failed | HOST_ACTION_FAILED ⚠ fallback |
-| 1299 | calibration complete; Pull Joint into Workspace result timeout | HOST_RESULT_UNKNOWN |
-| 1302 | Pull Joint into Workspace failed | HOST_ACTION_FAILED ⚠ fallback |
+| 1148 | device or model identity changed before calibration commit | HOST_ACTION_FAILED ⚠ fallback |
+| 1150 | invalid host joint calibration result | HOST_ACTION_FAILED ⚠ fallback |
+| 1153 | mechanical result retained in host diagnostics; LUT build invalid, not uploaded | HOST_ACTION_FAILED ⚠ fallback |
+| 1158 | could not release motion before Manual/LUT commit | HOST_ACTION_FAILED ⚠ fallback |
+| 1162 | Manual writeback failed | HOST_ACTION_FAILED ⚠ fallback |
+| 1165 | joint LUT writeback failed | HOST_ACTION_FAILED ⚠ fallback |
+| 1172 | calibration motor limits incomplete | HOST_ACTION_FAILED ⚠ fallback |
+| 1178 | joint ABS limits writeback failed | HOST_ACTION_FAILED ⚠ fallback |
+| 1181 | calibration cancelled after device writeback | HOST_CANCELLED |
+| 1189 | calibration applied to P4 but trusted native ABS feedback did not return; snapshot not written | HOST_ACTION_FAILED ⚠ fallback |
+| 1198 | calibration applied to P4 but runtime anchor persistence failed; snapshot not written | HOST_ACTION_FAILED ⚠ fallback |
+| 1275 | calibration complete; motion owner release failed | HOST_ACTION_FAILED ⚠ fallback |
+| 1286 | calibration complete; active scope restore failed | HOST_ACTION_FAILED ⚠ fallback |
+| 1288 | calibration complete; P4 preparation failed | HOST_ACTION_FAILED ⚠ fallback |
+| 1291 | calibration complete; Pull Joint into Workspace start failed | HOST_ACTION_FAILED ⚠ fallback |
+| 1294 | calibration complete; Pull Joint into Workspace result timeout | HOST_RESULT_UNKNOWN |
+| 1297 | Pull Joint into Workspace failed | HOST_ACTION_FAILED ⚠ fallback |
 
 ## desktop/core/id_actions.py
 

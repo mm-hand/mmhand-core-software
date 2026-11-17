@@ -1137,6 +1137,16 @@
         "Re-capture this joint's Manual Min/Max on the Joint Calibration page at those stops.",
         "Run Motor Calibration again for this joint."
       ]
+    },
+    "HOST_CALIB_39": {
+      "title": "Calibration stopped: endpoint search timed out",
+      "category": "mechanical",
+      "impact": "The pulling tendon never reached the expected load, or the joint never arrived near the endpoint, before the phase time limit.",
+      "steps": [
+        "Check that the tendon is attached and follows the motor; remove any trapped slack.",
+        "Push the joint by hand to both mechanical stops and re-capture this joint's Manual Min/Max.",
+        "Run Motor Calibration again for this joint."
+      ]
     }
   }
 }

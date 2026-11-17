@@ -213,17 +213,29 @@ def test_single_failure_continues_and_preserves_successful_results(machines):
     assert session.records[0]["has_next_joint"] is True
 
 
-@pytest.mark.parametrize("joint,aborted", [(0, False), (1, True)])
-def test_dual_failure_and_single_abort_stop_without_committing_failure(machines, joint, aborted):
+def test_dual_failure_blocks_only_its_finger(machines):
     io = _IO()
     calls, outcomes = machines
-    outcomes[joint] = {"success": False, "aborted": aborted,
-                       "reason": "mechanical fault", "result": None, "limits": {}}
-    session = flow.run(io, (1 << joint) | (1 << 14), _mask((joint, 14)), lambda *_: None)
-    assert not session.success and session.failed_joint_mask == 1 << joint
-    assert [item[1] for item in calls if item[0] in ("single", "dual")] == [joint]
+    outcomes[0] = {"success": False, "aborted": False,
+                   "reason": "mechanical fault", "result": None, "limits": {}}
+    session = flow.run(io, (1 << 0) | (1 << 1) | (1 << 14), _mask((0, 1, 14)),
+                       lambda *_: None)
+    assert not session.success
+    assert session.failed_joint_mask == (1 << 0) | (1 << 1)
+    assert session.blocked_joint_mask == 1 << 1
+    assert [item[1] for item in calls if item[0] in ("single", "dual")] == [0, 14]
+    assert [item[1] for item in io.calls if item[0] == "commit"] == [14]
+
+
+def test_aborted_joint_stops_the_session(machines):
+    io = _IO()
+    calls, outcomes = machines
+    outcomes[1] = {"success": False, "aborted": True,
+                   "reason": "control lost", "result": None, "limits": {}}
+    session = flow.run(io, (1 << 1) | (1 << 14), _mask((1, 14)), lambda *_: None)
+    assert not session.success
+    assert [item[1] for item in calls if item[0] in ("single", "dual")] == [1]
     assert not any(item[0] == "commit" for item in io.calls)
-    assert session.records[0]["has_next_joint"] is False
 
 
 @pytest.mark.parametrize("step", ["prepare", "commit"])

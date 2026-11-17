@@ -119,7 +119,7 @@ class FakeIO:
         return 7
 
 
-def link(io, joint, primary, secondary=None, taut=210):
+def link(io, joint, primary, secondary=None, taut=260):
     """Move the joint from the commanded motor travel; clamp at both endpoints."""
     pose = {"p": io.values[primary],
             "s": io.values[secondary] if secondary is not None else 0,
@@ -285,34 +285,92 @@ def test_sweep_load_alone_is_not_an_endpoint():
     io.on_publish = freeze(io, 3500)
     io.loads[primary] = 192
     outcome = sweep.sweep_to_end(io, 16, sweep.END_MAX, motors=(primary, secondary),
-                                 pull=primary, release=secondary)
+                                 pull=primary, release=secondary, timeout_ms=2000)
     assert outcome.point is None
-    assert outcome.reason == protocol.CALIB_DIAG_REASON_END_NOT_REACHED
+    assert outcome.reason == protocol.CALIB_DIAG_REASON_END_TIMEOUT
 
 
-def test_sweep_reports_distance_to_the_endpoint():
+def test_sweep_reports_timeout_with_the_last_angle():
     io = FakeIO(start_raw=4100)
     primary, secondary = config.joint_motors(16)
     io.on_publish = freeze(io, 4100)
     io.loads[primary] = 192
     outcome = sweep.sweep_to_end(io, 16, sweep.END_MAX, motors=(primary, secondary),
-                                 pull=primary, release=secondary)
-    assert outcome.reason == protocol.CALIB_DIAG_REASON_END_NOT_REACHED
-    angle_x1000, distance_x1000, encoder = io.diags[0][4], io.diags[0][5], io.diags[0][6]
+                                 pull=primary, release=secondary, timeout_ms=2000)
+    assert outcome.reason == protocol.CALIB_DIAG_REASON_END_TIMEOUT
+    elapsed, angle_x1000, encoder = io.diags[0][4], io.diags[0][5], io.diags[0][6]
+    assert elapsed == 2000
     assert angle_x1000 == pytest.approx(round(36.0 * 1000), abs=1000)
-    assert distance_x1000 > 50 * 1000
     assert encoder == 4100
 
 
-def test_sweep_reports_slack_runaway():
-    io = FakeIO(start_raw=3500)
+def test_sweep_aborts_on_overload():
+    io = FakeIO(start_raw=4100)
     primary, secondary = config.joint_motors(16)
-    io.on_publish = freeze(io, 3500)
-    io.loads[primary] = 40
+    io.on_publish = freeze(io, 4100)
+    io.loads[primary] = config.kOverloadLoadCounts + 20
     outcome = sweep.sweep_to_end(io, 16, sweep.END_MAX, motors=(primary, secondary),
                                  pull=primary, release=secondary)
     assert outcome.point is None
-    assert outcome.reason == protocol.CALIB_DIAG_REASON_SLACK_TOO_LARGE
+    assert outcome.reason == protocol.CALIB_DIAG_REASON_OVERLOAD
+
+
+@pytest.mark.parametrize("load,reached", [
+    (config.kTautLoadCounts - 60, False),
+    (config.kTautLoadCounts, True),
+])
+def test_max_endpoint_needs_a_taut_tendon(load, reached):
+    io = FakeIO(start_raw=5000)
+    primary, secondary = config.joint_motors(16)
+    io.on_publish = freeze(io, 5000)
+    io.loads[primary] = load
+    outcome = sweep.sweep_to_end(io, 16, sweep.END_MAX, motors=(primary, secondary),
+                                 pull=primary, release=secondary,
+                                 endpoint_load=config.kTautLoadCounts, timeout_ms=3000)
+    assert (outcome.point is not None) is reached
+
+
+@pytest.mark.parametrize("load,reached", [
+    (config.kDualLimitLoadCounts - 40, False),
+    (config.kDualLimitLoadCounts, True),
+])
+def test_min_endpoint_needs_the_limit_load(load, reached):
+    io = FakeIO(start_raw=5000)
+    primary, secondary = config.joint_motors(16)
+    io.on_publish = link(io, 16, primary, secondary, taut=load)
+    outcome = sweep.sweep_to_end(io, 16, sweep.END_MIN, motors=(primary, secondary),
+                                 pull=secondary, release=primary,
+                                 endpoint_load=config.kDualLimitLoadCounts, timeout_ms=4000)
+    assert (outcome.point is not None) is reached
+
+
+def test_preload_winds_the_secondary_and_holds_the_primary():
+    io = FakeIO(start_raw=5000)
+    primary, secondary = config.joint_motors(16)
+    io.values[primary] = 1000
+    io.values[secondary] = 2000
+
+    def slowly_taut(state, targets, previous):
+        state.loads[primary] = 240
+        state.loads[secondary] = 240 if state.values[secondary] > 2030 else 0
+        state.encoder_values[16] = 5000
+
+    io.on_publish = slowly_taut
+    tight = sweep.EndPoint(90.0, 5000, 1000, 2000, 200)
+    assert machine(io, 16)._preload_secondary(tight) is True
+    assert all(command.get(primary) == 1000 for _, command, _, _ in io.commands)
+    assert io.commands[-1][1][secondary] > 2030
+
+
+def test_preload_times_out_when_the_secondary_never_loads():
+    io = FakeIO(start_raw=5000)
+    primary, secondary = config.joint_motors(16)
+    io.values[primary] = 1000
+    io.values[secondary] = 2000
+    tight = sweep.EndPoint(90.0, 5000, 1000, 2000, 200)
+    worker = machine(io, 16)
+    assert worker._preload_secondary(tight) is False
+    assert worker.reason == protocol.CALIB_DIAG_REASON_END_TIMEOUT
 
 
 def test_sweep_stops_when_feedback_vanishes():
@@ -377,8 +435,7 @@ def test_pose_helper_failure_reports_workspace_diagnostic():
     io.loads[secondary] = 192
     worker = machine(io, 0)
     assert worker._pose_helper(4, dual.POSE_B) is False
-    assert worker.reason in (protocol.CALIB_DIAG_REASON_END_NOT_REACHED,
-                            protocol.CALIB_DIAG_REASON_SLACK_TOO_LARGE)
+    assert worker.reason == protocol.CALIB_DIAG_REASON_END_TIMEOUT
 
 
 def test_run_dual_fails_when_the_joint_cannot_reach_max():
@@ -388,7 +445,7 @@ def test_run_dual_fails_when_the_joint_cannot_reach_max():
     io.loads[primary] = 192
     outcome = dual.run_dual(io, 16, 0, 1, 1 << 16, config.AutoCalibrationParams())
     assert outcome["success"] is False
-    assert outcome["reason"] == protocol.CALIB_DIAG_REASON_END_NOT_REACHED
+    assert outcome["reason"] == protocol.CALIB_DIAG_REASON_END_TIMEOUT
 
 
 def test_run_dual_completes_with_lut_and_limits():
@@ -473,18 +530,19 @@ def test_sweep_commands_counts_by_elapsed_time():
 
 
 def test_sweep_keeps_going_while_the_joint_creeps():
-    """Regression: J01/J02 were declared stuck while still creeping at 0.2 deg per window."""
+    """Regression: J01/J02 were declared stuck while still creeping into the endpoint."""
     io = FakeIO(low_raw=3500, high_raw=5000, start_raw=3500)
     motor = config.joint_motors(1)[0]
     pose = {"raw": 3500}
 
     def creep(state, targets, previous):
-        pose["raw"] = min(5000, pose["raw"] + 1)
+        pose["raw"] = min(5000, pose["raw"] + 8)
         state.encoder_value = pose["raw"]
-        state.loads[motor] = 150
+        state.loads[motor] = 210
 
     io.on_publish = creep
     outcome = sweep.sweep_to_end(io, 1, sweep.END_MAX, motors=(motor,),
-                                 pull=motor, release=None)
+                                 pull=motor, release=None,
+                                 endpoint_load=config.kTautLoadCounts)
     assert outcome.point is not None
     assert abs(outcome.point.angle - 90.0) <= config.kEndToleranceDeg

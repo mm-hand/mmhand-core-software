@@ -33,19 +33,20 @@ kEncoderRecoveryStableSamples = 3
 kServoRecoveryTimeoutMs = 5000
 kServoRecoveryStableSamples = 3
 
-# 端点搜索。唯一判据是"角度冻结 + 离目标端点足够近"。
-kTautLoadCounts = 190            # 腱绷紧；只用来决定何时放对侧腱
+# 端点搜索。判据是"角度冻结 + 离目标端点足够近 + 腱已绷紧"。
+kTautLoadCounts = 200            # 腱绷紧：允许放对侧腱；也是副腱预紧目标
+kOverloadLoadCounts = 300        # 标定过程负载上限，超过立即中止
+kDualLimitLoadCounts = 250       # 双腱 MIN 端点确认负载
 kEndStillDeg = 0.3               # 每 windowMs 的角度冻结阈值（编码器抖动约 ±0.11°）
 kEndStillWindows = 3             # 连续冻结窗口数 → 到达端点
-kStuckWindows = 5                # 连续冻结窗口数 → 卡住（绷紧却不在端点）
-kEndToleranceDeg = 8.0           # 距目标端点容差（约 350 counts，与装配告警同量级）
-kPastManualAbortLoad = 300       # 停住却越过 Manual 端点、且仍在此负载以上 → Manual 端点记错
-kSlackRunFactor = 1.5            # 未绷紧却卷动 > 1.5×Manual 行程 → 空行程异常
+kEndToleranceDeg = 8.0           # 拉的一端距目标端点容差（约 350 counts）
+kSpringReturnToleranceDeg = 30.0 # 单腱弹簧回程没有腱在拉，只能宽松判定
+kMaxSweepTimeoutMs = 20000       # MAX 相位时限
+kPreloadTimeoutMs = 12000        # 双腱副腱预紧时限
+kMinSweepTimeoutMs = 30000       # MIN / 回程时限
 
 # 结果与 LUT。
 kMaxTravelDeg = 359.0
-kRejectNearFullWrapSpanCounts = 15360
-kCalibrationEncoderHalfTurn = 8192
 kCalibrationEncoderModulo = 16384
 kLutStartDeg = -5.0
 kLutZeroDeg = 0.0
@@ -61,7 +62,6 @@ kMaxSegmentSlopeRatio = 8.0
 # ±30715，这里留 715 counts 余量，避免目标先进保护带触发整手 STOP。
 kAbsRebaseTriggerCounts = 30000
 kAbsRebaseRetryCounts = 3
-kSingleTendonMaxReleaseCounts = 4096 * 2
 
 # AA 依赖：摆到中点时只求大致到位。
 kAaMidpointSpeedCountsPerSec = 400
@@ -121,6 +121,3 @@ def motor_apply_tendon_delta(motor: int, raw_abs: int, tendon_delta: int) -> int
     # P4 clampCalibrationServoAbs 是恒等函数；最终硬件范围由 IO 检查。
     return int(raw_abs) + shorten_sign(motor) * int(tendon_delta)
 
-
-def single_tendon_release_counts(motor: int, tight_abs: int, current_abs: int) -> int:
-    return max(0, (int(tight_abs) - int(current_abs)) * shorten_sign(motor))

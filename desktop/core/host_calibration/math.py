@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from .config import (
     ENCODER_COUNT, TENDON_LUT_MAX_SAMPLES, kTendonRawSampleCapacity,
     kTendonFitSampleStepDeg, kMaxTravelDeg, kLutStartDeg,
-    kLutZeroDeg, kCalibrationEncoderModulo, kCalibrationEncoderHalfTurn,
+    kLutZeroDeg, kCalibrationEncoderModulo,
     kMaxSegmentSlopeRatio,
 )
 
@@ -44,9 +44,10 @@ def forward_encoder_delta(start: int, end: int) -> int:
 
 def wrap_encoder_delta(target: int, actual: int) -> int:
     delta = target - actual
-    while delta > kCalibrationEncoderHalfTurn:
+    half = kCalibrationEncoderModulo // 2
+    while delta > half:
         delta -= kCalibrationEncoderModulo
-    while delta < -kCalibrationEncoderHalfTurn:
+    while delta < -half:
         delta += kCalibrationEncoderModulo
     return delta
 

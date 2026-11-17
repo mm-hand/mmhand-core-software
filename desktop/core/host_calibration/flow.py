@@ -38,6 +38,16 @@ class CalibrationSessionResult:
     message: str = ""
     terminal_status: str = "FAILED"
     cancelled: bool = False
+    blocked_joint_mask: int = 0
+
+
+def blocked_dependents(joint: int) -> int:
+    """AA/CMC 关节失败后，同指的其余关节没有摆动基准，无法标定。"""
+    finger = joint - joint % 4 if 0 <= joint < 20 else joint
+    if finger not in DUAL_TENDON_JOINT_INDICES:
+        return 0
+    return sum(1 << j for j in range(finger + 1, min(finger + 4, ENCODER_COUNT))
+               if j // 4 == finger // 4)
 
 
 def calibration_joint_motor_mask(joint: int) -> int:
@@ -92,6 +102,7 @@ def run(io, joint_mask: int, motor_mask: int,
     for joint in joints:
         selected_motors |= calibration_joint_motor_mask(joint)
     completed = failed = 0
+    blocked = 0
     records = []
     success = False
     message = ""
@@ -134,6 +145,23 @@ def run(io, joint_mask: int, motor_mask: int,
                             on_joint_started(joint, joint_motors)
                         io.session_state("RUNNING", progress=index * 100 // len(joints),
                                          joint=joint, completed=completed, failed=failed)
+                        if blocked & (1 << joint):
+                            # 同指的 AA/CMC 已失败：跳过，不要连累其他手指。
+                            outcome = {"success": False, "aborted": False,
+                                       "reason": "skipped: this finger's AA/CMC joint failed",
+                                       "result": None, "limits": {}}
+                            failed |= 1 << joint
+                            outcome.update(joint=joint, sequence_index=index,
+                                           sequence_count=len(joints),
+                                           motor_mask=joint_motors,
+                                           completed_joint_mask=completed,
+                                           failed_joint_mask=failed,
+                                           has_next_joint=(index + 1 < len(joints)))
+                            records.append(outcome)
+                            on_joint(joint, outcome)
+                            io.session_state("RUNNING", progress=(index + 1) * 100 // len(joints),
+                                             joint=joint, completed=completed, failed=failed)
+                            continue
                         outcome = {}
                         for attempt in range(kAbsRebaseRetryCounts + 1):
                             prepared, prepare_message = _accepted(
@@ -210,18 +238,18 @@ def run(io, joint_mask: int, motor_mask: int,
                             sequence_count=len(joints), motor_mask=joint_motors,
                             completed_joint_mask=completed, failed_joint_mask=failed,
                             has_next_joint=(index + 1 < len(joints) and
-                                not bool(outcome.get("aborted")) and
-                                not (joint in DUAL_TENDON_JOINT_INDICES and
-                                     not bool(outcome.get("success")))),
+                                            not bool(outcome.get("aborted"))),
                         )
                         records.append(outcome)
                         io.session_state("RUNNING", progress=(index + 1) * 100 // len(joints),
                                          joint=joint, completed=completed, failed=failed)
                         on_joint(joint, outcome)
-                        if (bool(outcome.get("aborted")) or
-                            (joint in DUAL_TENDON_JOINT_INDICES and
-                             not bool(outcome.get("success")))):
+                        if bool(outcome.get("aborted")):
                             break
+                        if not bool(outcome.get("success")):
+                            # AA/CMC 失败（或摆动基准不可用）只拖累同指，其他手指继续。
+                            if joint in DUAL_TENDON_JOINT_INDICES or outcome.get("finger_blocked"):
+                                blocked |= blocked_dependents(joint)
                     success = completed == selected_mask and failed == 0 and not cancelled
                     if success:
                         message = "all calibration joints completed"
@@ -252,4 +280,5 @@ def run(io, joint_mask: int, motor_mask: int,
                          joint=0xFF, completed=completed, failed=failed,
                          cancelled=cancelled)
     return CalibrationSessionResult(success, completed, failed, joints,
-                                    tuple(records), message, terminal_status, cancelled)
+                                    tuple(records), message, terminal_status, cancelled,
+                                    blocked & selected_mask)

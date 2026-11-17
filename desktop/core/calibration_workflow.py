@@ -377,6 +377,7 @@ class CalibrationWorkflowService:
                                 session.terminal_status == "FAILED" else session.terminal_status),
                             "completed_joint_mask": session.completed_joint_mask,
                             "failed_joint_mask": session.failed_joint_mask,
+                            "blocked_joint_mask": session.blocked_joint_mask,
                             "cancelled": session.cancelled,
                             "diagnostic_reason": getattr(io, '_last_diag', None)[0] if getattr(io, '_last_diag', None) else None,
                             "diagnostic": getattr(io, '_last_diag', None),

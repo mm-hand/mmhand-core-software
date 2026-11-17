@@ -526,6 +526,17 @@ If the text is edited there, update this file. P4 device events (`P4-0000` style
 2. Re-capture this joint's Manual Min/Max on the Joint Calibration page at those stops.
 3. Run Motor Calibration again for this joint.
 
+### HOST_CALIB_39
+
+**What you see:** Calibration stopped: endpoint search timed out
+
+**Cause:** The pulling tendon never reached the expected load, or the joint never arrived near the endpoint, before the phase time limit.
+
+**Fix:**
+1. Check that the tendon is attached and follows the motor; remove any trapped slack.
+2. Push the joint by hand to both mechanical stops and re-capture this joint's Manual Min/Max.
+3. Run Motor Calibration again for this joint.
+
 ### HOST_CALIB_WARNING
 
 **What you see:** Calibration completed with an assembly warning
