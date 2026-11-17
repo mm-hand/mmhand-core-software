@@ -14,7 +14,8 @@ from desktop.core.protocol import (
 
 
 def test_retired_reason_codes_have_no_compatibility_catalog():
-    assert not {2,3,4,7,9,10,11,12,19}.intersection(CALIBRATION_DIAGNOSTICS)
+    assert not {2, 3, 4, 7, 9, 10, 11, 12, 14, 19,
+                27, 29, 35, 36, 37, 38}.intersection(CALIBRATION_DIAGNOSTICS)
 
 
 def test_calibration_reason_titles_are_unique_and_english():

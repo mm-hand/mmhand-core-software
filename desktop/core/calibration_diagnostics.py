@@ -126,10 +126,6 @@ CALIBRATION_DIAGNOSTICS: Dict[int, CalibrationDiagnosticSpec] = {
         "Invalid zero-position estimate", ("taut", "zero", "tight", "motor_mask"),
         "Check the encoder installation and magnet mounting, the calibration start pose, and tendon preload.",
     ),
-    protocol.CALIB_DIAG_REASON_WRAP_TOO_LARGE: _spec(
-        "Encoder span is near a full turn", ("encoder_span", "tight", "max", "motor_mask"),
-        "Check the magnetic encoder installation and magnet mounting, mapping, and the multi-turn anchor.",
-    ),
     protocol.CALIB_DIAG_REASON_ABS_LIMIT_INVALID: _spec(
         "Servo target exceeds the safe absolute range", ("command_abs", "min", "max", "motor_mask"),
         "Verify the multi-turn reading, servo ID, tendon routing, and ABS limits before recalibrating.",
@@ -181,18 +177,9 @@ CALIBRATION_DIAGNOSTICS: Dict[int, CalibrationDiagnosticSpec] = {
         "Check power, bus communication, and multi-turn mode for the unresolved motor mask.",
         kinds=("hex", "hex", "hex", "hex"),
     ),
-    protocol.CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS: _spec(
-        "Single-tendon release exceeded two turns",
-        ("released_counts", "limit_counts", "next_released_counts", "motor_mask"),
-        "Check for a detached or broken tendon, wrong winding direction, or encoder motion mismatch.",
-    ),
     protocol.CALIB_DIAG_REASON_MOTOR_MAPPING_INVALID: _spec(
         "Invalid joint-to-servo mapping", ("joint", "primary", "secondary", "motor_mask"),
         "Check the J/M and primary/secondary motor mapping in HardwareMap.",
-    ),
-    protocol.CALIB_DIAG_REASON_RESULT_SPAN_INVALID: _spec(
-        "Invalid magnetic encoder travel", ("encoder_span", "endpoint_a", "endpoint_b", "motor_mask"),
-        "Check the encoder installation and magnet mounting, mechanical endpoints, and whether SPI/CAN data updates in real time.",
     ),
     protocol.CALIB_DIAG_REASON_RESULT_BUILD_FAILED: _spec(
         "Calibration result or LUT build failed", ("sample_count", "encoder_span", "lut_count", "motor_mask"),
@@ -215,27 +202,6 @@ CALIBRATION_DIAGNOSTICS: Dict[int, CalibrationDiagnosticSpec] = {
         "Joint stalled during dual-tendon exchange",
         ("load", "load_threshold", "encoder_delta", "motor_mask"),
         "Check primary/secondary tendon preload, winding directions, encoder feedback, and mechanical binding.",
-    ),
-    protocol.CALIB_DIAG_REASON_END_NOT_REACHED: _spec(
-        "Joint stopped far from the commanded endpoint",
-        ("angle_deg_x1000", "distance_deg_x1000", "encoder_raw", "motor_mask"),
-        "The joint angle froze while the tendon still pulled. Check for a blocked joint or re-capture Manual Min/Max.",
-    ),
-    protocol.CALIB_DIAG_REASON_SLACK_TOO_LARGE: _spec(
-        "Tendon wound past one joint range without moving the joint",
-        ("wound_counts", "manual_span_counts", "encoder_raw", "motor_mask"),
-        "Check that the tendon is attached and follows the motor; remove trapped slack and verify the winding direction.",
-    ),
-    protocol.CALIB_DIAG_REASON_WEAK_RETURN: _spec(
-        "Joint did not return when the tendon was released",
-        ("released_counts", "limit_counts", "encoder_raw", "motor_mask"),
-        "The spring or linkage could not bring the joint back. Free the joint, then re-capture Manual Min/Max.",
-    ),
-    protocol.CALIB_DIAG_REASON_PAST_MANUAL_ENDPOINT: _spec(
-        "Motor Calibration went past the Manual endpoint",
-        ("past_manual_counts", "manual_endpoint_raw", "encoder_raw", "motor_mask"),
-        "The joint stopped outside the Manual Min/Max range. Re-capture this joint's "
-        "Manual Min/Max at the mechanical stops, then run Motor Calibration again.",
     ),
 }
 

@@ -279,16 +279,6 @@ If the text is edited there, update this file. P4 device events (`P4-0000` style
 1. Check the calibration start pose and magnetic encoder installation.
 2. Check tendon routing and preload, then calibrate the affected joint again.
 
-### HOST_CALIB_14
-
-**What you see:** Calibration stopped: the encoder travelled nearly a full turn
-
-**Cause:** The measured encoder travel cannot be used safely.
-
-**Fix:**
-1. Check the encoder and magnet mounting and watch whether the live reading follows the joint.
-2. Check the motor mapping and saved motor position before recalibrating.
-
 ### HOST_CALIB_15
 
 **What you see:** Calibration stopped: a requested motor position is outside the safe range
@@ -402,16 +392,6 @@ If the text is edited there, update this file. P4 device events (`P4-0000` style
 2. Check those motors show Online and their live positions update.
 3. Check motor power and bus connections before calibrating again.
 
-### HOST_CALIB_27
-
-**What you see:** Calibration stopped: the tendon was released by more than two turns
-
-**Cause:** The release limit was reached before the required joint motion was confirmed.
-
-**Fix:**
-1. Check for a loose, detached or broken tendon.
-2. Check the winding direction and whether live encoder readings follow joint movement before recalibrating.
-
 ### HOST_CALIB_28
 
 **What you see:** Calibration stopped: the joint-to-motor mapping is invalid
@@ -421,16 +401,6 @@ If the text is edited there, update this file. P4 device events (`P4-0000` style
 **Fix:**
 1. Stop using motion controls.
 2. Verify the configured joint and motor mapping with support before calibrating again.
-
-### HOST_CALIB_29
-
-**What you see:** Calibration stopped: the measured joint travel is invalid
-
-**Cause:** The encoder travel was too small, too large, or inconsistent for calibration.
-
-**Fix:**
-1. Check the joint endpoints, encoder and magnet mounting.
-2. Watch whether live encoder readings follow the joint before recalibrating.
 
 ### HOST_CALIB_30
 
@@ -481,50 +451,6 @@ If the text is edited there, update this file. P4 device events (`P4-0000` style
 **Fix:**
 1. Check for binding and check both tendon winding directions and preload.
 2. Watch whether live encoder readings follow joint movement before recalibrating.
-
-### HOST_CALIB_35
-
-**What you see:** Calibration stopped: the joint stopped far from the endpoint
-
-**Cause:** The joint angle froze while the tendon was still pulling, so the commanded endpoint was never reached.
-
-**Fix:**
-1. Read the reported angle and distance: it is where the joint actually stopped.
-2. Check for a blocked joint (neighbour finger, palm, tendon path) or re-capture Manual Min/Max if the endpoint was measured wrong.
-3. Move the joint by hand or in Direct Control and watch the live angle before recalibrating.
-
-### HOST_CALIB_36
-
-**What you see:** Calibration stopped: the tendon is far too slack
-
-**Cause:** The motor wound past one full joint range without the angle moving, so tension never reached the joint.
-
-**Fix:**
-1. Check that the tendon is attached and follows the motor (compare motor travel with the live joint angle).
-2. Check the spool/winding direction and remove any trapped slack in the tendon path.
-3. Recalibrate after the tendon is confirmed to move the joint.
-
-### HOST_CALIB_37
-
-**What you see:** Calibration stopped: the joint did not return after the tendon was released
-
-**Cause:** The tendon was released past two turns and the joint still did not reach its minimum, so the return travel cannot be measured.
-
-**Fix:**
-1. Move the joint by hand and confirm it returns freely to its minimum (check the spring, the neighbouring finger and the tendon path).
-2. Re-capture Manual Min/Max if the current endpoints do not match where the joint actually stops.
-3. Recalibrate once the joint returns on its own.
-
-### HOST_CALIB_38
-
-**What you see:** Calibration stopped: the joint went past its Manual endpoint
-
-**Cause:** The joint stopped outside the Manual Min/Max range while the tendon was still pulling, so the Manual endpoint is recorded short of the real mechanical stop.
-
-**Fix:**
-1. Push the joint by hand to the real mechanical stop for this end and read the Raw encoder value.
-2. Re-capture this joint's Manual Min/Max on the Joint Calibration page at those stops.
-3. Run Motor Calibration again for this joint.
 
 ### HOST_CALIB_39
 

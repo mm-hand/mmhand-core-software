@@ -31,7 +31,7 @@ def test_all_host_calibration_diagnostics_have_guidance():
         issue = operation_issue('raw calibration evidence', diagnostic_reason=reason)
         assert issue.code == f'HOST_CALIB_{reason}'
         assert 1 <= len(issue.steps) <= 3
-    assert 'two turns' in operation_issue('', diagnostic_reason=27).title
+    assert 'timed out' in operation_issue('', diagnostic_reason=39).title
     assert 'exchange' in operation_issue('', diagnostic_reason=34).title
 
 

@@ -878,15 +878,6 @@
         "Check tendon routing and preload, then calibrate the affected joint again."
       ]
     },
-    "HOST_CALIB_14": {
-      "title": "Calibration stopped: the encoder travelled nearly a full turn",
-      "category": "calibration",
-      "impact": "The measured encoder travel cannot be used safely.",
-      "steps": [
-        "Check the encoder and magnet mounting and watch whether the live reading follows the joint.",
-        "Check the motor mapping and saved motor position before recalibrating."
-      ]
-    },
     "HOST_CALIB_15": {
       "title": "Calibration stopped: a requested motor position is outside the safe range",
       "category": "boundary",
@@ -989,15 +980,6 @@
         "Check motor power and bus connections before calibrating again."
       ]
     },
-    "HOST_CALIB_27": {
-      "title": "Calibration stopped: the tendon was released by more than two turns",
-      "category": "boundary",
-      "impact": "The release limit was reached before the required joint motion was confirmed.",
-      "steps": [
-        "Check for a loose, detached or broken tendon.",
-        "Check the winding direction and whether live encoder readings follow joint movement before recalibrating."
-      ]
-    },
     "HOST_CALIB_28": {
       "title": "Calibration stopped: the joint-to-motor mapping is invalid",
       "category": "internal",
@@ -1005,15 +987,6 @@
       "steps": [
         "Stop using motion controls.",
         "Verify the configured joint and motor mapping with support before calibrating again."
-      ]
-    },
-    "HOST_CALIB_29": {
-      "title": "Calibration stopped: the measured joint travel is invalid",
-      "category": "calibration",
-      "impact": "The encoder travel was too small, too large, or inconsistent for calibration.",
-      "steps": [
-        "Check the joint endpoints, encoder and magnet mounting.",
-        "Watch whether live encoder readings follow the joint before recalibrating."
       ]
     },
     "HOST_CALIB_30": {
@@ -1096,46 +1069,6 @@
         "Check the affected motors show Online and that live position readings update.",
         "Check motor power and bus connections.",
         "If a scan finds all motors but live feedback is still missing, save the session log for support."
-      ]
-    },
-    "HOST_CALIB_35": {
-      "title": "Calibration stopped: the joint stopped far from the endpoint",
-      "category": "mechanical",
-      "impact": "The joint angle froze while the tendon was still pulling, so the commanded endpoint was never reached.",
-      "steps": [
-        "Read the reported angle and distance: it is where the joint actually stopped.",
-        "Check for a blocked joint (neighbour finger, palm, tendon path) or re-capture Manual Min/Max if the endpoint was measured wrong.",
-        "Move the joint by hand or in Direct Control and watch the live angle before recalibrating."
-      ]
-    },
-    "HOST_CALIB_36": {
-      "title": "Calibration stopped: the tendon is far too slack",
-      "category": "mechanical",
-      "impact": "The motor wound past one full joint range without the angle moving, so tension never reached the joint.",
-      "steps": [
-        "Check that the tendon is attached and follows the motor (compare motor travel with the live joint angle).",
-        "Check the spool/winding direction and remove any trapped slack in the tendon path.",
-        "Recalibrate after the tendon is confirmed to move the joint."
-      ]
-    },
-    "HOST_CALIB_37": {
-      "title": "Calibration stopped: the joint did not return after the tendon was released",
-      "category": "mechanical",
-      "impact": "The tendon was released past two turns and the joint still did not reach its minimum, so the return travel cannot be measured.",
-      "steps": [
-        "Move the joint by hand and confirm it returns freely to its minimum (check the spring, the neighbouring finger and the tendon path).",
-        "Re-capture Manual Min/Max if the current endpoints do not match where the joint actually stops.",
-        "Recalibrate once the joint returns on its own."
-      ]
-    },
-    "HOST_CALIB_38": {
-      "title": "Calibration stopped: the joint went past its Manual endpoint",
-      "category": "mechanical",
-      "impact": "The joint stopped outside the Manual Min/Max range while the tendon was still pulling, so the Manual endpoint is recorded short of the real mechanical stop.",
-      "steps": [
-        "Push the joint by hand to the real mechanical stop for this end and read the Raw encoder value.",
-        "Re-capture this joint's Manual Min/Max on the Joint Calibration page at those stops.",
-        "Run Motor Calibration again for this joint."
       ]
     },
     "HOST_CALIB_39": {
