@@ -35,7 +35,7 @@ kServoRecoveryStableSamples = 3
 
 # 端点搜索。判据是"角度冻结 + 离目标端点足够近 + 腱已绷紧"。
 kTautLoadCounts = 200            # 腱绷紧：允许放对侧腱；也是副腱预紧目标
-kOverloadLoadCounts = 300        # 标定过程负载上限，超过立即中止
+kOverloadLoadCounts = 500        # 标定过程负载上限，超过立即中止
 kDualLimitLoadCounts = 250       # 双腱 MIN 端点确认负载
 kEndStillDeg = 1.0               # 每 600 ms 窗口的角度漂移上限；慢爬行由负载门兜底
 kEndStillWindows = 3             # 连续冻结窗口数 → 到达端点
