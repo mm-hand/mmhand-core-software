@@ -44,9 +44,9 @@ def test_plots_refresh_only_on_chart_leaves_and_at_most_once_per_second():
 
 def test_change_cache_only_reports_real_changes():
     cache = {}
-    assert policy.changed(cache, 'save', 'Save Data: ON')
-    assert not policy.changed(cache, 'save', 'Save Data: ON')
-    assert policy.changed(cache, 'save', 'Save Data: OFF')
+    assert policy.changed(cache, 'save', 'Stop Recording')
+    assert not policy.changed(cache, 'save', 'Stop Recording')
+    assert policy.changed(cache, 'save', 'Save Data')
     assert policy.changed(cache, 'age', None)
     assert not policy.changed(cache, 'age', None)
     assert policy.changed(cache, 'badge', 1)

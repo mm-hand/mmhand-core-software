@@ -627,6 +627,18 @@ def test_recording_error_turns_save_off_without_snapshot_consuming_error(hand, m
     assert not hand._save_data and not recorder.running
     assert hand._recording_error == 'disk full'
 
+def test_recording_scope_is_validated_and_used(hand, monkeypatch):
+    recorder = Recorder()
+    monkeypatch.setattr(hand, '_recorder', recorder)
+    monkeypatch.setattr(hand, 'set_control_trace_subscription', lambda _: True)
+    assert not hand.request_recording(True, []).accepted
+    assert not hand.request_recording(True, ['not-a-topic']).accepted
+    assert hand.request_recording(True, ['core_state', 'tactile_full']).accepted
+    reconcile(hand)
+    assert list(recorder.topics) == ['core_state', 'tactile_full']
+    recorder.running = True
+    assert not hand.request_recording(True, ['joint_wide']).accepted
+
 def test_motor_workflow_failure_overrides_cached_success(hand):
     hand._calibration_operation_id = 'run'
     hand._application_busy = 'run'

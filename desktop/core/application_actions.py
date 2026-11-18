@@ -26,6 +26,7 @@ from .calibration_diagnostics import (
     format_calibration_diagnostic, format_calibration_warning, format_calibration_batch_summary,
 )
 from .data_recording.recorder import DataSessionRecorder
+from .data_recording.topic_schema import DEFAULT_TOPICS, TOPIC_FIELDNAMES
 from .host_calibration.config import joint_motors, shorten_sign
 from .session_log import close_session_log, log_session, session_log_since
 from .communication.connection_diagnostics import describe_connection_failure
@@ -205,7 +206,7 @@ class ApplicationActions(IdResetActions):
         self._selected_motors = ()
         self._displayed_motor_abs_zero_generations = [0] * MOTOR_COUNT
         self._save_data = True
-        self._record_full_tactile = False
+        self._recording_topics = tuple(DEFAULT_TOPICS)
         self._recording_started_at = 0.0
         self._recording_lock = threading.Lock()
         self._recording_thread = None
@@ -1648,19 +1649,20 @@ class ApplicationActions(IdResetActions):
             return result
         return self.submit_operation('Play Motion', start)
 
-    def request_recording(self, enabled):
+    def request_recording(self, enabled, topics=None):
+        if enabled and topics is not None:
+            if self._recorder.is_running():
+                return OperationResult(False, None, 'Stop Save Data before changing the recording scope')
+            selected = tuple(dict.fromkeys(topics))
+            if not selected or any(topic not in TOPIC_FIELDNAMES for topic in selected):
+                return OperationResult(False, None, 'Select at least one CSV table to save')
+            self._recording_topics = selected
         self._save_data = bool(enabled)
         log_session('RECORD', 'Save Data ON' if enabled else 'Save Data OFF; finalizing')
         if enabled:
             self._recording_error = ''
         self._reconcile_recording()
         return OperationResult(True, None, 'Save Data ON' if enabled else 'Save Data OFF; recording is finalizing')
-
-    def set_recording_options(self, full_tactile):
-        if self._recorder.is_running():
-            return OperationResult(False, None, 'Turn Save Data OFF before changing recording options')
-        self._record_full_tactile = bool(full_tactile)
-        return OperationResult(True, None, 'Recording options updated')
 
     def _stop_recording(self):
         with self._recording_lock:
@@ -1693,9 +1695,7 @@ class ApplicationActions(IdResetActions):
                     with self._recording_lock:
                         if self._application_closed or not self._save_data or not self._fresh_application_state():
                             return
-                        from .data_recording.topic_schema import DEFAULT_TOPICS
-                        topics = [topic for topic in DEFAULT_TOPICS if topic != 'tactile_full' or self._record_full_tactile]
-                        self._recorder.start(str(RUN_DATA_DIR), topics=topics,
+                        self._recorder.start(str(RUN_DATA_DIR), topics=self._recording_topics,
                             meta={'fingerprint': self.get_state_snapshot().product_fingerprint})
                         self.set_recording_packet_sink(self._recorder.record_packets)
                         if not self.set_control_trace_subscription(True):

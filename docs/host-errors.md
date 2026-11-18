@@ -540,15 +540,15 @@ Messages: `P4 is still scanning the servo buses; wait for the scan to finish`, `
 
 **Fix:** Wait a few seconds and retry.
 
-### Recording
+### Recording scope
 
-Messages: `Turn Save Data OFF before changing recording options`, `Recording options updated`
+Messages: `Stop Save Data before changing the recording scope`, `Select at least one CSV table to save`
 
 **What you see:** the generic "The app could not complete this action"
 
-**Cause:** Recording options are locked while Save Data is on.
+**Cause:** the scope is fixed for the active recording session, and a session needs at least one CSV table.
 
-**Fix:** Turn Save Data off, change the options, turn it back on.
+**Fix:** stop the current recording, open Save Data, check at least one table, then start the next session.
 
 ### Calibration import / snapshot
 

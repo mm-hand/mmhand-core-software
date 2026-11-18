@@ -5,6 +5,7 @@ import pytest
 from nicegui import Client, core, ui
 from nicegui.events import GenericEventArguments
 from desktop.core.hand_backend import HandBackend
+from desktop.core.data_recording.topic_schema import CSV_TOPIC_FILENAMES, DEFAULT_TOPICS
 from desktop.ui.web import renumber_motors, joint_calibration, motor_calibration, feedback_control, direct_control
 from desktop.ui.web import replay, plots, diagnostics, control_parameters, hand as hand_view
 from desktop.ui.web import contact_calibration as contact_view
@@ -42,7 +43,7 @@ def test_every_native_page_builds_and_refreshes_unknown_feedback(page, name):
         'Motor Calibration': lambda: motor_calibration.build(hand, act, load),
         'Feedback Control': lambda: feedback_control.build(hand, act),
         'Direct Control': lambda: direct_control.build(hand, act, confirm),
-        'Replay': lambda: replay.build(hand, act), 'Curves': lambda: plots.build(hand, act),
+        'Replay': lambda: replay.build(hand, act), 'Curves': lambda: plots.build(),
         'Hand': lambda: hand_view.build(hand),
         'Diagnostics': lambda: diagnostics.build(hand, act),
         'Control Parameters': lambda: control_parameters.build(hand, act)}
@@ -107,22 +108,97 @@ def test_motor_buzz_hold_stops_on_release_or_expiry(page, monkeypatch):
     assert not held()
 
 
-def test_curves_plot_window_is_last_ten_seconds(page):
-    hand, client = page
-    refresh = plots.build(hand, Mock())
+def _motor_list(values):
+    result = [0] * 27
+    for motor, value in values.items():
+        result[motor] = value
+    return result
+
+
+def _component_row(base, index, mask, p, i, r, pid, recovery):
+    return dict(host_time=base + index, p4_time_ms=(base + index) * 1000,
+                components={'proportional_counts': _motor_list(p),
+                            'integral_counts': _motor_list(i),
+                            'reversal_counts': _motor_list(r)},
+                detail={'servo_valid_mask': mask, 'pid_counts': _motor_list(pid),
+                        'recovery_counts': _motor_list(recovery)})
+
+
+def _curves_snapshot(hand, base=1000.0):
     snapshot = hand.application_snapshot()
-    base = 1000.0
     snapshot['curves'] = [dict(host_time=base + i, p4_time_ms=(base + i) * 1000,
                                angles=[0.0] * 21, targets=[0.0] * 21) for i in range(20)]
-    snapshot['control_components'] = [dict(host_time=base + i, p4_time_ms=(base + i) * 1000,
-        components={'proportional_counts': [0] * 27, 'integral_counts': [0] * 27,
-                    'reversal_counts': [0] * 27},
-        detail={'servo_valid_mask': 1, 'recovery_counts': [0] * 27}) for i in range(20)]
+    return snapshot
+
+
+def test_curves_plot_window_is_last_ten_seconds(page):
+    hand, client = page
+    refresh = plots.build()
+    snapshot = _curves_snapshot(hand)
+    snapshot['control_components'] = [
+        _component_row(1000.0, i, (1 << 10) | (1 << 11), {}, {}, {}, {}, {}) for i in range(20)]
+    next(e for e in client.elements.values() if isinstance(e, ui.select)).set_value(8)
     refresh(snapshot)
-    charts = [element for element in client.elements.values() if isinstance(element, ui.echart)]
-    joint_axis, component_axis = (chart.options['xAxis'] for chart in charts[:2])
-    assert (joint_axis['min'], joint_axis['max']) == (9.0, 19.0)
-    assert (component_axis['min'], component_axis['max']) == (1009.0, 1019.0)
+    charts = [e for e in client.elements.values() if isinstance(e, ui.echart) and e.visible]
+    assert [chart.options['title']['text'] for chart in charts] == ['Joint angle', 'J08 · M10', 'J08 · M11']
+    assert (charts[0].options['xAxis']['min'], charts[0].options['xAxis']['max']) == (9.0, 19.0)
+    for chart in charts[1:]:
+        assert (chart.options['xAxis']['min'], chart.options['xAxis']['max']) == (1009.0, 1019.0)
+
+
+def test_motor_values_derive_d_and_total():
+    row = _component_row(1000.0, 0, 1 << 10, {10: 1}, {10: 2}, {10: 4}, {10: 7}, {10: 5})
+    assert plots._motor_values(row, 10) == {
+        'P': 1, 'I': 2, 'D': 0, 'Reversal': 4, 'Pair recovery': 5, 'Total': 12}
+    assert plots._motor_values(row, 11) is None
+
+
+def test_curves_selected_joint_plots_one_chart_per_motor(page):
+    hand, client = page
+    refresh = plots.build()
+    snapshot = _curves_snapshot(hand)
+    snapshot['control_components'] = [
+        _component_row(1000.0, i, (1 << 10) | (1 << 11),
+                       {10: 1, 11: 10}, {10: 2, 11: 20}, {10: 4, 11: 40},
+                       {10: 7, 11: 100}, {10: 5, 11: 50}) for i in range(20)]
+    next(e for e in client.elements.values() if isinstance(e, ui.select)).set_value(8)
+    refresh(snapshot)
+    charts = [e for e in client.elements.values() if isinstance(e, ui.echart) and e.visible]
+    assert [chart.options['title']['text'] for chart in charts] == ['Joint angle', 'J08 · M10', 'J08 · M11']
+    last = {chart.options['title']['text']: {series['name']: series['data'][-1][1]
+                                              for series in chart.options['series']}
+            for chart in charts[1:]}
+    assert [series['name'] for series in charts[1].options['series']] == list(plots.TERMS)
+    assert last['J08 · M10'] == {
+        'P': 1, 'I': 2, 'D': 0, 'Reversal': 4, 'Pair recovery': 5, 'Total': 12}
+    assert last['J08 · M11'] == {
+        'P': 10, 'I': 20, 'D': 30, 'Reversal': 40, 'Pair recovery': 50, 'Total': 150}
+
+
+def test_curves_single_tendon_and_none_selection(page):
+    hand, client = page
+    refresh = plots.build()
+    snapshot = _curves_snapshot(hand)
+    selector = next(e for e in client.elements.values() if isinstance(e, ui.select))
+    selector.set_value(1)
+    refresh(snapshot)
+    charts = [e for e in client.elements.values() if isinstance(e, ui.echart) and e.visible]
+    assert [chart.options['title']['text'] for chart in charts] == ['Joint angle', 'J01 · M02']
+    selector.set_value(-1)
+    refresh(snapshot)
+    charts = [e for e in client.elements.values() if isinstance(e, ui.echart) and e.visible]
+    assert [chart.options['title']['text'] for chart in charts] == ['Joint angle']
+
+
+def test_curves_page_has_no_motor_or_recording_controls(page):
+    hand, client = page
+    plots.build()
+    assert len([e for e in client.elements.values() if isinstance(e, ui.select)]) == 1
+    assert not any(isinstance(e, ui.switch) for e in client.elements.values())
+    assert not any(isinstance(e, ui.expansion) for e in client.elements.values())
+    assert not any(isinstance(e, ui.label) and isinstance(e.text, str) and 'Recording:' in e.text
+                   for e in client.elements.values())
+
 
 @pytest.mark.parametrize('name', ['Joint Calibration', 'Motor Calibration', 'Feedback Control', 'Replay'])
 def test_finger_joint_labels_and_order(page, name):
@@ -427,7 +503,8 @@ def test_shell_has_one_stop_default_recording_and_exact_navigation(page):
     assert sum('STOP' in e.text for e in buttons) == 1
     # The top button turns into Clear Faults and only enables with fresh P4 status.
     assert not next(e for e in buttons if 'STOP' in e.text).enabled
-    assert 'Save Data: ON' in [e.text for e in buttons]
+    assert 'Stop Recording' in [e.text for e in buttons]
+    assert not any('Save Data:' in e.text for e in buttons)
     assert len([e for e in client.elements.values() if isinstance(e, ui.log)]) == 1
     navigation = next(e for e in client.elements.values() if isinstance(e, ui.tabs))
     assert navigation.value == 'Calibration'
@@ -449,6 +526,29 @@ def test_shell_has_one_stop_default_recording_and_exact_navigation(page):
     navigation.set_value('Control')
     navigation.set_value('Settings')
     assert all(isinstance(toolbar.parent_slot.parent, ui.tab_panel) for toolbar in toolbars)
+
+def test_save_data_dialog_starts_with_checked_tables(page, monkeypatch):
+    hand, client = page
+    build_page(hand)
+    tick = next(e for e in client.elements.values() if isinstance(e, ui.timer)
+                and getattr(e.callback, '__qualname__', '') == 'build_page.<locals>.refresh')
+    hand._save_data = False
+    tick.callback()
+    click(button(client, 'Save Data'))
+    dialog = next(e for e in client.elements.values() if isinstance(e, ui.dialog) and e.value)
+    labels = {name.removesuffix('.csv'): topic for topic, name in CSV_TOPIC_FILENAMES.items()}
+    boxes = {e.text: e for e in client.elements.values()
+             if isinstance(e, ui.checkbox) and e.text in labels}
+    assert len(boxes) == len(CSV_TOPIC_FILENAMES)
+    assert {labels[text] for text, box in boxes.items() if box.value} == set(DEFAULT_TOPICS)
+    boxes['08_原始接收帧'].set_value(False)
+    boxes['05_触觉全量'].set_value(True)
+    request = Mock(return_value=Mock(accepted=True))
+    monkeypatch.setattr(hand, 'request_recording', request)
+    click(button(client, 'Start Recording'))
+    assert request.call_args.args[0] is True
+    assert set(request.call_args.args[1]) == (set(DEFAULT_TOPICS) - {'packet_frames'}) | {'tactile_full'}
+    assert not dialog.value
 
 def label_texts(client):
     return [element.text for element in client.elements.values()

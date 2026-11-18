@@ -254,7 +254,7 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
                           invalid_joints=invalid)
     for row in snapshot['joints']:
         row['encoder_state'] = states[int(row['joint'])]
-    snapshot['recording'].update(enabled=hand._save_data, full_tactile=hand._record_full_tactile,
+    snapshot['recording'].update(enabled=hand._save_data, topics=list(hand._recording_topics),
         duration_s=max(0, now - hand._recording_started_at) if hand._recorder.is_running() else 0,
         error=hand._recording_error, finalizing=bool(hand._recording_thread and hand._recording_thread.is_alive()))
     fault_fresh = fresh and state.has_fault_status_data and 0 <= now - state.fault_status_last_rx_ts <= 0.6

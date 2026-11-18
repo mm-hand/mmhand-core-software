@@ -11,6 +11,7 @@ import time
 import json
 from nicegui import core, ui
 from desktop.core.user_issues import issue_text, operation_issue
+from desktop.core.data_recording.topic_schema import CSV_TOPIC_FILENAMES, DEFAULT_TOPICS
 from . import refresh_policy as policy
 from .web import renumber_motors, joint_calibration, motor_calibration, feedback_control, direct_control
 from .web import replay, plots, diagnostics, control_parameters, hand as hand_view
@@ -377,6 +378,36 @@ def build_page(hand):
         storage.set_text(f"Default data directory: {paths['data_dir']}")
         import_info.set_text('Choose a calibration file to validate.'); load.set_enabled(False)
         importer.open()
+    recording = {'enabled': False, 'topics': list(DEFAULT_TOPICS)}
+    with ui.dialog() as save_dialog, ui.card().classes('w-[640px] max-w-full'):
+        ui.label('Save Data Scope').classes('font-semibold')
+        ui.label('The checked CSV tables are written by the next Save Data session.').classes('text-sm')
+        with ui.grid(columns=2).classes('w-full'):
+            scopes = {topic: ui.checkbox(name.removesuffix('.csv'), value=topic in DEFAULT_TOPICS)
+                      for topic, name in sorted(CSV_TOPIC_FILENAMES.items(), key=lambda item: item[1])}
+        with ui.row().classes('w-full justify-end'):
+            ui.button('Cancel', on_click=save_dialog.close).props('flat')
+            start = ui.button('Start Recording')
+    def scope_changed(_event=None):
+        start.set_enabled(any(box.value for box in scopes.values()))
+    for box in scopes.values():
+        box.on_value_change(scope_changed)
+    scope_changed()
+    def open_save_dialog():
+        for topic, box in scopes.items():
+            box.set_value(topic in recording['topics'])
+        scope_changed()
+        save_dialog.open()
+    def start_recording():
+        topics = [topic for topic, box in scopes.items() if box.value]
+        save_dialog.close()
+        act(lambda: hand.request_recording(True, topics))
+    start.on_click(start_recording)
+    def stop_or_open_save():
+        if recording['enabled']:
+            act(lambda: hand.request_recording(False))
+        else:
+            open_save_dialog()
     with ui.element('div').classes('console-shell'):
         with ui.row().classes('connection-bar items-center w-full'):
             ui.label('MM-Hand Console').classes('font-semibold text-base whitespace-nowrap')
@@ -392,7 +423,7 @@ def build_page(hand):
                 with ages[name]: ui.tooltip('Time since the latest data received on this connection, in milliseconds.')
             ui.space()
             errors_button = ui.button('Errors (0)', on_click=errors_dialog.open).props('dense outline')
-            save = ui.button('Save Data: ON', on_click=lambda: act(lambda: hand.request_recording(not hand.application_snapshot(include_curves=False)['recording']['enabled']))).props('dense outline')
+            save = ui.button('Save Data', on_click=stop_or_open_save).props('dense outline')
             top_stop = ui.button('■ STOP', on_click=lambda: act(hand.stop_motion), color='negative').props('dense').classes('font-bold px-5')
         with ui.row().classes('status-bar items-center w-full flex-wrap gap-y-1'):
             badges = {name: ui.label().classes('status-chip text-xs cursor-pointer') for name in ['System', 'P4', 'CAN', 'Calibration', 'Mode', 'Overload', 'Collision', 'Joint workspace', 'Motor workspace', 'Multi-turn']}
@@ -423,7 +454,7 @@ def build_page(hand):
                                         elif name == 'Direct Control': refreshers[name] = direct_control.build(hand, act, confirm, leave_direct_control)
                                         elif name == 'Replay': refreshers[name] = replay.build(hand, act)
                                         elif name == 'Hand': refreshers[name] = hand_view.build(hand)
-                                        elif name == 'Curves': refreshers[name] = plots.build(hand, act)
+                                        elif name == 'Curves': refreshers[name] = plots.build()
                                         elif name == 'Renumber Motor': refreshers[name] = renumber_motors.build(hand, act)
                                         elif name == 'Diagnostics': refreshers[name] = diagnostics.build(hand, act)
                                         elif name == 'Control Parameters': refreshers[name] = control_parameters.build(hand, act)
@@ -521,7 +552,9 @@ def build_page(hand):
         online = snapshot['communication'] == 'Online' and not snapshot['busy']
         set_text('top-stop', top_stop, '■ STOP')
         set_enabled('top-stop', top_stop, online)
-        set_text('save', save, 'Save Data: ON' if snapshot['recording']['enabled'] else 'Save Data: OFF')
+        recording['enabled'] = snapshot['recording']['enabled']
+        recording['topics'] = snapshot['recording'].get('topics', DEFAULT_TOPICS)
+        set_text('save', save, 'Stop Recording' if recording['enabled'] else 'Save Data')
         failed = [op for op in reversed(snapshot['operations']) if op.get('status') == 'FAILED']
         errors_state.clear()
         for operation in failed[:30]:
