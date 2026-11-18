@@ -186,14 +186,14 @@ TOPIC_FIELDNAMES.update(
 
 
 CSV_TOPIC_FILENAMES: Dict[str, str] = {
-    "packet_frames": "08_原始接收帧.csv",
-    "core_state": "01_基础状态.csv",
-    "joint_wide": "02_关节总表.csv",
-    "servo_wide": "03_舵机总表.csv",
-    "tactile_summary_wide": "04_触觉总表.csv",
-    "tactile_full": "05_触觉全量.csv",
-    "event_log": "06_操作事件总表.csv",
-    "teleop_input": "07_遥操作总表.csv",
+    "packet_frames": "08_raw_frames.csv",
+    "core_state": "01_core_state.csv",
+    "joint_wide": "02_joint_feedback.csv",
+    "servo_wide": "03_motor_feedback.csv",
+    "tactile_summary_wide": "04_tactile_summary.csv",
+    "tactile_full": "05_tactile_full.csv",
+    "event_log": "06_operation_events.csv",
+    "teleop_input": "07_teleop_input.csv",
 }
 
 

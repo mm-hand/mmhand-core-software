@@ -48,7 +48,7 @@ def _write_csv(path, rows):
 
 
 def test_loader_restores_full_timeline_and_actual_output(tmp_path):
-    path = tmp_path / "07_遥操作总表.csv"
+    path = tmp_path / "07_teleop_input.csv"
     _write_csv(
         path,
         [
@@ -131,7 +131,7 @@ def test_loader_rejects_timestamp_rollback(tmp_path):
 
 
 def test_loader_rejects_legacy_input_csv(tmp_path):
-    path = tmp_path / "16_遥操作输入_teleop_input.csv"
+    path = tmp_path / "16_legacy_teleop_input.csv"
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
             handle,
@@ -164,7 +164,7 @@ def test_loader_rejects_legacy_input_csv(tmp_path):
 
 
 def test_loader_accepts_external_ros2_continuous_stream(tmp_path):
-    path = tmp_path / "07_遥操作总表.csv"
+    path = tmp_path / "07_teleop_input.csv"
     base = {
         "source": "ROS2:/mmhand/joint_angle_deg",
         "valid": 1,
@@ -201,7 +201,7 @@ def test_loader_accepts_external_ros2_continuous_stream(tmp_path):
 
 
 def test_loader_keeps_single_ui_send_as_discrete_frame(tmp_path):
-    path = tmp_path / "07_遥操作总表.csv"
+    path = tmp_path / "07_teleop_input.csv"
     _write_csv(
         path,
         [
@@ -230,7 +230,7 @@ def test_loader_keeps_single_ui_send_as_discrete_frame(tmp_path):
 
 
 def test_loader_accepts_joint_wide_current_csv(tmp_path):
-    path = tmp_path / "02_关节总表.csv"
+    path = tmp_path / "02_joint_feedback.csv"
     fieldnames = ["host_time"]
     for joint in range(ENCODER_COUNT):
         label = f"J{joint:02d}"

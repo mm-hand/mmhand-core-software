@@ -240,7 +240,7 @@ class DataSessionRecorder:
         with open(path, "w", encoding="utf-8") as handle:
             json.dump(meta, handle, ensure_ascii=False, indent=2, default=str)
             handle.write("\n")
-        readable_path = os.path.join(session_dir, "00_说明_meta.json")
+        readable_path = os.path.join(session_dir, "00_readme_meta.json")
         with open(readable_path, "w", encoding="utf-8") as handle:
             json.dump(meta, handle, ensure_ascii=False, indent=2, default=str)
             handle.write("\n")

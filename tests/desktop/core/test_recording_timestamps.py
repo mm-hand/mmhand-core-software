@@ -188,7 +188,7 @@ def test_default_csv_layout_contains_only_six_merged_tables(tmp_path) -> None:
     assert {path.name for path in session_dir.iterdir()} == {
         *expected_names,
         "meta.json",
-        "00_说明_meta.json",
+        "00_readme_meta.json",
     }
 
 

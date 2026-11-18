@@ -541,8 +541,8 @@ def test_save_data_dialog_starts_with_checked_tables(page, monkeypatch):
              if isinstance(e, ui.checkbox) and e.text in labels}
     assert len(boxes) == len(CSV_TOPIC_FILENAMES)
     assert {labels[text] for text, box in boxes.items() if box.value} == set(DEFAULT_TOPICS)
-    boxes['08_原始接收帧'].set_value(False)
-    boxes['05_触觉全量'].set_value(True)
+    boxes['08_raw_frames'].set_value(False)
+    boxes['05_tactile_full'].set_value(True)
     request = Mock(return_value=Mock(accepted=True))
     monkeypatch.setattr(hand, 'request_recording', request)
     click(button(client, 'Start Recording'))
