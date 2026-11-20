@@ -14,10 +14,25 @@ Calibration / Joint Calibration is the default page. Main tabs are Calibration,
 Control, Plot and Settings. Calibration contains Joint, Contact and Motor
 Calibration; Control contains Feedback Control, Direct Control and Replay; Plot
 contains Hand and Curves; Settings contains Renumber Motor,
-Control Parameters and Diagnostics. The tactile editor was removed: the
+Control Parameters and Diagnostics. Plot > Hand splits the preview left/right:
+the left pane is the interactive URDF pose scene (gray current pose, light-green
+target pose, Reset view), the right pane is the MMHand palm stereo feed; the
+System Log stays below both. The tactile editor was removed: the
 PaXini modules on this hand do not accept the documented SPI ID write.
 The motor editor warns that same-bus duplicate IDs cannot be distinguished or
 renamed separately. See `docs/debug/id-reset.md`.
+
+The connection bar also owns the palm UVC camera: the `Palm camera` picker and
+`Connect` button sit after the P4 and S3 controls. The palm camera is
+process-wide because a V4L2 node has one owner; `Connect` opens it, `Disconnect`
+releases it, and Plot > Hand shows the latest frame at native aspect ratio
+(`OFF` while disconnected). Camera enumeration and the latest-frame reader live
+in `desktop/core/palm_camera.py` and mirror the Teleop application, so both
+programs accept the same nodes; `opencv-python` is required. RealSense exposes
+its depth node (Z16) next to the colour node, and sysfs gives them the same
+truncated name; only the colour node can be captured. A depth node fails with
+the same "cannot open" message, which names both a busy device and an
+unsupported colour format.
 
 ROS2 receives only `/mmhand/joint_angle_deg`:21 degree values J00–J20. Control
 settings and defaults live in `desktop/resources/config`. Every connection

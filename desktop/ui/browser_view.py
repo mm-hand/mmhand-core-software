@@ -9,7 +9,9 @@
 """
 import time
 import json
-from nicegui import core, ui
+from fastapi.responses import Response
+from nicegui import app, core, run, ui
+from desktop.core.palm_camera import PalmCamera, camera_devices
 from desktop.core.user_issues import issue_text, operation_issue
 from desktop.core.data_recording.topic_schema import CSV_TOPIC_FILENAMES, DEFAULT_TOPICS
 from . import refresh_policy as policy
@@ -25,6 +27,20 @@ SUBTABS = {
     'Plot': ['Hand', 'Curves'],
     'Settings': ['Renumber Motor', 'Control Parameters', 'Diagnostics'],
 }
+
+# One process-wide palm camera: a UVC node has exactly one owner, so every
+# client reads the same latest JPEG. The route is registered once at import,
+# before ui.run; pages cache-bust it with the camera sequence number.
+PALM = PalmCamera()
+
+
+@app.get('/palm.jpg')
+def palm_frame():
+    """Latest palm-stereo frame as JPEG; no-store keeps every frame fresh."""
+    return Response(PALM.jpeg, media_type='image/jpeg',
+                    headers={'Cache-Control': 'no-store'})
+
+
 def can_background(level):
     """CAN 色级：绿=通，红=断，灰=尚不可判。"""
     return {'ok': '#bbf7d0', 'can_error': '#fecaca'}.get(str(level), '#e2e8f0')
@@ -98,6 +114,15 @@ body {background:#F5F7FA;color:#1e293b}
 .tactile-grid {display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
 .renumber-motors-layout {display:grid;grid-template-columns:minmax(260px,1fr) minmax(0,2fr);gap:16px}
 .renumber-motors-diagram {width:100%;max-width:720px;height:clamp(180px,calc(100dvh - 430px),380px);align-self:center}
+.hand-split {display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;width:100%;align-items:stretch}
+.hand-pane {min-width:0;height:clamp(320px,calc(100dvh - 380px),600px);display:flex;flex-direction:column;gap:8px}
+.hand-scene {flex:1;min-height:0;width:100%!important}
+.palm-panel {background:#181d25;border:1px solid #343b48;border-radius:8px;padding:0;overflow:hidden}
+.palm-head {min-height:30px;padding:4px 10px;background:#20262f;color:#dff;font-size:12px;flex-shrink:0}
+.palm-status {margin-left:auto;color:#9bd}
+.palm-image {flex:1;min-height:0;width:100%;background:#000;display:flex;align-items:center;justify-content:center}
+.palm-image img {width:100%;height:100%;object-fit:contain;display:block}
+@media(max-width:1000px) {.hand-split {grid-template-columns:1fr}.hand-pane {height:clamp(300px,calc(100dvh - 300px),520px)}}
 @media(max-width:1000px) {.renumber-motors-layout {grid-template-columns:1fr}}
 @media(max-width:1439px) {.finger-grid {grid-template-columns:1fr}}
 @media(max-width:1000px) {.connection-bar {flex-wrap:wrap}.tactile-layout,.diagnostic-layout {flex-wrap:wrap!important}}
@@ -230,7 +255,8 @@ def self_heal_script():
             .replace('__POLL_MS__', str(policy.HEARTBEAT_POLL_MS)))
 
 
-def build_page(hand):
+def build_page(hand, palm=None):
+    palm = PALM if palm is None else palm
     ui.colors(primary='#2563eb', positive='#16a34a', warning='#ea880c', negative='#dc2626')
     ui.add_css(CSS)
     # add_body_html only inserts raw HTML: script elements there never execute (and
@@ -408,6 +434,27 @@ def build_page(hand):
             act(lambda: hand.request_recording(False))
         else:
             open_save_dialog()
+
+    palm_pending = [False]
+    palm_error = [None]
+
+    async def toggle_palm():
+        """Open or release the palm UVC node outside the event loop."""
+        state = palm.snapshot()
+        palm_pending[0] = True
+        try:
+            if state['connected']:
+                await run.io_bound(palm.disconnect)
+            else:
+                await run.io_bound(palm.connect, palm_select.value)
+        except Exception as exc:
+            ui.notify(f'palm camera: {exc}', type='negative', timeout=10000)
+        finally:
+            palm_pending[0] = False
+
+    def hand_visible():
+        return current_leaf() == 'Hand'
+
     with ui.element('div').classes('console-shell'):
         with ui.row().classes('connection-bar items-center w-full'):
             ui.label('MM-Hand Console').classes('font-semibold text-base whitespace-nowrap')
@@ -421,6 +468,11 @@ def build_page(hand):
                 buttons[name] = ui.button('Connect', on_click=connection).props('dense outline')
                 ages[name] = ui.label('Rx age: —').classes('text-xs whitespace-nowrap')
                 with ages[name]: ui.tooltip('Time since the latest data received on this connection, in milliseconds.')
+            palm_select = ui.select(camera_devices(), label='Palm camera', value=None) \
+                .props('dense outlined').classes('w-56 palm-select')
+            with palm_select: ui.tooltip('Colour UVC nodes only; a depth node (e.g. RealSense Z16) cannot be captured by OpenCV.')
+            palm_button = ui.button('Connect', on_click=toggle_palm) \
+                .props('dense outline').classes('palm-connect')
             ui.space()
             errors_button = ui.button('Errors (0)', on_click=errors_dialog.open).props('dense outline')
             save = ui.button('Save Data', on_click=stop_or_open_save).props('dense outline')
@@ -453,7 +505,7 @@ def build_page(hand):
                                         elif name == 'Feedback Control': refreshers[name] = feedback_control.build(hand, act)
                                         elif name == 'Direct Control': refreshers[name] = direct_control.build(hand, act, confirm, leave_direct_control)
                                         elif name == 'Replay': refreshers[name] = replay.build(hand, act)
-                                        elif name == 'Hand': refreshers[name] = hand_view.build(hand)
+                                        elif name == 'Hand': refreshers[name] = hand_view.build(hand, palm, hand_visible)
                                         elif name == 'Curves': refreshers[name] = plots.build()
                                         elif name == 'Renumber Motor': refreshers[name] = renumber_motors.build(hand, act)
                                         elif name == 'Diagnostics': refreshers[name] = diagnostics.build(hand, act)
@@ -537,6 +589,25 @@ def build_page(hand):
                         not state['pending'] and (state['connected'] or bool(selector.value)) and not snapshot['busy'])
             age = '—' if state['age_ms'] is None else str(state['age_ms']) + ' ms'
             set_text(('age', name), ages[name], state['data_status'] + ' · Rx age: ' + age)
+        palm_state = palm.snapshot()
+        palm_connection = {'connected': palm_state['connected'],
+                           'pending': palm_pending[0],
+                           'port': palm_state['device']}
+        options, value = device_selector_state(camera_devices(), palm_select.value,
+                                               palm_connection)
+        if palm_select.options != options: palm_select.set_options(options, value=value)
+        elif palm_select.value != value: palm_select.set_value(value)
+        set_enabled('palm-select', palm_select,
+                    not palm_state['connected'] and not palm_pending[0])
+        set_text('palm-button', palm_button,
+                 'Disconnect' if palm_state['connected'] else 'Connect')
+        set_enabled('palm-button', palm_button,
+                    not palm_pending[0] and (palm_state['connected'] or bool(palm_select.value)))
+        if palm_state['error'] and palm_state['error'] != palm_error[0]:
+            palm_error[0] = palm_state['error']
+            ui.notify(f"palm camera: {palm_state['error']}", type='negative', timeout=10000)
+        elif not palm_state['error']:
+            palm_error[0] = None
         for name, value in snapshot['badges'].items():
             display_name = 'Motor multi-turn position' if name == 'Multi-turn' else name
             display_value = 'UNKNOWN' if name == 'Multi-turn' and value == 'MISSING' else value

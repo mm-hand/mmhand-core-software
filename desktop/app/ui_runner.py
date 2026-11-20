@@ -37,7 +37,7 @@ def resolve_ui_port(host='127.0.0.1', preferred=8080, span=UI_PORT_SCAN_SPAN):
 
 def run_ui(*, ros2_enabled=True, backend=None, show=True, port=8080):
     from nicegui import app, ui, run
-    from desktop.ui.browser_view import build_page
+    from desktop.ui.browser_view import PALM, build_page
     hand = backend or HandBackend()
     # 唯一外部目标入口：J00-J20 的角度（度）。
     bridges = [Ros2JointTargetBridge(hand)] if ros2_enabled else []
@@ -65,7 +65,10 @@ def run_ui(*, ros2_enabled=True, backend=None, show=True, port=8080):
                 for bridge in reversed(bridges):
                     await run.io_bound(bridge.stop)
             finally:
-                await run.io_bound(hand.close_application)
+                try:
+                    await run.io_bound(PALM.close)
+                finally:
+                    await run.io_bound(hand.close_application)
 
         app.on_shutdown(shutdown)
         bound_port = resolve_ui_port(preferred=port)

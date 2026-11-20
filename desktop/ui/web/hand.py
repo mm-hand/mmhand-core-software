@@ -1,10 +1,11 @@
 """Two URDF poses: latest contact-corrected current pose and the target.
 
-职责：把只读关节反馈/目标角画到 URDF 三维场景，并叠加触觉点云/热力图/合力箭头。
-线程：NiceGUI 页面事件循环；仅消费快照，不创建任务。
-输入：后端同步快照。
-输出：灰色当前手、红色目标手、触觉显示。
-状态所有权：不拥有设备状态，只缓存已显示的位姿和场景对象。
+职责：把只读关节反馈/目标角画到 URDF 三维场景，并叠加触觉点云/热力图/合力箭头；
+右栏显示掌心双目实时画面。
+线程：NiceGUI 页面事件循环；仅消费快照和掌心相机快照，不创建任务。
+输入：后端同步快照；掌心相机只读快照。
+输出：灰色当前手、浅绿色目标手、触觉显示、掌心双目 JPEG。
+状态所有权：不拥有设备状态，只缓存已显示的位姿、场景对象和已显示的帧号。
 禁止依赖：禁止直接操作协议、串口和控制器。
 """
 import math
@@ -58,23 +59,50 @@ def _rotation_from_force(force):
     return np.column_stack([x, y, z]).tolist(), norm
 
 
-def build(hand):
+def build(hand, palm=None, active=None):
     register_meshes()
     sensor_by_link = {link: key for key, link in SENSOR_LINKS.items()}
     frame_dir = _frame_dir()
     frame_slot = {}
 
     with ui.row().classes('page-toolbar'):
-        ui.label('Gray: latest corrected current pose · Red: target').classes('text-sm')
+        ui.label('Gray: latest corrected current pose · Light green: target').classes('text-sm')
         reset = ui.button('Reset view')
-    status = ui.label('Waiting for feedback')
-    scene = ui.scene(grid=False, camera=make_camera(), background_color='#ffffff',
-                     **SCENE).classes('w-full')
-    view = HandScene(scene)
-    shown = False
-    reset.on_click(lambda: scene.move_camera(**CAMERA))
+        ui.space()
+        status = ui.label('Waiting for feedback').classes('text-xs')
+    with ui.row().classes('hand-split'):
+        with ui.column().classes('hand-pane'):
+            scene = ui.scene(grid=False, camera=make_camera(), background_color='#ffffff',
+                             **SCENE).classes('hand-scene')
+            view = HandScene(scene)
+            shown = False
+            reset.on_click(lambda: scene.move_camera(**CAMERA))
+        with ui.column().classes('hand-pane palm-panel'):
+            with ui.row().classes('palm-head items-center w-full'):
+                ui.label('MMHand palm stereo')
+                palm_status = ui.label('OFF').classes('palm-status')
+            palm_image = ui.interactive_image('/palm.jpg').classes('palm-image')
     tactile = {}
     painted = {}  # key -> 点阵是否已涂上实时数据；用于数据中断后回到零压力点阵
+
+    palm_shown = [None]
+
+    def refresh_palm():
+        """Swap the JPEG only when the camera published a new frame."""
+        if palm is None or (active is not None and not active()):
+            return
+        state = palm.snapshot()
+        if state['sequence'] != palm_shown[0]:
+            palm_shown[0] = state['sequence']
+            palm_image.set_source(f"/palm.jpg?{state['sequence']}")
+        if not state['connected']:
+            palm_status.set_text('OFF')
+        elif state['age_ms'] is None:
+            palm_status.set_text('—')
+        else:
+            palm_status.set_text(f"{state['age_ms']:.0f} ms")
+
+    ui.timer(1 / 30, refresh_palm)
 
     def add_marker(key, parent, points):
         finger, segment = key
@@ -102,12 +130,13 @@ def build(hand):
     def create_models():
         origins = active_origins()
         view.add_model('current', '#808080', 0.85, origins, on_link=add_tactile)
-        view.add_model('target', '#ef4444', 0.45, origins)
+        view.add_model('target', '#90EE90', 0.45, origins)
         view.show('target', False)
     scene.on('init', create_models)
 
     def refresh(snapshot):
         nonlocal shown
+        refresh_palm()
         if not shown:
             scene.run_method('resize')
             shown = True
