@@ -2,6 +2,7 @@
  * @brief 计算关节反馈控制、拉绳、配对恢复与碰撞推进状态。
  */
 #include "JointFeedbackController.h"
+#include "../config/AdaptiveControlConfig.h"
 #include "../config/topology/HardwareMap.h"
 #include "../config/ControlConfig.h"
 #include "../system/calibration/TendonCalibrationLut.h"
@@ -14,6 +15,9 @@ using namespace mmhand::config::control;
 namespace {
 float clip(float value, float low, float high) { return fmaxf(low, fminf(high, value)); }
 int8_t sign(float value) { return value > 0.0001f ? 1 : value < -0.0001f ? -1 : 0; }
+bool isDualTendonJoint(uint8_t joint) {
+    return joint == 20 || (joint < 20 && joint % 4 == 0);
+}
 Parameter jointKpParameter(uint8_t joint) {
     // J00..J19: four joints per finger in AA/MCP/PIP/DIP order; J20: thumb CMC.
     if (joint + 1 == ENCODER_TOTAL_NUM) return JointKpCmc;
@@ -98,6 +102,7 @@ RampParameter jointLoadLimitParameter(uint8_t joint) {
 }
 JointFeedbackController::JointFeedbackController() {
     for (auto& scale : kpScale) scale = 1.0f;
+    for (auto& scale : vbScale) scale = 1.0f;
 }
 float JointFeedbackController::kpScaleOf(uint8_t joint) const {
     return joint < ENCODER_TOTAL_NUM ? kpScale[joint] : 1.0f;
@@ -106,6 +111,14 @@ float JointFeedbackController::effectiveKpOf(uint8_t joint, const Parameters& pa
     if (joint >= ENCODER_TOTAL_NUM) return 0.0f;
     const float base = parameters[jointKpParameter(joint)];
     return parameters[AdaptiveKpEnabled] > 0.5f ? base * kpScale[joint] : base;
+}
+float JointFeedbackController::vbScaleOf(uint8_t joint) const {
+    return joint < ENCODER_TOTAL_NUM ? vbScale[joint] : 1.0f;
+}
+float JointFeedbackController::effectiveVbOf(uint8_t joint, const RampParameters& ramp) const {
+    if (joint >= ENCODER_TOTAL_NUM) return 0.0f;
+    return ramp[jointVbParameter(joint)] *
+        (isDualTendonJoint(joint) ? vbScale[joint] : 1.0f);
 }
 void JointFeedbackController::reset(uint8_t joint) { if (joint < ENCODER_TOTAL_NUM) states[joint] = {}; }
 void JointFeedbackController::suspend(uint8_t joint, uint32_t now) {
@@ -121,12 +134,12 @@ void JointFeedbackController::suspend(uint8_t joint, uint32_t now) {
     // Cancels any half-finished adaptive event; adaptation resumes on fresh data only.
     state.suspended = true;
     state.adaptive = {};
+    state.vbOvershootLatched = false;
     state.targetVelocity = 0;
 }
 void JointFeedbackController::resetAll() {
+    // STOP/revision only clears runtime state; learned scales survive until reflash.
     for (auto& state : states) state = {};
-    for (auto& scale : kpScale) scale = 1.0f;
-    scaleRevision = 0;
 }
 
 JointControlResult JointFeedbackController::compute(uint8_t joint, float target, const FeedbackEstimate& fb,
@@ -155,9 +168,10 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
             !tendonCalibrationMiddleSlope(lut, i, &slope[i])) return out;
         // The LUT working window (calibrated span widened by the configurable
         // release/tight margins) is the only command boundary; nothing widens it.
-        int32_t lo, hi;
+        int32_t lo, hi, releaseMargin, tightMargin;
+        lutMarginsForJoint(i, p, &releaseMargin, &tightMargin);
         const bool bounded = tendonCalibrationMotorAbsRangeWithMargins(lut, i, motor,
-            p[OutputLutReleaseMarginCounts], p[OutputLutTightMarginCounts], &lo, &hi);
+            releaseMargin, tightMargin, &lo, &hi);
         if (!bounded) return out;
         out.motors[i] = motor;
         measured[i] = servo.servoAngles[motor];
@@ -166,10 +180,6 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
         if (low[i] > high[i]) return out;
     }
     auto& state = states[joint];
-    if (p.revision != scaleRevision) {
-        for (auto& scale : kpScale) scale = 1.0f;
-        scaleRevision = p.revision;
-    }
     if (!state.initialized || state.revision != p.revision) {
         state = {};
         state.initialized = true; state.revision = p.revision;
@@ -232,6 +242,9 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
             state.candidateAnchor = state.lastTarget;
             state.candidateSince = now;
             state.phase = Pending;
+            state.lastDirection = state.direction;
+            state.overshootWindowUntil = now + MMHAND_VB_OVERSHOOT_WINDOW_MS;
+            state.vbOvershootLatched = false;
         }
     }
     state.lastTarget = target;
@@ -252,7 +265,23 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
     if (state.phase == Takeup &&
         state.direction * (fb.fast - state.responseAnchor) >= p[jointExitTravelParameter(joint)]) {
         // The joint answered; hand back to plain tracking and let the lift die.
+        updateAdaptiveVb(joint, state.takeupFrozen,
+                         (float)(now - state.takeupStartMs) > MMHAND_VB_SLOW_MS, p);
         state.phase = Tracking;
+    }
+    if (isDualTendonJoint(joint) && fb.fresh && !state.vbOvershootLatched &&
+        p[AdaptiveKpEnabled] > 0.5f) {
+        const bool currentOvershoot =
+            state.phase == Tracking && state.direction != 0 &&
+            state.direction * (fb.fast - target) > MMHAND_VB_OVERSHOOT_DEG;
+        const bool reversalOvershoot =
+            state.lastDirection != 0 &&
+            (int32_t)(now - state.overshootWindowUntil) <= 0 &&
+            state.lastDirection * (fb.fast - target) > MMHAND_VB_OVERSHOOT_DEG;
+        if (currentOvershoot || reversalOvershoot) {
+            vbScale[joint] = fmaxf(MMHAND_VB_MIN, vbScale[joint] * MMHAND_VB_OVERSHOOT_STEP);
+            state.vbOvershootLatched = true;
+        }
     }
     out.count = count;
     const float kp = p[jointKpParameter(joint)] *
@@ -273,7 +302,8 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
         const float elapsedMs = (float)(now - state.takeupStartMs);
         const float bmax = p[jointTakeupMaxParameter(joint)];
         const float b0 = ramp[jointB0Parameter(joint)];
-        const float vb = ramp[jointVbParameter(joint)];
+        const float vb = ramp[jointVbParameter(joint)] *
+            (isDualTendonJoint(joint) ? vbScale[joint] : 1.0f);
         const float loadLimit = ramp[jointLoadLimitParameter(joint)];
         float b = fminf(bmax, b0 + vb * elapsedMs * 0.001f);
         bool overload = false;
@@ -289,6 +319,7 @@ JointControlResult JointFeedbackController::compute(uint8_t joint, float target,
         takeupB = b;
         const float timeoutMs = ramp[ReversalRampTakeupTimeoutMs];
         if ((timeoutMs > 0.0f && elapsedMs >= timeoutMs) || hardOverload) {
+            updateAdaptiveVb(joint, state.takeupFrozen || hardOverload, true, p);
             state.phase = Tracking;
             takeupB = 0.0f;
         }
@@ -356,9 +387,15 @@ void JointFeedbackController::updateAdaptiveKp(uint8_t joint, float target, cons
     // Keep the existing wire parameter; it now sets the oscillation threshold.
     const float threshold = p[AdaptiveKpOvershootDeg];
     const int8_t side = error > threshold ? 1 : error < -threshold ? -1 : 0;
+    const bool targetQuiet =
+        fabsf(state.targetVelocity) <= MMHAND_ADAPTIVE_OSC_TARGET_SPEED_DEG_S;
     bool oscillating = false;
-    if (side && side != evidence.side) {
-        oscillating = evidence.crossings == 2 && now - evidence.crossingMs[0] <= 2000;
+    if (!targetQuiet) {
+        evidence.crossings = 0;
+        evidence.side = side;
+    } else if (side && side != evidence.side) {
+        oscillating = evidence.crossings == 2 &&
+            now - evidence.crossingMs[0] <= MMHAND_KP_OSCILLATION_WINDOW_MS;
         evidence.crossingMs[0] = evidence.crossingMs[1];
         evidence.crossingMs[1] = now;
         if (evidence.crossings < 2) ++evidence.crossings;
@@ -367,7 +404,7 @@ void JointFeedbackController::updateAdaptiveKp(uint8_t joint, float target, cons
     if (oscillating) {
         evidence.lagging = false;
         if (!state.kpChanged || !state.kpDecreased || now - state.kpChangeMs >= 1000) {
-            kpScale[joint] = fmaxf(0.3f, kpScale[joint] * 0.9f);
+            kpScale[joint] = fmaxf(MMHAND_ADAPTIVE_KP_MIN, kpScale[joint] * 0.9f);
             state.kpChanged = state.kpDecreased = true;
             state.kpChangeMs = now;
         }
@@ -385,13 +422,22 @@ void JointFeedbackController::updateAdaptiveKp(uint8_t joint, float target, cons
         evidence.lagging = true;
         evidence.lagSince = now;
     }
-    if (now - evidence.lagSince >= 500 &&
-        (!state.kpChanged || now - state.kpChangeMs >= 2000)) {
-        kpScale[joint] = fminf(1.3f, kpScale[joint] * 1.05f);
+    if (now - evidence.lagSince >= MMHAND_ADAPTIVE_LAG_MS &&
+        (!state.kpChanged || now - state.kpChangeMs >= MMHAND_ADAPTIVE_KP_UP_MS)) {
+        kpScale[joint] = fminf(MMHAND_ADAPTIVE_KP_MAX, kpScale[joint] * MMHAND_ADAPTIVE_KP_STEP);
         state.kpChanged = true;
         state.kpDecreased = false;
         state.kpChangeMs = now;
         evidence.lagging = false;
     }
+}
+
+void JointFeedbackController::updateAdaptiveVb(uint8_t joint, bool skip, bool slow,
+                                                const Parameters& p) {
+    if (skip || joint >= ENCODER_TOTAL_NUM || !isDualTendonJoint(joint) ||
+        !(p[AdaptiveKpEnabled] > 0.5f)) {
+        return;
+    }
+    if (slow) vbScale[joint] = fminf(MMHAND_VB_MAX, vbScale[joint] * MMHAND_VB_STEP);
 }
 }

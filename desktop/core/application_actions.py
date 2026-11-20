@@ -27,6 +27,7 @@ from .calibration_diagnostics import (
 )
 from .data_recording.recorder import DataSessionRecorder
 from .data_recording.topic_schema import DEFAULT_TOPICS, TOPIC_FIELDNAMES
+from .generated_control_parameters import DEFAULT_OUTPUT_MARGINS
 from .host_calibration.config import joint_motors, shorten_sign
 from .session_log import close_session_log, log_session, session_log_since
 from .communication.connection_diagnostics import describe_connection_failure
@@ -285,9 +286,10 @@ class ApplicationActions(IdResetActions):
                     self._control_parameter_sync = 'PENDING'
                     return False, 'Parameters changed during synchronization; apply the new revision first'
                 with self._controller.state_lock:
-                    self._controller._applied_output_margins = tuple(
-                        int(data['output'][key]) for key in
-                        ('lut_release_margin_counts', 'lut_tight_margin_counts'))
+                    self._controller._applied_output_margins = (
+                        int(data['output']['lut_release_margin_counts']),
+                        int(data['output']['lut_tight_margin_counts']),
+                        DEFAULT_OUTPUT_MARGINS[2])
                 self._control_parameter_sync = (
                     f'APPLIED revision {revision} / {crc:08X} '
                     f'ramp {ramp_revision} / {ramp_crc:08X}')
@@ -475,13 +477,18 @@ class ApplicationActions(IdResetActions):
             if stamp != self._curve_stamp and state.has_sensor_data:
                 self._curve_stamp = stamp
                 now = time.time()
+                telem = bool(state.servo_telem_last_rx_ts) and 0 <= now - state.servo_telem_last_rx_ts <= 0.6
+                loads = [int(state.servo_load[m]) if telem and state.servo_telem_online[m] else None
+                         for m in range(MOTOR_COUNT)]
                 if self._curve_history and now - self._curve_history[-1]['host_time'] > 0.6:
                     self._curve_history.append({'host_time': now - 0.001, 'p4_time_ms': state.p4_time_ms,
-                        'angles': [None] * ENCODER_COUNT, 'targets': [None] * ENCODER_COUNT})
+                        'angles': [None] * ENCODER_COUNT, 'targets': [None] * ENCODER_COUNT,
+                        'loads': [None] * MOTOR_COUNT})
                 self._curve_history.append({
                     'host_time': now, 'p4_time_ms': state.p4_time_ms,
                     'angles': [e.current_angle_deg if not e.angle_error and self._mapped_feedback_fresh(state) else None for e in state.encoders],
                     'targets': list(state.target_angles),
+                    'loads': loads,
                 })
 
     def _application_observe_identity(self, device_id):
@@ -1819,6 +1826,8 @@ class ApplicationActions(IdResetActions):
                                   and 0 <= now - state.adaptive_kp_last_rx_ts <= 2.0),
                     'scale': list(state.adaptive_kp_scale),
                     'effective': list(state.adaptive_kp_effective),
+                    'vb_scale': list(state.adaptive_vb_scale),
+                    'vb_effective': list(state.adaptive_vb_effective),
                     'age_ms': (int((now - state.adaptive_kp_last_rx_ts) * 1000)
                                if state.adaptive_kp_last_rx_ts else None),
                 },

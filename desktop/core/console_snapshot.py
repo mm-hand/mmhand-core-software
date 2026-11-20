@@ -34,6 +34,9 @@ _SYSTEM_STATE_LABELS = {
     5: 'Ready', 6: 'Direct', 8: 'Pull Joint into Workspace', 9: 'Joint Beyond Workspace',
 }
 
+# 指令被腱窗口夹住时，伺服停在端点内约 15 counts；30 counts 约 1°，用作“到达端点”判据。
+MOTOR_LIMIT_REACH_COUNTS = 30
+
 
 def p4_state_badge(state, hand, fresh=True):
     """P4 状态编号，以及未就绪时的第一个越界关节；解释 Enable 为什么被拒。"""
@@ -210,9 +213,10 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
             if lo <= hi:
                 limits = [lo, hi]
         row.update(joint=MOTOR_TO_JOINT_INDEX[m], limits=limits,
-                   motor_beyond_workspace=bool(
+                   motor_limit_reach=bool(
                        fresh and limits is not None and row.get('abs') is not None
-                       and not (limits[0] <= row['abs'] <= limits[1])),
+                       and (row['abs'] <= limits[0] + MOTOR_LIMIT_REACH_COUNTS
+                            or row['abs'] >= limits[1] - MOTOR_LIMIT_REACH_COUNTS)),
                    bus=state.servo_route_bus[m] if fresh and state.has_servo_route_status else None,
                    route=state.servo_route_state[m] if fresh and state.has_servo_route_status else None)
     snapshot['selected_motors'] = list(hand._selected_motors)
@@ -268,8 +272,8 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
             int(getattr(state, 'system_state', -1)) == SYSTEM_STATE_JOINT_BEYOND_WORKSPACE or
             any(getattr(encoder, 'angle_out_of_workspace', False)
                 for encoder in getattr(state, 'encoders', []))) else 'CLEAR' if fresh else 'UNKNOWN',
-        'Motor workspace': 'BEYOND' if fresh and any(
-            row.get('motor_beyond_workspace') for row in snapshot['motors']
+        'Motor limit': 'REACH' if fresh and any(
+            row.get('motor_limit_reach') for row in snapshot['motors']
         ) else 'CLEAR' if fresh else 'UNKNOWN',
         'Multi-turn': 'UNKNOWN' if not fresh or not state.has_connectivity_status or not state.servo_online_bitmap else 'MISSING' if state.multi_turn_unknown_bitmap & state.servo_online_bitmap else 'KNOWN'}
     snapshot['direct_zero_required'] = direct_zero_required(state, fresh)

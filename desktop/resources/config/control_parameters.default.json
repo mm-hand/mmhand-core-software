@@ -84,7 +84,7 @@
   },
   "output": {
     "lut_release_margin_counts": 500,
-    "lut_tight_margin_counts": 1000
+    "lut_tight_margin_counts": 2000
   },
   "ros2_input": {
     "min_cutoff_hz": 1.0,

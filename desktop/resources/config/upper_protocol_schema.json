@@ -178,7 +178,7 @@
       "name": "PACKET_TYPE_ADAPTIVE_KP",
       "value": 31,
       "timestamp": false,
-      "description": "21 路自适应 Kp 倍率与实际 Kp"
+      "description": "21 路自适应 Kp/vB 倍率与实际值"
     },
     {
       "name": "PACKET_TYPE_SERVO_ONLINE_STATUS",

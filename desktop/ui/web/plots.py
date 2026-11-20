@@ -1,4 +1,4 @@
-"""Single-joint angle and one control-component chart per motor; Save Data is the sole switch.
+"""Single-joint angle plus per-motor control-component and load charts; Save Data is the sole switch.
 
 职责：展示快照并处理本地显示交互。
 线程：NiceGUI 页面事件循环。
@@ -33,6 +33,12 @@ def _motor_values(row, motor):
             'Total': None if None in (pid, recovery) else pid + recovery}
 
 
+def _motor_load(row, motor):
+    """One curve sample's signed servo load; None when this sample carries no load."""
+    loads = row.get('loads') or ()
+    return loads[motor] if motor < len(loads) else None
+
+
 def _options(title, x_name, y_name):
     return {'title': {'text': title, 'left': 'center'}, 'legend': {'top': 26},
             'tooltip': {'trigger': 'axis'}, 'xAxis': {'type': 'value', 'name': x_name},
@@ -52,7 +58,10 @@ def build():
     with ui.row().classes('w-full gap-3'):
         motor_charts = [ui.echart(_options('', 'P4 time (s)', 'Counts'))
                         .classes('flex-1 min-w-0').style('height:22rem') for _ in range(2)]
-    for chart in motor_charts:
+    with ui.row().classes('w-full gap-3'):
+        load_charts = [ui.echart(_options('', 'Time (s)', 'Load (counts)'))
+                       .classes('flex-1 min-w-0').style('height:16rem') for _ in range(2)]
+    for chart in motor_charts + load_charts:
         chart.set_visibility(False)
 
     def refresh(snapshot):
@@ -86,6 +95,15 @@ def build():
             chart.update()
             chart.set_visibility(True)
         for chart in motor_charts[len(motors):]:
+            chart.set_visibility(False)
+        for chart, motor in zip(load_charts, motors):
+            chart.options['title']['text'] = f'J{joint_index:02d} · M{motor:02d} load'
+            chart.options['series'] = [dict(type='line', name='Load', showSymbol=False, connectNulls=False,
+                data=[[row['host_time'] - start, _motor_load(row, motor)] for row in window])]
+            chart.options['xAxis'].update(min=begin, max=end)
+            chart.update()
+            chart.set_visibility(True)
+        for chart in load_charts[len(motors):]:
             chart.set_visibility(False)
 
     return refresh

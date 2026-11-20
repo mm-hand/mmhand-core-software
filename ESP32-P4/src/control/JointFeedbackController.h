@@ -35,21 +35,28 @@ public:
     void resetAll();
     float kpScaleOf(uint8_t joint) const;
     float effectiveKpOf(uint8_t joint, const Parameters& parameters) const;
+    float vbScaleOf(uint8_t joint) const;
+    float effectiveVbOf(uint8_t joint, const RampParameters& ramp) const;
     JointFeedbackController();
 private:
     void updateAdaptiveKp(uint8_t joint, float target, const FeedbackEstimate& fb,
                           uint32_t now, const Parameters& parameters);
+    void updateAdaptiveVb(uint8_t joint, bool skip, bool slow,
+                          const Parameters& parameters);
     enum Phase : uint8_t { Tracking, Pending, Takeup };
     struct State {
         bool initialized = false, saturated = false;
         uint32_t revision = 0, candidateSince = 0, errorSince = 0;
         int8_t errorSign = 0;
         int8_t direction = 0, candidate = 0;
+        int8_t lastDirection = 0;
+        uint32_t overshootWindowUntil = 0;
         Phase phase = Tracking;
         float lastTarget = 0, candidateAnchor = 0, responseAnchor = 0;
         uint32_t takeupStartMs = 0;
         float takeupMagnitude = 0;
         bool takeupFrozen = false;
+        bool vbOvershootLatched = false;
         float integral[MAX_JOINT_ACTUATORS] = {};
         float motorAnchor[MAX_JOINT_ACTUATORS] = {};
         // D-term history: filtered derivative of target minus measured angle.
@@ -70,6 +77,6 @@ private:
         bool suspended = false, boundaryClamped = false;
     } states[ENCODER_TOTAL_NUM];
     float kpScale[ENCODER_TOTAL_NUM];
-    uint32_t scaleRevision = 0;
+    float vbScale[ENCODER_TOTAL_NUM];
 };
 }

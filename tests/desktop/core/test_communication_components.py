@@ -693,4 +693,13 @@ def test_adaptive_kp_packet_parser():
     assert parsed["enabled"] is True
     assert parsed["scale"] == [1.0 + i / 1000.0 for i in range(ENCODER_COUNT)]
     assert parsed["effective"][0] == 0.5
+    assert parsed["vb_scale"] is None and parsed["vb_effective"] is None
+    assert parse_adaptive_kp_packet(payload[:-1]) is None
+
+    payload += b"".join(struct.pack(">h", 2000 + i) for i in range(ENCODER_COUNT))
+    payload += b"".join(struct.pack(">h", 50 + i) for i in range(ENCODER_COUNT))
+    parsed = parse_adaptive_kp_packet(payload)
+    assert parsed is not None
+    assert parsed["vb_scale"] == [2.0 + i / 1000.0 for i in range(ENCODER_COUNT)]
+    assert parsed["vb_effective"] == [50 + i for i in range(ENCODER_COUNT)]
     assert parse_adaptive_kp_packet(payload[:-1]) is None

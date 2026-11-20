@@ -124,10 +124,11 @@ def _component_row(base, index, mask, p, i, r, pid, recovery):
                         'recovery_counts': _motor_list(recovery)})
 
 
-def _curves_snapshot(hand, base=1000.0):
+def _curves_snapshot(hand, base=1000.0, loads=None):
     snapshot = hand.application_snapshot()
     snapshot['curves'] = [dict(host_time=base + i, p4_time_ms=(base + i) * 1000,
-                               angles=[0.0] * 21, targets=[0.0] * 21) for i in range(20)]
+                               angles=[0.0] * 21, targets=[0.0] * 21,
+                               loads=list(loads) if loads else [None] * 27) for i in range(20)]
     return snapshot
 
 
@@ -140,10 +141,13 @@ def test_curves_plot_window_is_last_ten_seconds(page):
     next(e for e in client.elements.values() if isinstance(e, ui.select)).set_value(8)
     refresh(snapshot)
     charts = [e for e in client.elements.values() if isinstance(e, ui.echart) and e.visible]
-    assert [chart.options['title']['text'] for chart in charts] == ['Joint angle', 'J08 · M10', 'J08 · M11']
+    assert [chart.options['title']['text'] for chart in charts] == [
+        'Joint angle', 'J08 · M10', 'J08 · M11', 'J08 · M10 load', 'J08 · M11 load']
     assert (charts[0].options['xAxis']['min'], charts[0].options['xAxis']['max']) == (9.0, 19.0)
-    for chart in charts[1:]:
+    for chart in charts[1:3]:
         assert (chart.options['xAxis']['min'], chart.options['xAxis']['max']) == (1009.0, 1019.0)
+    for chart in charts[3:]:
+        assert (chart.options['xAxis']['min'], chart.options['xAxis']['max']) == (9.0, 19.0)
 
 
 def test_motor_values_derive_d_and_total():
@@ -164,10 +168,11 @@ def test_curves_selected_joint_plots_one_chart_per_motor(page):
     next(e for e in client.elements.values() if isinstance(e, ui.select)).set_value(8)
     refresh(snapshot)
     charts = [e for e in client.elements.values() if isinstance(e, ui.echart) and e.visible]
-    assert [chart.options['title']['text'] for chart in charts] == ['Joint angle', 'J08 · M10', 'J08 · M11']
+    assert [chart.options['title']['text'] for chart in charts] == [
+        'Joint angle', 'J08 · M10', 'J08 · M11', 'J08 · M10 load', 'J08 · M11 load']
     last = {chart.options['title']['text']: {series['name']: series['data'][-1][1]
                                               for series in chart.options['series']}
-            for chart in charts[1:]}
+            for chart in charts[1:3]}
     assert [series['name'] for series in charts[1].options['series']] == list(plots.TERMS)
     assert last['J08 · M10'] == {
         'P': 1, 'I': 2, 'D': 0, 'Reversal': 4, 'Pair recovery': 5, 'Total': 12}
@@ -183,11 +188,30 @@ def test_curves_single_tendon_and_none_selection(page):
     selector.set_value(1)
     refresh(snapshot)
     charts = [e for e in client.elements.values() if isinstance(e, ui.echart) and e.visible]
-    assert [chart.options['title']['text'] for chart in charts] == ['Joint angle', 'J01 · M02']
+    assert [chart.options['title']['text'] for chart in charts] == [
+        'Joint angle', 'J01 · M02', 'J01 · M02 load']
     selector.set_value(-1)
     refresh(snapshot)
     charts = [e for e in client.elements.values() if isinstance(e, ui.echart) and e.visible]
     assert [chart.options['title']['text'] for chart in charts] == ['Joint angle']
+
+
+def test_curves_load_chart_plots_signed_motor_load(page):
+    hand, client = page
+    refresh = plots.build()
+    snapshot = _curves_snapshot(hand)
+    snapshot['curves'][10]['loads'] = [10] * 27
+    snapshot['curves'][11]['loads'] = [None] * 27
+    snapshot['curves'][12]['loads'] = [-200] * 27
+    next(e for e in client.elements.values() if isinstance(e, ui.select)).set_value(8)
+    refresh(snapshot)
+    charts = {chart.options['title']['text']: chart for chart in client.elements.values()
+              if isinstance(chart, ui.echart) and chart.visible}
+    load = charts['J08 · M10 load']
+    assert load.options['yAxis']['name'] == 'Load (counts)'
+    assert [series['name'] for series in load.options['series']] == ['Load']
+    assert load.options['series'][0]['data'][1:4] == [[10.0, 10], [11.0, None], [12.0, -200]]
+    assert 'J08 · M11 load' in charts
 
 
 def test_curves_page_has_no_motor_or_recording_controls(page):
@@ -235,6 +259,15 @@ def test_hand_models_follow_feedback_and_control_state(page):
     snapshot['control_mode'] = 'FEEDBACK'
     before = {obj.id: obj.R for obj in scene.objects.values() if measured in obj.ancestors}
     snapshot['joints'][0]['angle'] = 30.0
+    refresh(snapshot)
+    assert target.visible_
+    show_target = next(element for element in client.elements.values()
+                       if isinstance(element, ui.checkbox))
+    assert show_target.value
+    show_target.set_value(False)
+    refresh(snapshot)
+    assert not target.visible_
+    show_target.set_value(True)
     refresh(snapshot)
     assert target.visible_
     rotated = [obj for obj in scene.objects.values() if obj.id in before and obj.R != before[obj.id]]
@@ -314,19 +347,31 @@ def test_hand_view_keeps_tactile_point_matrix_without_data(page):
     assert not any(surface.visible_ for surface in surfaces)
 
 
-def test_adaptive_kp_is_one_expansion_after_kd_with_one_enable_button(page):
+def test_adaptive_control_is_after_fast_reversal_with_enable_button(page):
     hand, client = page
     hand.request_apply_control_parameters = Mock()
     act = Mock(side_effect=lambda callback: callback())
     refresh = control_parameters.build(hand, act)
     snapshot = idle_snapshot(hand)
+    snapshot['adaptive_kp'].update(vb_scale=[1.0] * 21, vb_effective=[0.0] * 21)
     refresh(snapshot)
     expansions = [e.text for e in client.elements.values() if isinstance(e, ui.expansion)]
-    assert expansions[expansions.index('Kd config') + 1] == 'Adaptive Kp (runtime multiplier)'
+    assert expansions[expansions.index('Kd config') + 1] == 'Fast reversal'
+    assert expansions[expansions.index('Fast reversal') + 1] == 'Adaptive Control'
     assert sum('Adaptive' in text for text in expansions) == 1
-    assert any(e.label == 'oscillation threshold deg'
-               for e in client.elements.values() if isinstance(e, ui.number))
-    adaptive = button(client, 'Enable Adaptive Kp Control')
+    labels = [e.label for e in client.elements.values() if isinstance(e, ui.number)]
+    assert labels.count('Confirm deg') == 5
+    assert labels.count('Takeup max') == 5
+    assert labels.count('Exit travel deg') == 5
+    assert labels.count('B0') == 5
+    assert labels.count('Base vB') == 5
+    assert labels.count('Load limit') == 5
+    assert labels.count('Confirm ms') == 1 and labels.count('Takeup timeout ms') == 1
+    assert labels.count('Lag limit s') == 1 and labels.count('Kp oscillation deg') == 1
+    tables = [e for e in client.elements.values() if isinstance(e, ui.table)]
+    assert any(any(column.get('name') == 'vb_effective' for column in table.columns) for table in tables)
+    assert any(any(row.get('item') == 'vB slow threshold' for row in table.rows) for table in tables)
+    adaptive = button(client, 'Enable Adaptive Control')
     snapshot['adaptive_kp'].update(valid=False)
     refresh(snapshot)
     assert any(text.startswith('Adaptive: waiting for P4 1 Hz packet')
@@ -336,10 +381,45 @@ def test_adaptive_kp_is_one_expansion_after_kd_with_one_enable_button(page):
     assert proposed['adaptive_kp']['enabled'] == 1 and 'crc32' not in proposed
     snapshot['control_parameters']['adaptive_kp']['enabled'] = 1
     refresh(snapshot)
-    assert button(client, 'Disable Adaptive Kp Control') is not None
+    assert button(client, 'Disable Adaptive Control') is not None
     snapshot['busy'] = True
     refresh(snapshot)
-    assert not button(client, 'Disable Adaptive Kp Control').enabled
+    assert not button(client, 'Disable Adaptive Control').enabled
+
+
+def test_adaptive_logic_display_matches_firmware_defaults():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[3]
+    header = (root / 'ESP32-P4/src/config/AdaptiveControlConfig.h').read_text(encoding='utf-8')
+    for line in (
+        '#define MMHAND_ADAPTIVE_KP_MAX 2.0f',
+        '#define MMHAND_ADAPTIVE_KP_STEP 1.08f',
+        '#define MMHAND_ADAPTIVE_KP_UP_MS 1000',
+        '#define MMHAND_ADAPTIVE_LAG_MS 300',
+        '#define MMHAND_ADAPTIVE_OSC_TARGET_SPEED_DEG_S 5.0f',
+        '#define MMHAND_KP_OSCILLATION_WINDOW_MS 2000',
+        '#define MMHAND_VB_OVERSHOOT_DEG 2.0f',
+        '#define MMHAND_VB_SLOW_MS 150.0f',
+        '#define MMHAND_VB_STEP 1.08f',
+        '#define MMHAND_VB_MAX 2.0f',
+        '#define MMHAND_VB_MIN 0.5f',
+    ):
+        assert line in header
+    logic = dict(control_parameters.ADAPTIVE_LOGIC)
+    assert logic['Kp max scale'] == '2.0×'
+    assert logic['Kp up step'] == '8% / 1 s'
+    assert logic['Kp lag evidence'] == '300 ms'
+    assert logic['vB slow threshold'] == '150 ms'
+    assert logic['vB step'] == '8%'
+    assert logic['Kp oscillation target speed'] == '≤5°/s'
+    assert logic['Kp oscillation window'] == '2000 ms'
+    assert logic['vB overshoot threshold'] == '2.0°'
+    assert logic['vB overshoot window'] == '800 ms'
+    assert logic['vB range'] == '0.5–2.0×'
+    assert logic['vB overshoot step'] == '0.90×'
+    assert logic['vB load events'] == 'safety only; no learning'
+    assert logic['vB applies to'] == 'AA / CMC'
+    assert logic['Learned scales'] == 'persist across STOP/Apply; reflash resets'
 
 
 def test_feedback_refresh_keeps_native_number_and_slider_draft_without_send(page):
@@ -788,7 +868,7 @@ def test_motor_calibrate_selected_passes_page_origin_and_disables_while_controll
     assert not calibrate.enabled
 
 
-def test_control_pages_show_both_workspace_warnings_only_when_present(page):
+def test_control_pages_show_joint_workspace_and_motor_limit_only_when_present(page):
     hand, client = page
     feedback_refresh = feedback_control.build(hand, Mock())
     direct_refresh = direct_control.build(hand, Mock(), Mock())
@@ -797,22 +877,22 @@ def test_control_pages_show_both_workspace_warnings_only_when_present(page):
     for row in snapshot['joints']:
         row['angle_out_of_workspace'] = False
     for row in snapshot['motors']:
-        row['motor_beyond_workspace'] = False
+        row['motor_limit_reach'] = False
     feedback_refresh(snapshot)
     direct_refresh(snapshot)
     badges = [element.text for element in client.elements.values() if isinstance(element, ui.badge)]
     assert 'JOINT BEYOND WORKSPACE' not in badges
-    assert 'MOTOR BEYOND WORKSPACE' not in badges
+    assert 'MOTOR LIMIT: REACH' not in badges
 
     # J04 drives M05/M06: both warnings must appear only on that joint/motor.
     snapshot['joints'][4]['angle_out_of_workspace'] = True
     for motor in snapshot['joints'][4]['motors']:
-        snapshot['motors'][motor]['motor_beyond_workspace'] = True
+        snapshot['motors'][motor]['motor_limit_reach'] = True
     feedback_refresh(snapshot)
     direct_refresh(snapshot)
     badges = [element.text for element in client.elements.values() if isinstance(element, ui.badge)]
     assert 'JOINT BEYOND WORKSPACE' in badges
-    assert 'MOTOR BEYOND WORKSPACE' in badges
+    assert 'MOTOR LIMIT: REACH' in badges
 
 
 def test_joint_and_direct_rows_show_offline_motor_badges(page):

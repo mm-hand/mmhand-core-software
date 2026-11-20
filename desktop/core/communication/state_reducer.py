@@ -784,6 +784,8 @@ class StateReducer:
         model.adaptive_kp_enabled = bool(parsed["enabled"])
         model.adaptive_kp_scale = list(parsed["scale"])
         model.adaptive_kp_effective = list(parsed["effective"])
+        model.adaptive_vb_scale = list(parsed["vb_scale"] or [])
+        model.adaptive_vb_effective = list(parsed["vb_effective"] or [])
         model.adaptive_kp_last_rx_ts = _host_received_at
         model.has_adaptive_kp_data = True
         return True

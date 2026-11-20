@@ -5,7 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def render(fields, enum_name, count_name, guard, title):
+def render(fields, enum_name, count_name, guard, title, extra=()):
     def symbol(field):
         return ''.join(word.title() for word in (field['group'] + '_' + field['name']).split('_'))
     def literal(value):
@@ -24,6 +24,7 @@ def render(fields, enum_name, count_name, guard, title):
         *[f'    {literal(field["minimum"])},' for field in fields], '};',
         f'inline constexpr float k{enum_name}Maximum[] = {{',
         *[f'    {literal(field["maximum"])},' for field in fields], '};',
+        *extra,
         '} // namespace mmhand::control', '',
     ])
 
@@ -31,8 +32,10 @@ def render(fields, enum_name, count_name, guard, title):
 def render_main():
     schema = json.loads((ROOT / 'desktop/resources/config/control_parameters.schema.json').read_text(encoding='utf-8'))
     fields = schema['payloads']['main']['fields']
+    dual = int(schema['constants']['lut_margin_counts_dual'])
     return render(fields, 'Parameter', 'ParameterCount', 'ControlParameters',
-                  '枚举顺序及硬校验边界。')
+                  '枚举顺序及硬校验边界。',
+                  (f'inline constexpr int32_t kLutMarginCountsDual = {dual};',))
 
 
 def render_ramp():
@@ -50,7 +53,7 @@ def render_desktop():
         bounds.setdefault(field['group'], {})[field['name']] = (field['minimum'], field['maximum'])
     ramp = {field['name']: (field['minimum'], field['maximum']) for field in schema['payloads']['ramp']['fields']}
     return ('"""Generated control parameter contract.\n\n职责：提供两端共用的参数边界与标定余量默认值。\n线程：只读常量。\n输入：参数 schema 和默认配置。\n输出：Python 参数校验表。\n状态所有权：生成器独占维护。\n禁止依赖：不得导入 UI 或设备。\n"""\n'
-            + f'BOUNDS = {bounds!r}\nRAMP_BOUNDS = {ramp!r}\nDEFAULT_OUTPUT_MARGINS = {(int(defaults["output"]["lut_release_margin_counts"]), int(defaults["output"]["lut_tight_margin_counts"]))!r}\n')
+            + f'BOUNDS = {bounds!r}\nRAMP_BOUNDS = {ramp!r}\nDEFAULT_OUTPUT_MARGINS = {(int(defaults["output"]["lut_release_margin_counts"]), int(defaults["output"]["lut_tight_margin_counts"]), int(schema["constants"]["lut_margin_counts_dual"]))!r}\n')
 
 
 if __name__ == '__main__':

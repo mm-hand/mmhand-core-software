@@ -182,7 +182,7 @@ inline constexpr float kParameterMaximum[] = {
     10.0f,
     10.0f,
     500.0f,
-    1000.0f,
+    3000.0f,
     10.0f,
     1.0f,
     10.0f,
@@ -195,4 +195,5 @@ inline constexpr float kParameterMaximum[] = {
     1.0f,
     10.0f,
 };
+inline constexpr int32_t kLutMarginCountsDual = 1200;
 } // namespace mmhand::control

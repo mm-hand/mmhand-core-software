@@ -1,7 +1,7 @@
 {
   "schema_version": 7,
-  "revision": 565,
-  "ramp_revision": 144,
+  "revision": 589,
+  "ramp_revision": 168,
   "joint_kp": {
     "aa": 0.45,
     "mcp": 1.0,
@@ -44,8 +44,8 @@
     "confirm_deg_dip": 1.0,
     "confirm_deg_cmc": 0.6,
     "confirm_ms": 20,
-    "takeup_max_aa": 40,
-    "takeup_max_mcp": 40,
+    "takeup_max_aa": 0.0,
+    "takeup_max_mcp": 0.0,
     "takeup_max_pip": 40,
     "takeup_max_dip": 40,
     "takeup_max_cmc": 40,
@@ -56,8 +56,8 @@
     "exit_travel_deg_cmc": 0.25
   },
   "reversal_ramp": {
-    "b0_aa": 2,
-    "b0_mcp": 2,
+    "b0_aa": 0.0,
+    "b0_mcp": 0.0,
     "b0_pip": 2,
     "b0_dip": 5,
     "b0_cmc": 2,
@@ -74,17 +74,17 @@
     "takeup_timeout_ms": 600
   },
   "collision": {
-    "arm_velocity_flex_deg_s": 100.0,
+    "arm_velocity_flex_deg_s": 3.0,
     "arm_velocity_extend_deg_s": 100.0,
     "stall_velocity_flex_deg_s": 1.0,
     "stall_velocity_extend_deg_s": 1.0,
-    "min_error_deg": 4.0,
-    "target_reset_deg": 1.0,
+    "min_error_deg": 0.5,
+    "target_reset_deg": 2.0,
     "retreat_deg": 1.0
   },
   "output": {
     "lut_release_margin_counts": 500,
-    "lut_tight_margin_counts": 1000
+    "lut_tight_margin_counts": 2000
   },
   "ros2_input": {
     "min_cutoff_hz": 1.0,
@@ -97,8 +97,8 @@
     "max_gap_ms": 500
   },
   "adaptive_kp": {
-    "enabled": 1,
-    "lag_limit_s": 0.12,
+    "enabled": 0,
+    "lag_limit_s": 0.1,
     "overshoot_deg": 2.0
   }
 }

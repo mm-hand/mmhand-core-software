@@ -92,11 +92,11 @@ def build(hand, act, confirm, leave=None):
                     def refresh(snapshot, m=m, feedback=feedback, limits=limits, number=number, slider=slider, send=send, control=control, elec=elec, loss=loss):
                         row = snapshot['motors'][m]
                         statuses = [row['direct_control_status']]
-                        if row.get('motor_beyond_workspace'):
-                            statuses.append('MOTOR BEYOND WORKSPACE')
+                        if row.get('motor_limit_reach'):
+                            statuses.append('MOTOR LIMIT: REACH')
                         if snapshot['joints'][row['joint']].get('angle_out_of_workspace'):
                             statuses.append('JOINT BEYOND WORKSPACE')
-                        control(statuses, f"P4-confirmed direct control state for M{m:02d} / J{row['joint']:02d}, plus joint-angle and motor workspace state.")
+                        control(statuses, f"P4-confirmed direct control state for M{m:02d} / J{row['joint']:02d}, plus joint-angle and motor limit state.")
                         elec(snapshot['joints'][row['joint']].get('encoder_state'), row['joint'])
                         loss(snapshot, motor=m)
                         generation = row.get('abs_zero_generation', 0)

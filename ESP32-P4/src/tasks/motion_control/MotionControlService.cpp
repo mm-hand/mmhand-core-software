@@ -45,9 +45,10 @@ static mmhand::control::FeedbackEstimate g_feedbackEstimates[ENCODER_TOTAL_NUM];
 // 碰撞检测历史放在静态区，避免挤占 10 ms 控制任务栈。
 static FeedbackCollisionGuard g_feedbackCollisionGuard;
 
-/** 把每关节自适应 Kp 发布给 HostComm 的低频遥测；只写 16 位倍率。 */
+/** 把每关节自适应 Kp/vB 发布给 HostComm 的低频遥测；只写 16 位快照。 */
 static void publishAdaptiveKp(SystemRuntimeContext* sharedData,
-                              const mmhand::control::Parameters& parameters)
+                              const mmhand::control::Parameters& parameters,
+                              const mmhand::control::RampParameters& rampParameters)
 {
     sharedData->adaptive_kp_enabled =
         parameters[mmhand::control::AdaptiveKpEnabled] > 0.5f ? 1 : 0;
@@ -58,6 +59,10 @@ static void publishAdaptiveKp(SystemRuntimeContext* sharedData,
             (int16_t)lroundf(scale * 1000.0f);
         sharedData->adaptive_kp_effective_milli[joint] =
             (int16_t)lroundf(effective * 1000.0f);
+        sharedData->adaptive_vb_scale_milli[joint] =
+            (int16_t)lroundf(g_jointController.vbScaleOf(joint) * 1000.0f);
+        sharedData->adaptive_vb_effective[joint] =
+            (int16_t)lroundf(g_jointController.effectiveVbOf(joint, rampParameters));
     }
 }
 
@@ -900,7 +905,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                 }
             }
         }
-        publishAdaptiveKp(sharedData, controlParameters);
+        publishAdaptiveKp(sharedData, controlParameters, rampParameters);
 
         const uint32_t recoveredLutClampMask =
             runtime.lutClampEventLatchedBitmap & ~runtime.lutClampObservedBitmap;

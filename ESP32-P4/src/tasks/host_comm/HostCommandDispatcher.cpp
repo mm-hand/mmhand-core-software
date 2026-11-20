@@ -104,13 +104,14 @@ bool refreshLoadedJointAbsLimits(SystemRuntimeContext* sharedData,
     if (count == 0 || count > TENDON_LUT_ACTUATOR_COUNT) return false;
     int32_t mins[TENDON_LUT_ACTUATOR_COUNT] = {}, maxs[TENDON_LUT_ACTUATOR_COUNT] = {};
     uint8_t motors[TENDON_LUT_ACTUATOR_COUNT] = {};
+    int32_t releaseMargin, tightMargin;
+    lutMarginsForJoint(jointIndex, parameters, &releaseMargin, &tightMargin);
     for (uint8_t i = 0; i < count; ++i) {
         JointActuatorItem actuator{};
         if (!getJointActuator(jointIndex, i, &actuator) ||
             result.tendonLutMotor[i] != actuator.motorChannel ||
             !tendonCalibrationMotorAbsRangeWithMargins(result, i, actuator.motorChannel,
-                parameters[mmhand::control::OutputLutReleaseMarginCounts],
-                parameters[mmhand::control::OutputLutTightMarginCounts], &mins[i], &maxs[i])) return false;
+                releaseMargin, tightMargin, &mins[i], &maxs[i])) return false;
         motors[i] = actuator.motorChannel;
     }
     SharedSafetyGuard guard;

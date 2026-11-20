@@ -61,7 +61,7 @@ def status_background(value):
                 'PULL JOINT INTO WORKSPACE'):
         return '#bfdbfe'
     if base in ('FAILED', 'FAULT', 'ERROR', 'ACTIVE', 'HOLD', 'MISSING',
-                'STOPPED', 'LOCKED'):
+                'STOPPED', 'LOCKED', 'REACH'):
         return '#fecaca'
     if base in ('KNOWN', 'CLEAR', 'SUCCESS', 'OFF', 'ARMED'):
         return '#bbf7d0'
@@ -478,7 +478,7 @@ def build_page(hand, palm=None):
             save = ui.button('Save Data', on_click=stop_or_open_save).props('dense outline')
             top_stop = ui.button('■ STOP', on_click=lambda: act(hand.stop_motion), color='negative').props('dense').classes('font-bold px-5')
         with ui.row().classes('status-bar items-center w-full flex-wrap gap-y-1'):
-            badges = {name: ui.label().classes('status-chip text-xs cursor-pointer') for name in ['System', 'P4', 'CAN', 'Calibration', 'Mode', 'Overload', 'Collision', 'Joint workspace', 'Motor workspace', 'Multi-turn']}
+            badges = {name: ui.label().classes('status-chip text-xs cursor-pointer') for name in ['System', 'P4', 'CAN', 'Calibration', 'Mode', 'Overload', 'Collision', 'Joint workspace', 'Motor limit', 'Multi-turn']}
         with ui.tabs(value=TABS[0]).classes('console-tabs w-full').props('dense no-caps active-color=primary outside-arrows mobile-arrows') as tabs:
             for name in TABS: ui.tab(name)
         def leave_direct_control():

@@ -78,6 +78,16 @@ def calibration_margins(io):
     return getter() if callable(getter) else DEFAULT_OUTPUT_MARGINS
 
 
+def single_margins(io):
+    release, tight, _dual = calibration_margins(io)
+    return release, tight
+
+
+def dual_margins(io):
+    _release, _tight, dual = calibration_margins(io)
+    return dual, dual
+
+
 @dataclass(frozen=True)
 class AutoCalibrationParams:
     """端点搜索的运动参数。"""

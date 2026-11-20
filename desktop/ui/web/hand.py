@@ -68,6 +68,7 @@ def build(hand, palm=None, active=None):
     with ui.row().classes('page-toolbar'):
         ui.label('Gray: latest corrected current pose · Light green: target').classes('text-sm')
         reset = ui.button('Reset view')
+        show_target = ui.checkbox('Show target', value=True).props('dense')
         ui.space()
         status = ui.label('Waiting for feedback').classes('text-xs')
     with ui.row().classes('hand-split'):
@@ -154,7 +155,7 @@ def build(hand, palm=None, active=None):
             view.apply('current', [row.get('angle') for row in rows])
             view.apply('target', [row.get('target') for row in rows])
             view.show('current', True)
-            view.show('target', bool(control and online))
+            view.show('target', show_target.value and bool(control and online))
         modules = {(module['finger'], module['module']): module
                    for module in tactile_state.get('modules') or []}
         for key, (cloud, arrow, dot, surface, points, center) in tactile.items():

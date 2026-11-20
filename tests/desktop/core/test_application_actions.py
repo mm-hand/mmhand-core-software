@@ -1163,3 +1163,22 @@ def test_clear_operation_errors_removes_only_failed_records(hand):
     assert [op['operation_id'] for op in hand._application_operations] == ['ok']
     assert hand._application_operations.maxlen == 64
     assert hand.clear_operation_errors().message == 'Cleared 0 error records'
+
+
+def test_curve_history_records_signed_motor_load(hand):
+    from desktop.core.data_models import HandModel
+    state = HandModel()
+    state.has_sensor_data = True
+    state.encoder_mapped_p4_time_ms = 1
+    state.servo_feedback_p4_time_ms = 1
+    state.servo_telem_last_rx_ts = time.time()
+    state.servo_telem_online = [True] * 27
+    state.servo_load = [-590] + [0] * 26
+    hand._application_observe(state)
+    assert hand.application_snapshot()['curves'][-1]['loads'][0] == -590
+
+    state.encoder_mapped_p4_time_ms = 2
+    state.servo_feedback_p4_time_ms = 2
+    state.servo_telem_online[0] = False
+    hand._application_observe(state)
+    assert hand.application_snapshot()['curves'][-1]['loads'][0] is None

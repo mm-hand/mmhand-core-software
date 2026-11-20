@@ -127,7 +127,7 @@ def run_single(io, joint: int, params: config.AutoCalibrationParams,
                      protocol.CALIB_DIAG_PHASE_FIND_MIN, joint, motor,
                      result["tendonLutCount"], result["tendonLutMotor"][0], 0, 1 << motor)
     limit_abs = tendon_motor_abs_limits(
-        result, 0, motor, *config.calibration_margins(io))
+        result, 0, motor, *config.single_margins(io))
     if limit_abs is None:
         return _fail(io, protocol.CALIB_DIAG_REASON_RESULT_BUILD_FAILED,
                      protocol.CALIB_DIAG_PHASE_FIND_MIN, joint, motor,

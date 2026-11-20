@@ -119,7 +119,7 @@ class HostCalibrationIO:
         self._contact_kb = None
 
     def lut_margins(self):
-        if not isinstance(self._output_margins, tuple) or len(self._output_margins) != 2:
+        if not isinstance(self._output_margins, tuple) or len(self._output_margins) != 3:
             raise ValueError('Control parameters are not applied. Wait for parameter synchronization before calibrating.')
         return self._output_margins
 

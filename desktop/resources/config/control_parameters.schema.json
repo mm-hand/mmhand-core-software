@@ -302,7 +302,7 @@
           "group": "output",
           "name": "lut_tight_margin_counts",
           "minimum": 0,
-          "maximum": 1000
+          "maximum": 3000
         },
         {
           "group": "ros2_input",
@@ -473,5 +473,8 @@
         }
       ]
     }
+  },
+  "constants": {
+    "lut_margin_counts_dual": 1200
   }
 }

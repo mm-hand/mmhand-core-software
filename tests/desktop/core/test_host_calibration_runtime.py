@@ -1053,14 +1053,14 @@ def test_unapplied_margins_block_calibration_before_any_device_command(io):
 
 
 def test_calibration_freezes_the_applied_margins_for_the_whole_session(io):
-    io.controller._applied_output_margins = (350, 750)
+    io.controller._applied_output_margins = (350, 750, 900)
     other = runtime.HostCalibrationIO(io.controller, lambda: False, 2, 4)
-    assert other.lut_margins() == (350, 750)
-    io.controller._applied_output_margins = (200, 300)
-    assert other.lut_margins() == (350, 750)
+    assert other.lut_margins() == (350, 750, 900)
+    io.controller._applied_output_margins = (200, 300, 400)
+    assert other.lut_margins() == (350, 750, 900)
 
 
 def test_reconnect_invalidates_previously_applied_margins(io):
-    io.controller._applied_output_margins = (350, 750)
+    io.controller._applied_output_margins = (350, 750, 900)
     io.controller._reset_local_runtime_state()
     assert io.controller._applied_output_margins is None

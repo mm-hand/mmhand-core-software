@@ -406,7 +406,7 @@ def test_overload_uses_fresh_fault_packet_instead_of_inferred_load(hand):
     stamp(state, 'fault_status_last_rx_ts')
     assert hand.application_snapshot()['badges']['Overload'] == 'UNKNOWN'
 
-def test_workspace_badges_and_motor_row_expose_both_workspaces(hand):
+def test_joint_workspace_badge_and_motor_limit_reach(hand):
     state = hand._controller.current_state
     state.encoders[4].angle_out_of_workspace = True
     state.has_servo_angle_data = True
@@ -419,14 +419,20 @@ def test_workspace_badges_and_motor_row_expose_both_workspaces(hand):
     state.servo_logical_range_max[25] = 200
     snapshot = hand.application_snapshot()
     assert snapshot['badges']['Joint workspace'] == 'BEYOND'
-    assert snapshot['badges']['Motor workspace'] == 'BEYOND'
+    assert snapshot['badges']['Motor limit'] == 'REACH'
     assert snapshot['joints'][4]['angle_out_of_workspace'] is True
-    assert snapshot['motors'][25]['motor_beyond_workspace'] is True
-    assert snapshot['motors'][24]['motor_beyond_workspace'] is False
+    assert snapshot['motors'][25]['motor_limit_reach'] is True
+    assert snapshot['motors'][24]['motor_limit_reach'] is False
     state.encoders[4].angle_out_of_workspace = False
     state.servo_angles[25] = 150
-    assert hand.application_snapshot()['badges']['Joint workspace'] == 'CLEAR'
-    assert hand.application_snapshot()['badges']['Motor workspace'] == 'CLEAR'
+    snapshot = hand.application_snapshot()
+    assert snapshot['badges']['Joint workspace'] == 'CLEAR'
+    assert snapshot['badges']['Motor limit'] == 'CLEAR'
+    assert snapshot['motors'][25]['motor_limit_reach'] is False
+    state.servo_angles[25] = 199
+    assert hand.application_snapshot()['motors'][25]['motor_limit_reach'] is True
+    state.servo_angles[25] = 131
+    assert hand.application_snapshot()['motors'][25]['motor_limit_reach'] is False
     state.system_state = 9
     assert hand.application_snapshot()['badges']['Joint workspace'] == 'BEYOND'
     state.system_state = 1

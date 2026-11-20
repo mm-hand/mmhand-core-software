@@ -49,7 +49,7 @@ PACKET_TYPE_SERVO_REBASE_ZERO_RESULT = 0x19  # 硬件ABS设零事务的最终tok
 PACKET_TYPE_DIRECT_TARGET_RESULT = 0x1A  # 通用直控目标完成总线同步写后的事务结果，与机械到位独立
 PACKET_TYPE_CONTROL_PARAMETERS = 0x1C  # 参数应用/查询结果：block、状态、修订、CRC
 PACKET_TYPE_CONTROL_COMPONENTS = 0x1D  # 同周期PI、换向和慢反馈分量及采样分频
-PACKET_TYPE_ADAPTIVE_KP = 0x1F  # 21 路自适应 Kp 倍率与实际 Kp
+PACKET_TYPE_ADAPTIVE_KP = 0x1F  # 21 路自适应 Kp/vB 倍率与实际值
 PACKET_TYPE_SERVO_ONLINE_STATUS = 0x20  # 27路上线会话、固件主次版本和配置检查结果
 
 # Desktop -> P4 命令。

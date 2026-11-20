@@ -340,7 +340,7 @@ S3 RX→触觉解析与USB发送
 | Control / Feedback Control | 五指关节卡片、角度输入/滑条、单行Send、Manual允许范围、当前角、ROS2目标、raw和相关电机ABS。ENABLE Selected、Clear Faults、Send Selected、ROS2 INPUT。每个关节以P4状态确认ENABLED/DISABLED；仅该关节实际碰撞时追加红色COLLISION DETECTED。 |
 | Control / Direct Control | 按关节归组的电机卡片、ABS、load、关联关节角、ABS范围和输入/滑条/±1/Send。ENABLE Selected、Clear Faults、Send Selected、Reset Motor Multi-turn Position；设零按实际执行回读，并使有关标定/锚点失效。 |
 | Replay | Import CSV、Play、五指/关节复选框、文件名/帧数/时长/频率、警告、逐关节当前角/目标/误差表、回放状态与进度；取消用全局STOP，无Pause。只读当前支持的CSV字段，不保留旧格式猜测。 |
-| Plot / Curves | 单个关节曲线（实测/目标角）；选择关节后按电机自动显示 P/I/D/换向/配对恢复/Total counts，每电机一张图；Clear Plot。顶栏 Save Data 勾选录制范围（01–08 CSV 总表，含 05 全量触觉）；默认连接后按默认 7 项自动录制；本页不显示记录状态。 |
+| Plot / Curves | 单个关节曲线（实测/目标角）；选择关节后按电机自动显示 P/I/D/换向/配对恢复/Total counts，每电机一张图，下方再按电机加一张有符号负载图（-1023…1023 counts，离线或无遥测时断线）；Clear Plot。顶栏 Save Data 勾选录制范围（01–08 CSV 总表，含 05 全量触觉）；默认连接后按默认 7 项自动录制；本页不显示记录状态。 |
 | Plot / Tactile | 平面手形、15个安装位置、X/Y/Z/Magnitude切换、手指/模块详情、Fx/Fy/Fz与新鲜度。S3直连FULL按厂商XY显示52或25测点；P4-only SUMMARY显示Σ合力；无新鲜传感器数据不伪造测点，位置灰/无有效数据。数值仍是设备raw单位，不是已标定的N或Pa。 |
 | Settings / Renumber Motor | Scan (0–30)、Scan (0–253)、Renumber All、BUS/Current ID/New ID输入表、完整等比电机ID示意图。P4有效连接门禁；文字说明同BUS同ID无法区分，上线检查统一配置84/85/86=254/254/0，改号流程不再操作这些参数。无逐行改号按钮，无新增Reset ID上层。 |
 | Settings / Control Parameters | Save Parameters、Restore Defaults、revision/CRC/P4应用状态；Kp config/Ki config/Kd config（AA/MCP/PIP/DIP/CMC五组）、Ki组内共享积分限幅/噪声/确认时间、双腱恢复增益、编码器快慢窗、快速换向、碰撞阈值、最终输出约束、ROS2滤波分组折叠面板。Kp/Ki/Kd按关节类型共用，无每关节覆盖；恢复默认读本机默认JSON。 |

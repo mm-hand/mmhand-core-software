@@ -49,9 +49,9 @@ def build(hand, act):
                             statuses.append('COLLISION DETECTED')
                         if row.get('angle_out_of_workspace'):
                             statuses.append('JOINT BEYOND WORKSPACE')
-                        if any(snapshot['motors'][m].get('motor_beyond_workspace') for m in row['motors']):
-                            statuses.append('MOTOR BEYOND WORKSPACE')
-                        control(statuses, 'P4-confirmed feedback control, per-joint collision, joint-angle and motor workspace state.')
+                        if any(snapshot['motors'][m].get('motor_limit_reach') for m in row['motors']):
+                            statuses.append('MOTOR LIMIT: REACH')
+                        control(statuses, 'P4-confirmed feedback control, per-joint collision, joint-angle and motor limit state.')
                         elec(row.get('encoder_state'), j)
                         loss(snapshot, joint=j)
                         control_abs = ' / '.join(show(snapshot['motors'][m]['abs']) for m in row['motors'])

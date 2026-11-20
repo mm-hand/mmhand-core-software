@@ -280,11 +280,11 @@ void stepPullJointIntoWorkspaceController(SystemRuntimeContext* sharedData, uint
         const uint8_t motor = group.actuators[actuator].motorChannel;
         const int32_t delta = phase == 1 ? kDualTightenStepCounts : kDualTensionStepCounts;
         const int32_t target = motorApplyTendonDelta(motor, servo.servoAngles[motor], delta);
-        int32_t low = 0, high = 0;
+        int32_t low = 0, high = 0, releaseMargin, tightMargin;
+        mmhand::control::lutMarginsForJoint(joint, parameters, &releaseMargin, &tightMargin);
         const bool hasRange = tendonCalibrationMotorAbsRangeWithMargins(
             calibration.result, actuator, motor,
-            parameters[mmhand::control::OutputLutReleaseMarginCounts],
-            parameters[mmhand::control::OutputLutTightMarginCounts], &low, &high);
+            releaseMargin, tightMargin, &low, &high);
         const int32_t current = servo.servoAngles[motor];
         // Recovering a slack tendon can start just outside the calibrated LUT
         // range; tightening toward the range is legal, so clamp the first
@@ -328,9 +328,7 @@ void stepPullJointIntoWorkspaceController(SystemRuntimeContext* sharedData, uint
             int32_t releaseLow = 0, releaseHigh = 0;
             const bool releaseRange = tendonCalibrationMotorAbsRangeWithMargins(
                 calibration.result, ri, release,
-                parameters[mmhand::control::OutputLutReleaseMarginCounts],
-                parameters[mmhand::control::OutputLutTightMarginCounts],
-                &releaseLow, &releaseHigh);
+                releaseMargin, tightMargin, &releaseLow, &releaseHigh);
             // Mirror the tightening side: the antagonist can sit outside its
             // calibrated LUT range after the joint settled on a stop. A release
             // step that moves it back toward the range is legal, so clamp the

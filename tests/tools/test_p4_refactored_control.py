@@ -44,6 +44,7 @@ inline bool tendonCalibrationMotorAbsRangeWithMargins(const JointCalibrationResu
 '''
     fixture += generated + '\n'
     fixture += (SRC / 'generated/RampParameters.generated.h').read_text(encoding='utf-8') + '\n'
+    fixture += (SRC / 'config/AdaptiveControlConfig.h').read_text(encoding='utf-8') + '\n'
     fixture += stripped(SRC / 'system/SnapshotTimestamp.h') + '\n'
     fixture += stripped(SRC / 'hal/servo/ServoValue.h') + '\n'
     for name in ('ControlParameters', 'RampParameters', 'FeedbackFilter', 'JointFeedbackController'):
@@ -204,16 +205,116 @@ int main() {
         for (uint32_t t = 1000; t <= 18000; t += 10) {
             sample(c, t, fminf((t - 1000) * 0.01f, 140.0f), error);
             const float scale = c.kpScaleOf(0);
-            if (t < 1500) assert(scale == 1.0f); // needs 500 ms of evidence
+            if (t < 1250) assert(scale == 1.0f); // needs 300 ms of evidence
             if (scale != previous) {
-                assert(!changed || t - changed >= 2000);
+                assert(!changed || t - changed >= 1000);
                 changed = t;
                 previous = scale;
             }
             if (t > 15500) assert(changed <= 15000); // no growth at rest
         }
-        assert(fabsf(c.kpScaleOf(0) - (error == 2.0f ? 1.3f : 1.0f)) < 1e-6f);
+        assert(fabsf(c.kpScaleOf(0) - (error == 2.0f ? 2.0f : 1.0f)) < 1e-6f);
         assert(c.kpScaleOf(1) == 1.0f);
+    }
+
+    // A fast target must not look like a stationary oscillation.
+    {
+        JointFeedbackController c;
+        for (uint32_t t = 1000; t <= 6000; t += 10) {
+            const float target = 10.0f + (t - 1000) * 0.01f;
+            const float error = (t / 250 % 2) ? 3.0f : -3.0f;
+            sample(c, t, target, error);
+        }
+        assert(c.kpScaleOf(0) >= 1.0f);
+    }
+
+    // vB adaptation: slow reversal raises it; load events are safety-only;
+    // post-reversal overshoot lowers it; STOP/revision keep it, reflash resets it.
+    p.values[ReversalConfirmDegAa] = 0.6f;
+    p.values[ReversalConfirmMs] = 20.0f;
+    p.values[ReversalTakeupMaxAa] = 40.0f;
+    p.values[ReversalExitTravelDegAa] = 0.25f;
+    ramp.values[ReversalRampB0Aa] = 2.0f;
+    ramp.values[ReversalRampVbAa] = 50.0f;
+    ramp.values[ReversalRampLoadLimitAa] = 900.0f;
+    ramp.values[ReversalRampTakeupTimeoutMs] = 600.0f;
+    auto feed = [&](JointFeedbackController& c, uint32_t t, float target, float fast) {
+        afb.fast = fast; afb.slow = fast;
+        return c.compute(0, target, afb, t, aservo, atel, lut, 3, p, ramp);
+    };
+    auto begin_reversal = [&](JointFeedbackController& c, uint32_t t0) {
+        feed(c, t0, 0, 0);
+        feed(c, t0 + 10, 2, 0);
+        feed(c, t0 + 20, 2, 0);
+        feed(c, t0 + 30, 0, 0);
+        feed(c, t0 + 40, -2, 0);
+        feed(c, t0 + 50, -2, 0);
+        return t0 + 50;
+    };
+    {
+        atel.load[0] = 0;
+        JointFeedbackController c;
+        uint32_t start = begin_reversal(c, 1000);
+        for (uint32_t t = start + 10; t < start + 170; t += 10) feed(c, t, -2, 0);
+        feed(c, start + 170, -2, -0.25);
+        assert(fabsf(c.vbScaleOf(0) - 1.08f) < 1e-4f);
+        const float before = c.vbScaleOf(0);
+        feed(c, start + 180, -2, -4.5);
+        assert(c.vbScaleOf(0) < before);
+        const float after = c.vbScaleOf(0);
+        feed(c, start + 190, -2, -4.5);
+        assert(fabsf(c.vbScaleOf(0) - after) < 1e-6f);
+        c.resetAll();
+        feed(c, start + 200, -2, -2);
+        assert(fabsf(c.vbScaleOf(0) - after) < 1e-6f);
+        p.revision++;
+        feed(c, start + 210, -2, -2);
+        assert(fabsf(c.vbScaleOf(0) - after) < 1e-6f);
+        JointFeedbackController fresh;
+        assert(fresh.vbScaleOf(0) == 1.0f);
+    }
+    {
+        atel.load[0] = 0;
+        JointFeedbackController c;
+        uint32_t start = begin_reversal(c, 3000);
+        for (uint32_t t = start + 10; t < start + 40; t += 10) feed(c, t, -2, 0);
+        feed(c, start + 50, -2, -0.25);
+        assert(fabsf(c.vbScaleOf(0) - 1.0f) < 1e-6f);
+    }
+    {
+        atel.load[0] = 950;
+        JointFeedbackController c;
+        uint32_t start = begin_reversal(c, 4000);
+        for (uint32_t t = start + 10; t < start + 170; t += 10) feed(c, t, -2, 0);
+        feed(c, start + 170, -2, -0.25);
+        assert(fabsf(c.vbScaleOf(0) - 1.0f) < 1e-6f); // load is safety-only
+        atel.load[0] = 0;
+    }
+    {
+        atel.load[0] = 0;
+        JointFeedbackController c;
+        uint32_t start = begin_reversal(c, 5000);
+        for (uint32_t t = start + 10; t <= start + 610; t += 10) feed(c, t, -2, 0);
+        assert(fabsf(c.vbScaleOf(0) - 1.08f) < 1e-4f); // timeout without load
+    }
+    {
+        atel.load[0] = 950;
+        JointFeedbackController c;
+        uint32_t start = begin_reversal(c, 6000);
+        for (uint32_t t = start + 10; t <= start + 610; t += 10) feed(c, t, -2, 0);
+        assert(fabsf(c.vbScaleOf(0) - 1.0f) < 1e-6f); // timeout with load
+        atel.load[0] = 0;
+    }
+
+    {
+        atel.load[0] = 0;
+        JointFeedbackController c;
+        uint32_t start = begin_reversal(c, 7000);
+        feed(c, start + 10, -2, 3.0f);
+        assert(fabsf(c.vbScaleOf(0) - 0.90f) < 1e-4f); // old-direction peak overshoot
+        const float after = c.vbScaleOf(0);
+        feed(c, start + 20, -2, 3.0f);
+        assert(fabsf(c.vbScaleOf(0) - after) < 1e-6f); // once per reversal
     }
 
     // Small noise, slow crossings and a one-way overshoot must not lower Kp.
@@ -267,16 +368,22 @@ int main() {
         assert(c.kpScaleOf(0) == 1.0f);
         for (uint32_t t = resume + 100; t < resume + 400; t += 10) sample(c, t, 10, t < resume + 300 ? -3 : 3);
         assert(fabsf(c.kpScaleOf(0) - 0.9f) < 1e-6f);
-        for (uint32_t t = resume + 400; t < resume + 2300; t += 10) sample(c, t, 10 + (t - resume - 400) * 0.01f, 1.5f);
-        assert(fabsf(c.kpScaleOf(0) - 0.9f) < 1e-6f); // 2 s cooldown after lowering
-        for (uint32_t t = resume + 2300; t <= resume + 2400; t += 10) sample(c, t, 10 + (t - resume - 400) * 0.01f, 1.5f);
+        for (uint32_t t = resume + 400; t < resume + 1300; t += 10) sample(c, t, 10 + (t - resume - 400) * 0.01f, 1.5f);
+        assert(fabsf(c.kpScaleOf(0) - 0.9f) < 1e-6f); // 1 s cooldown after lowering
+        for (uint32_t t = resume + 1300; t <= resume + 1450; t += 10) sample(c, t, 10 + (t - resume - 400) * 0.01f, 1.5f);
         assert(c.kpScaleOf(0) > 0.9f);
     }
 
-    // A revision resets the multiplier; disabling uses the configured base Kp.
-    p.revision++;
+    // STOP/revision preserve learned scales; a new controller (reflash) resets them.
+    const float learned = adaptive.kpScaleOf(0);
+    adaptive.resetAll();
     sample(adaptive, 30000, 10, 0);
-    assert(fabsf(adaptive.kpScaleOf(0) - 1.0f) < 1e-6f);
+    assert(fabsf(adaptive.kpScaleOf(0) - learned) < 1e-6f);
+    p.revision++;
+    sample(adaptive, 30010, 10, 0);
+    assert(fabsf(adaptive.kpScaleOf(0) - learned) < 1e-6f);
+    JointFeedbackController fresh;
+    assert(fresh.kpScaleOf(0) == 1.0f && fresh.vbScaleOf(0) == 1.0f);
     p.values[AdaptiveKpEnabled] = 0.0f;
     assert(fabsf(adaptive.effectiveKpOf(0, p) - p[JointKpAa]) < 1e-6f);
     return 0;

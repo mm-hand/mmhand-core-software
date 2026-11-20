@@ -324,11 +324,11 @@ class _DualMachine:
         limits = {}
         for actuator, motor in enumerate(motors):
             bounds = tendon_motor_abs_limits(
-                result, actuator, motor, *config.calibration_margins(self.io))
+                result, actuator, motor, *config.dual_margins(self.io))
             if bounds is None:
                 lo, hi = sorted(measured[actuator])
                 bounds = extend_motor_abs_limits(
-                    motor, lo, hi, *config.calibration_margins(self.io))
+                    motor, lo, hi, *config.dual_margins(self.io))
             if bounds is None:
                 self._diag(protocol.CALIB_DIAG_REASON_RESULT_BUILD_FAILED,
                            protocol.CALIB_DIAG_PHASE_FIND_MIN, motor=motor, a=0, b=0, c=0,
