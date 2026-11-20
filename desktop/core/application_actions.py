@@ -30,6 +30,7 @@ from .data_recording.topic_schema import DEFAULT_TOPICS, TOPIC_FIELDNAMES
 from .generated_control_parameters import DEFAULT_OUTPUT_MARGINS
 from .host_calibration.config import joint_motors, shorten_sign
 from .session_log import close_session_log, log_session, session_log_since
+from .comm_layer import find_unique_usb_port
 from .communication.connection_diagnostics import describe_connection_failure
 from .console_snapshot import enrich_snapshot, motor_quality
 from .id_actions import IdResetActions
@@ -51,6 +52,7 @@ from .protocol import (
 # 串口枚举在 Windows 上每次约 20-100ms；0.2s 轮询会持续占用 ~12% 单核。
 # 设备列表 1s 刷新一次即可满足人工连接操作，连接失败时随后快速重试。
 DEVICE_DISCOVERY_INTERVAL_S = 1.0
+P4_RECONNECT_INTERVAL_S = 2.0
 
 # P4 回正超时为 10 秒，主机多留 5 秒等待状态回报。
 PULL_JOINT_INTO_WORKSPACE_HOST_TIMEOUT_S = 15
@@ -180,6 +182,8 @@ class ApplicationActions(IdResetActions):
         self._application_epoch = 0
         self._application_busy = None
         self._application_connect = None
+        self._p4_reconnect_identity = None
+        self._p4_reconnect_at = None
         self._application_operations = deque(maxlen=64)
         self._manual_drafts = {}
         self._manual_capture_status = {}
@@ -365,6 +369,7 @@ class ApplicationActions(IdResetActions):
                             comm.connect()
                         except Exception as exc:
                             log_session('COMM', f'S3 reconnect failed: {exc}')
+                    self._poll_p4_reconnect(now)
                     self._reconcile_recording()
                     self._schedule_control_parameter_sync()
                     self._application_stop.wait(0.2)
@@ -372,11 +377,33 @@ class ApplicationActions(IdResetActions):
             self._discovery_thread = threading.Thread(target=poll, name='mmhand-devices', daemon=True)
             self._discovery_thread.start()
 
+    def _poll_p4_reconnect(self, now):
+        with self._application_lock:
+            identity = self._p4_reconnect_identity
+            if self._application_closed or identity is None or self.is_comm_connected():
+                self._p4_reconnect_at = None
+                return
+            if self._p4_reconnect_at is None:
+                self._p4_reconnect_at = now + P4_RECONNECT_INTERVAL_S
+            if now < self._p4_reconnect_at or self._application_busy:
+                return
+            self._p4_reconnect_at = now + P4_RECONNECT_INTERVAL_S
+
+        try:
+            port = find_unique_usb_port(identity)
+        except Exception as exc:
+            log_session('COMM', f'P4 reconnect discovery failed: {exc}')
+            return
+        with self._application_lock:
+            if port and identity == self._p4_reconnect_identity and not self.is_comm_connected():
+                self._queue_connect(port, reconnect_identity=identity)
+
     def close_application(self):
         with self._application_lock:
             if self._application_closed:
                 return
             self._application_closed = True
+            self._p4_reconnect_identity = None
             self._contact_capture = None
         self.stop_motion(emergency=True, source='application shutdown')
         self._application_stop.set()
@@ -494,6 +521,8 @@ class ApplicationActions(IdResetActions):
     def _application_observe_identity(self, device_id):
         with self._application_lock:
             connection = self._application_connect
+            if connection is not None and connection['epoch'] != self._application_epoch:
+                return False
             initial_identity = (connection is not None
                                 and connection['operation_id'] == self._application_busy
                                 and connection['epoch'] == self._application_epoch
@@ -534,7 +563,8 @@ class ApplicationActions(IdResetActions):
                     and self._application_connect['operation_id'] == operation_id):
                 self._application_connect = None
 
-    def submit_operation(self, name, action, *, requires_device=True, cleanup=False, scope='Global', p4_connection=False):
+    def submit_operation(self, name, action, *, requires_device=True, cleanup=False,
+                         scope='Global', p4_connection=False, automatic=False):
         with self._application_lock:
             if self._application_closed:
                 return OperationResult(False, None, 'Application is shutting down')
@@ -544,9 +574,12 @@ class ApplicationActions(IdResetActions):
                 return OperationResult(False, None, 'P4 is disconnected or status data is stale. Check the connection.')
             operation_id = uuid4().hex[:12]
             epoch = self._application_epoch
+            stop_requested_at = self._estop_requested_at
             self._application_busy = operation_id
-            if p4_connection:
-                self._application_connect = {'operation_id': operation_id, 'epoch': epoch, 'device_id': ''}
+            connection = {'operation_id': operation_id, 'epoch': epoch,
+                          'device_id': '', 'automatic': automatic} if p4_connection else None
+            if connection is not None and not cleanup:
+                self._application_connect = connection
             self._application_operations.append({'operation_id': operation_id, 'name': name,
                                                  'time': time.strftime('%H:%M:%S'), 'scope': scope,
                                                  'status': 'PENDING', 'message': 'Accepted', 'phase': 'queued'})
@@ -557,6 +590,8 @@ class ApplicationActions(IdResetActions):
                         if epoch != self._application_epoch or self._application_closed:
                             self._finish_application_operation(operation_id, False, 'Operation cancelled')
                             return
+                        if connection is not None:
+                            self._application_connect = connection
                         for item in self._application_operations:
                             if item['operation_id'] == operation_id:
                                 item.update(status='RUNNING', phase='running')
@@ -568,9 +603,10 @@ class ApplicationActions(IdResetActions):
                         if not (cancelled and p4_connection):
                             self._finish_application_operation(operation_id, ok, message)
                             return
+                        stop_lower = not automatic or self._estop_requested_at != stop_requested_at
                     # Join controller callbacks outside the application lock;
                     # cancellations during saved-state loading also close P4.
-                    self.disconnect(stop_lower=True)
+                    self.disconnect(stop_lower=stop_lower)
                     self._finish_application_operation(operation_id, ok, message)
                 except Exception as exc:
                     self._finish_application_operation(operation_id, False, f'{name} failed: {exc}')
@@ -605,17 +641,46 @@ class ApplicationActions(IdResetActions):
 
     def request_connect(self, port, *, tactile=False):
         if not str(port).strip():
-            return OperationResult(False, None, 'Select a device. The port is never changed automatically.')
+            return OperationResult(False, None, 'Select a device.')
+        with self._application_lock:
+            if tactile:
+                return self._queue_connect(port, tactile=True)
+            active = self._application_connect
+            replacing = bool(active and active['automatic']
+                             and active['operation_id'] == self._application_busy)
+            if replacing:
+                self._application_epoch += 1
+            result = self._queue_connect(port, replacing=replacing)
+            if result.accepted:
+                self._p4_reconnect_identity = None
+                self._p4_reconnect_at = None
+            return result
+
+    def _queue_connect(self, port, *, tactile=False, reconnect_identity=None, replacing=False):
+        automatic = reconnect_identity is not None
+
+        def ready(state):
+            return (self._fresh_application_state() and state.protocol_compatible
+                    and (not automatic or (not state.control_enabled and not state.servo_target_owner)))
 
         def connect(epoch):
+            if automatic:
+                with self._application_lock:
+                    if reconnect_identity != self._p4_reconnect_identity:
+                        return False, 'Connection cancelled'
+                if find_unique_usb_port(reconnect_identity) != port:
+                    return False, 'The P4 USB device is no longer uniquely available'
             ok = self.connect_tactile_serial(port) if tactile else self.connect(port)
             if epoch != self._application_epoch:
                 if tactile:
                     self.disconnect_tactile_serial()
                 return False, 'Connection cancelled'
-            if ok and not tactile and not self._wait_application(
-                    lambda state: self._fresh_application_state() and state.protocol_compatible,
-                    epoch, 10):
+            if ok and automatic and getattr(self.comm, 'usb_identity', None) != reconnect_identity:
+                self.disconnect(stop_lower=False)
+                return False, 'P4 USB identity changed during reconnect'
+            if ok and not tactile and not self._wait_application(ready, epoch, 10):
+                if epoch != self._application_epoch:
+                    return False, 'Connection cancelled'
                 comm = self.comm
                 getter = getattr(comm, 'connection_diagnostics', None)
                 diagnostics = getter() if callable(getter) else {'port': str(port)}
@@ -635,6 +700,10 @@ class ApplicationActions(IdResetActions):
                 except (OSError, ValueError, KeyError):
                     pass
                 with self._application_lock:
+                    if ok and epoch == self._application_epoch:
+                        self._p4_reconnect_at = None
+                        if not automatic:
+                            self._p4_reconnect_identity = getattr(self.comm, 'usb_identity', None)
                     self._selected_joints = ()
                     self._selected_motors = ()
                     self._curve_history.clear()
@@ -650,10 +719,15 @@ class ApplicationActions(IdResetActions):
                       self._controller.last_sync_status)
             return False, f'Connection failed on {port}: {detail}'
 
-        return self.submit_operation('Connect S3' if tactile else 'Connect P4', connect,
-                                     requires_device=False, p4_connection=not tactile)
+        name = 'Reconnect P4' if automatic else 'Connect S3' if tactile else 'Connect P4'
+        return self.submit_operation(name, connect, requires_device=False, cleanup=replacing,
+                                     p4_connection=not tactile, automatic=automatic)
 
     def request_disconnect(self, *, tactile=False):
+        if not tactile:
+            with self._application_lock:
+                self._p4_reconnect_identity = None
+                self._p4_reconnect_at = None
         self.stop_motion(source='disconnect S3' if tactile else 'disconnect P4')
         with self._application_lock:
             self._selected_joints = ()

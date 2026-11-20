@@ -20,10 +20,13 @@ _SERVO_ABS_FIELDS = ("startServoAbs", "tightServoAbs", "zeroServoAbs")
 
 
 def turn_offset(anchor: int, current: int, shorten_sign: int) -> int:
-    """断电后只沿放绳方向移动不足一圈，将标定平移到当前坐标。"""
+    """原生 ABS 在第 0 圈时，按断电后只沿放绳方向移动不足一圈推算。"""
     if shorten_sign not in (-1, 1):
         raise ValueError('invalid tendon direction')
-    delta = shorten_sign * (int(anchor) - int(current))
+    current = int(current)
+    if not 0 <= current < TURN_COUNTS:
+        return 0
+    delta = shorten_sign * (int(anchor) - current)
     if -TURN_ROUNDING_DEADBAND < delta < 0:
         delta = 0
     return shorten_sign * (delta // TURN_COUNTS)

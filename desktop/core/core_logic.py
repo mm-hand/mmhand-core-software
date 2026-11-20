@@ -405,6 +405,14 @@ class HandController:
         if not self._stop_persistence_worker():
             self.last_sync_status='Previous anchor write is still completing; connection not changed'
             return False
+        self.running = False
+        if self.comm:
+            self.comm.disconnect()
+        if self._update_thread and self._update_thread.is_alive():
+            self._update_thread.join(timeout=2.0)
+            if self._update_thread.is_alive():
+                self.last_sync_status = 'Previous P4 connection is still closing'
+                return False
         self._reset_local_runtime_state("SYNCING")
         log_session("CTRL", f"initialize requested port={comm_port}")
         try:

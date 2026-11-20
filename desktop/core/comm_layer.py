@@ -362,6 +362,20 @@ def list_ports() -> List[tuple]:
     return [(p.device, p.description) for p in serial.tools.list_ports.comports()]
 
 
+def _usb_identity(port):
+    if port.vid is not None and port.pid is not None and port.serial_number:
+        return port.vid, port.pid, port.serial_number
+    return None
+
+
+def find_unique_usb_port(identity):
+    if serial is None or identity is None:
+        return None
+    matches = [port.device for port in serial.tools.list_ports.comports()
+               if _usb_identity(port) == identity]
+    return matches[0] if len(matches) == 1 else None
+
+
 def normalize_serial_port_name(port: str) -> str:
     value = (port or "").strip()
     if value.startswith("\\\\.\\"):
@@ -914,6 +928,7 @@ class LowerComputerComm(_SerialSessionBase):
 
     def __init__(self, port: str, baudrate: int = BAUDRATE):
         self.port = (port or "").strip()
+        self.usb_identity = None
         self._control_parameter_condition = threading.Condition()
         self._control_parameter_result = None
         self._control_ramp_parameter_result = None
@@ -1000,9 +1015,11 @@ class LowerComputerComm(_SerialSessionBase):
             self._connection_rx_packets = 0
             self._connection_last_rx = 0.0
             self._connection_error = ''
+            self.usb_identity = None
             try:
                 for device in serial.tools.list_ports.comports():
                     if device.device == self.port:
+                        self.usb_identity = _usb_identity(device)
                         log_session('COMM', f'identity port={self.port} vid={device.vid} pid={device.pid} '
                                     f'serial={device.serial_number} location={device.location}')
                         break

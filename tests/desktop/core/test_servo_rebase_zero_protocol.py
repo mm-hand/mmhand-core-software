@@ -488,14 +488,22 @@ def test_reconcile_loads_resealed_shifted_snapshot(tmp_path, monkeypatch):
     controller.comm.send_command.assert_called_once_with(('trust_multiturn', 1))
 
 
-def test_reconcile_shifts_only_unknown_motors(tmp_path, monkeypatch):
+@pytest.mark.parametrize('native_abs', [7061, 7300])
+def test_reconcile_shifts_only_unknown_motors_on_turn_zero(tmp_path, monkeypatch, native_abs):
     controller = _controller(monkeypatch)
-    controller.current_state.multi_turn_unknown_bitmap = 1
-    controller.current_state.servo_angles[:2] = [200, 2600]
+    controller.current_state.multi_turn_unknown_bitmap = 3
+    controller.current_state.servo_angles[:2] = [200, native_abs]
     path = tmp_path / 'snapshot.json'
     snapshot = _empty_v7_snapshot()
     snapshot['multiturn_anchor_valid_bitmap'] = '0x3'
-    snapshot['multiturn_anchor_logical_abs'][:2] = [5402, 5402]
+    snapshot['multiturn_anchor_logical_abs'][:2] = [5402, 6366]
+    snapshot['motor_abs_limit_valid_bitmap'] = '0x3'
+    snapshot['motor_abs_limit_min'][:2] = [5000, 4099]
+    snapshot['motor_abs_limit_max'][:2] = [8000, 7152]
+    snapshot['joint_calib_results'][0] = {
+        'joint': 0, 'success': True,
+        'tendonLutMotor': [0, 1], 'tendonLutMotorAbs': [[5500, 6000], [5000, 6100]],
+    }
     atomic_write_snapshot(path, snapshot)
     controller._multiturn_store = MagicMock(path=path)
     controller._multiturn_recovery_anchors = lambda _state: (
@@ -503,8 +511,12 @@ def test_reconcile_shifts_only_unknown_motors(tmp_path, monkeypatch):
     )
     controller.load_calibration_snapshot = MagicMock(return_value=(True, 'loaded'))
     assert controller.reconcile_multiturn_frame(3)[0]
-    assert read_snapshot(path)['multiturn_anchor_logical_abs'][:2] == [1306, 5402]
-    controller.comm.send_command.assert_called_once_with(('trust_multiturn', 1))
+    shifted = read_snapshot(path)
+    assert shifted['multiturn_anchor_logical_abs'][:2] == [1306, 6366]
+    assert shifted['motor_abs_limit_min'][:2] == [904, 4099]
+    assert shifted['motor_abs_limit_max'][:2] == [3904, 7152]
+    assert shifted['joint_calib_results'][0]['tendonLutMotorAbs'] == [[1404, 1904], [5000, 6100]]
+    controller.comm.send_command.assert_called_once_with(('trust_multiturn', 3))
 
 
 def test_new_anchor_save_failure_keeps_scope_blocked_and_retries(monkeypatch):

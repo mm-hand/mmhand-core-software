@@ -2,12 +2,15 @@
 
 from _clock_helpers import stamp
 
+import errno
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
+from desktop.core import comm_layer
 from desktop.core.data_models import HandModel
 from desktop.core.protocol import HOST_PROTOCOL_VERSION, SYSTEM_STATE_READY
 from _conftest_support import wait_operation
@@ -32,6 +35,105 @@ def publish_state(hand, device_id=None):
     hand._controller.current_state = state
     for callback in tuple(hand._controller.update_callbacks):
         callback(state)
+
+
+def _drop_p4(hand, monkeypatch):
+    identity = (0x303A, 0x1001, 'p4-a')
+    serial = Mock(is_open=True)
+
+    def initialize(port):
+        comm = comm_layer.LowerComputerComm('')
+        comm.port = port
+        comm.usb_identity = identity
+        comm._transport.attach(serial)
+        comm.running = True
+        hand._controller.comm = comm
+        publish_state(hand, DEVICE_A)
+        return True
+
+    initializer = Mock(side_effect=initialize)
+    monkeypatch.setattr(hand._controller, 'initialize', initializer)
+    monkeypatch.setattr(hand, 'is_comm_connected', lambda: hand.comm.is_connected())
+    assert wait_operation(hand, hand.request_connect('COM13'))['status'] == 'SUCCESS'
+    read = Mock(side_effect=OSError(errno.EIO, 'Input/output error'))
+    monkeypatch.setattr(hand.comm._transport, 'read_available', read)
+    hand.comm._rx_loop()
+    serial.close.assert_called_once()
+    assert not hand.is_comm_connected()
+    return initializer, identity
+
+
+@pytest.mark.parametrize('port', ['COM13', 'COM14'])
+def test_p4_reconnect_after_serial_eio_uses_unique_usb_identity(hand, monkeypatch, port):
+    initializer, identity = _drop_p4(hand, monkeypatch)
+    vid, pid, serial_number = identity
+    device = SimpleNamespace(device=port, vid=vid, pid=pid, serial_number=serial_number)
+    other = SimpleNamespace(device='COM13', vid=vid, pid=pid, serial_number='p4-b')
+    ports = [other]
+    monkeypatch.setattr(comm_layer.serial.tools.list_ports, 'comports', lambda: ports)
+
+    hand._poll_p4_reconnect(10)
+    hand._poll_p4_reconnect(11.9)
+    assert initializer.call_count == 1
+    hand._poll_p4_reconnect(12)  # wrong serial on the old port
+    duplicate = SimpleNamespace(device='COM15', vid=vid, pid=pid, serial_number=serial_number)
+    ports[:] = [device, duplicate]
+    hand._poll_p4_reconnect(14)
+    assert initializer.call_count == 1
+
+    ports[:] = [device]
+    hand._poll_p4_reconnect(16)
+    operation = hand._application_operations[-1]
+    result = SimpleNamespace(accepted=True, operation_id=operation['operation_id'])
+    assert wait_operation(hand, result)['status'] == 'SUCCESS'
+    assert operation['name'] == 'Reconnect P4'
+    initializer.assert_called_with(port)
+    assert hand.is_comm_connected()
+    assert not hand.ros2_output_armed()
+    state = hand.get_state_snapshot()
+    assert not state.control_enabled and state.servo_target_owner == 0
+    assert hand.comm.tx_queue.empty()
+
+
+@pytest.mark.parametrize('action', ['disconnect', 'replace', 'exit'])
+def test_manual_action_cancels_p4_reconnect(hand, monkeypatch, action):
+    initializer, _ = _drop_p4(hand, monkeypatch)
+    monkeypatch.setattr('desktop.core.application_actions.find_unique_usb_port', lambda _: 'COM14')
+    entered, release = threading.Event(), threading.Event()
+    initialize = initializer.side_effect
+
+    def delayed_initialize(port):
+        if port == 'COM14':
+            entered.set()
+            assert release.wait(2)
+        return initialize(port)
+
+    initializer.side_effect = delayed_initialize
+    hand._poll_p4_reconnect(10)
+    hand._poll_p4_reconnect(12)
+    assert entered.wait(1)
+    reconnect = SimpleNamespace(accepted=True, operation_id=hand._application_operations[-1]['operation_id'])
+    try:
+        if action == 'disconnect':
+            followup = hand.request_disconnect()
+        elif action == 'replace':
+            followup = hand.request_connect('COM15')
+        else:
+            closing = threading.Thread(target=hand.close_application)
+            closing.start()
+            assert hand._application_stop.wait(1)
+    finally:
+        release.set()
+    if action == 'exit':
+        closing.join(3)
+        assert not closing.is_alive()
+    else:
+        assert wait_operation(hand, followup)['status'] == 'SUCCESS'
+    assert wait_operation(hand, reconnect)['status'] == 'FAILED'
+    assert hand.is_comm_connected() == (action == 'replace')
+    hand._poll_p4_reconnect(20)
+    hand._poll_p4_reconnect(22)
+    assert initializer.call_count == (3 if action == 'replace' else 2)
 
 @pytest.mark.parametrize(
     "connections",
