@@ -1900,8 +1900,6 @@ class ApplicationActions(IdResetActions):
                                   and 0 <= now - state.adaptive_kp_last_rx_ts <= 2.0),
                     'scale': list(state.adaptive_kp_scale),
                     'effective': list(state.adaptive_kp_effective),
-                    'vb_scale': list(state.adaptive_vb_scale),
-                    'vb_effective': list(state.adaptive_vb_effective),
                     'age_ms': (int((now - state.adaptive_kp_last_rx_ts) * 1000)
                                if state.adaptive_kp_last_rx_ts else None),
                 },

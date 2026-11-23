@@ -1,6 +1,7 @@
 import json
 from copy import deepcopy
 import struct
+import zlib
 from pathlib import Path
 import pytest
 from desktop.core.control_parameters import (
@@ -33,7 +34,7 @@ def test_persist_validate_restore_and_invalid_current_is_not_overwritten(tmp_pat
     invalid=ControlParameterStore(path)
     assert invalid.error and path.read_text()=='{corrupt'
     invalid.restore_defaults()
-    assert not invalid.error and json.loads(path.read_text())['schema_version']==7
+    assert not invalid.error and json.loads(path.read_text())['schema_version']==8
 
 
 def test_bounds_match_generated_schema_order():
@@ -105,15 +106,35 @@ def test_parameter_readback_mismatch_cannot_authorize_controls(monkeypatch):
         comm.apply_control_parameters(data)
 
 
-def test_host_rejects_ramp_load_values_that_firmware_cannot_accept():
-    from desktop.core.control_parameters import validate, RAMP_BOUNDS
+def test_v7_configuration_migrates_only_retired_ramp_fields(tmp_path):
+    path = tmp_path / 'control.json'
+    expected = json.loads(DEFAULT_PATH.read_text())
+    expected.update(revision=47, ramp_revision=19)
+    expected['joint_kp']['pip'] = 1.25
+    expected['reversal_ramp']['vb_pip'] = 300
+    legacy = deepcopy(expected)
+    legacy.update(schema_version=7, ramp_revision=18)
+    legacy['reversal_ramp'].update({f'load_limit_{name}': 900 for name in ('aa', 'mcp', 'pip', 'dip', 'cmc')})
+    path.write_text(json.dumps(legacy), encoding='utf-8')
+
+    store = ControlParameterStore(path)
+    assert not store.error and json.loads(path.read_text()) == expected
+    assert ControlParameterStore(path).snapshot() == store.snapshot()
+
+    legacy['reversal_ramp']['unexpected'] = 1
+    invalid = json.dumps(legacy)
+    path.write_text(invalid, encoding='utf-8')
+    assert ControlParameterStore(path).error
+    assert path.read_text() == invalid
+
+
+def test_ramp_v2_wire_order_size_and_crc():
     data = json.loads(DEFAULT_PATH.read_text())
-    for name in RAMP_BOUNDS:
-        if not name.startswith('load_limit_'):
-            continue
-        data['reversal_ramp'][name] = 1000
-        validate(data)
-        data['reversal_ramp'][name] = 1001
-        with pytest.raises(ValueError, match=name):
-            validate(data)
-        data['reversal_ramp'][name] = 900
+    ramp = data['reversal_ramp']
+    payload = ramp_configuration_payload(data)
+    values = tuple(float(ramp[f'{prefix}_{kind}']) for prefix in ('b0', 'vb')
+                   for kind in ('aa', 'mcp', 'pip', 'dip', 'cmc')) + (float(ramp['takeup_timeout_ms']),)
+    assert len(payload) == 53 and payload[0] == 2
+    assert struct.unpack('>BI11fI', payload) == (
+        2, data['ramp_revision'], *values, zlib.crc32(payload[5:-4]) & 0xFFFFFFFF)
+    assert configuration_payload(data)[0] == 7

@@ -5,6 +5,12 @@
 运行入口为 `tools/debug/control_tuning.py`；指标和轨迹位于
 `desktop/core/control_tuning.py`。正常 GUI、串口授权、使能、保护和记录链路均保留。
 
+## 升级到协议 v11
+
+P4 和上位机配套升级。升级前备份 `desktop/resources/config/control_parameters.json`，
+更新仓库后将它放回原路径。上位机首次读取时会保留现有调参值，将本地配置迁到 v8，
+并发送新版 `0xFB`。该帧只包含 B0、手动 vB 和超时，共 11 个参数。
+
 ## 基线与使能门禁
 
 每次试验使用一个新的输出目录，复制原始标定和当前运行参数，不覆盖旧记录。

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "protocol_version": 10,
+  "protocol_version": 11,
   "retired_command_values": [
     202,
     217,
@@ -178,7 +178,7 @@
       "name": "PACKET_TYPE_ADAPTIVE_KP",
       "value": 31,
       "timestamp": false,
-      "description": "21 路自适应 Kp/vB 倍率与实际值"
+      "description": "21 路自适应 Kp 倍率与实际值"
     },
     {
       "name": "PACKET_TYPE_SERVO_ONLINE_STATUS",
@@ -349,9 +349,9 @@
     {
       "name": "CMD_CONTROL_RAMP_PARAMETERS_SET",
       "value": 251,
-      "payload_bytes": 73,
+      "payload_bytes": 53,
       "requires_handshake": true,
-      "description": "原子设置16个渐进快速换向参数（B0/vB/负载阈值/超时），版本1、修订、浮点数组、CRC32"
+      "description": "原子设置11个渐进快速换向参数（B0/vB/超时），版本2、修订、浮点数组、CRC32"
     },
     {
       "name": "CMD_TRUST_MULTITURN",

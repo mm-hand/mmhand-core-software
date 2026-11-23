@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bench runner for adaptive Kp/vB firmware variants.
+"""Bench runner for adaptive Kp firmware variants.
 
 职责：顺序构建/烧录 P4 variant，headless 跑同一条 J00 正弦，录制并计算时延。
 线程：单进程；所有硬件操作串行。
@@ -41,13 +41,7 @@ P4_FQBN = (
 FLAG_NAMES = (
     ('kp_max', 'MMHAND_ADAPTIVE_KP_MAX'),
     ('kp_step', 'MMHAND_ADAPTIVE_KP_STEP'),
-    ('kp_up_ms', 'MMHAND_ADAPTIVE_KP_UP_MS'),
     ('lag_ms', 'MMHAND_ADAPTIVE_LAG_MS'),
-    ('vb_slow_ms', 'MMHAND_VB_SLOW_MS'),
-    ('vb_step', 'MMHAND_VB_STEP'),
-    ('vb_max', 'MMHAND_VB_MAX'),
-    ('vb_min', 'MMHAND_VB_MIN'),
-    ('vb_overshoot_step', 'MMHAND_VB_OVERSHOOT_STEP'),
 )
 
 
@@ -142,6 +136,12 @@ def run_replay(port: str, csv_path: Path, timeout: float = 90.0) -> tuple[Path, 
         _wait_result(hand, hand.request_connect(port), 'Connect P4')
         _wait_until(lambda: hand.get_state_snapshot().system_state == SYSTEM_STATE_READY,
                     'P4 READY', 10.0)
+        def adaptive_status():
+            state = hand.get_state_snapshot()
+            return state if state.has_adaptive_kp_data else None
+        state = _wait_until(adaptive_status, 'P4 adaptive Kp telemetry', 5.0)
+        if not state.adaptive_kp_enabled:
+            raise RuntimeError('Enable Adaptive Control before running the adaptive Kp bench')
         hand.select_joints([0])
         _wait_result(hand, hand.request_replay_upload(csv_path.name, csv_path.read_bytes()),
                      'Import CSV')
@@ -211,8 +211,6 @@ def _adaptive_state(directory: Path) -> dict:
     return {
         'kp_scale': latest['scale'][0],
         'kp_effective': latest['effective'][0],
-        'vb_scale': (latest.get('vb_scale') or [None])[0],
-        'vb_effective': (latest.get('vb_effective') or [None])[0],
     }
 
 
@@ -273,9 +271,6 @@ def safety_ok(report: dict) -> tuple[bool, list[str]]:
     ratio = sine.get('amplitude_ratio')
     if ratio is None or not 0.95 <= ratio <= 1.05:
         reasons.append('amplitude ratio outside 0.95-1.05')
-    max_load = report.get('max_load')
-    if max_load is not None and max_load >= 900:
-        reasons.append('motor load >=900')
     return not reasons, reasons
 
 
@@ -291,12 +286,12 @@ def acceptance_ok(report: dict) -> tuple[bool, list[str]]:
     return ok and not reasons, reasons
 
 
-def _gdb_check(variant: dict) -> None:
+def _gdb_check() -> None:
     """Manual code-path spot check; no motion is active yet, so a miss is not fatal."""
     command = [sys.executable, str(ROOT / 'tools/debug/gdb_batch.py'),
                '--target', 'p4', '--timeout', '30', '--break',
-               'mmhand::control::JointFeedbackController::updateAdaptiveVb',
-               '--print', 'this->vbScale[0]', '--print', 'this->states[0].phase']
+               'mmhand::control::JointFeedbackController::updateAdaptiveKp',
+               '--print', 'this->kpScale[0]', '--print', 'this->states[0].phase']
     print('[bench] gdb check:', ' '.join(command), flush=True)
     try:
         subprocess.run(command, cwd=ROOT, check=True)
@@ -340,7 +335,7 @@ def main(argv: list[str] | None = None) -> int:
         write_flash_markers(args.port)
         time.sleep(2.0)
         if args.gdb_check:
-            _gdb_check(variant)
+            _gdb_check()
         for run in range(1, args.runs + 1):
             print(f'[bench] {variant["name"]} run {run}/{args.runs}', flush=True)
             directory, problems = run_replay(args.port, csv_path, args.timeout)
@@ -373,7 +368,7 @@ def main(argv: list[str] | None = None) -> int:
         break
     (out_dir / 'summary.json').write_text(
         json.dumps(summary, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
-    lines = ['# Adaptive bench', '', '| variant | run | phase (ms) | reversal median (ms) | max load | vB scale | accepted |',
+    lines = ['# Adaptive bench', '', '| variant | run | phase (ms) | reversal median (ms) | max load | Kp scale | accepted |',
              '|---|---:|---:|---:|---:|---:|---|']
     for row in summary:
         sine = row.get('sine') or {}
@@ -383,8 +378,8 @@ def main(argv: list[str] | None = None) -> int:
             row['variant']['name'], row['run'],
             round(sine['phase_delay_s'] * 1000, 1) if sine.get('phase_delay_s') is not None else '—',
             round(reversal['median_s'] * 1000, 1) if reversal.get('median_s') is not None else '—',
-            row.get('max_load', '—'),
-            adaptive.get('vb_scale', '—'), 'yes' if row.get('accepted') else 'no'))
+            row.get('max_load', '—'), adaptive.get('kp_scale', '—'),
+            'yes' if row.get('accepted') else 'no'))
     (out_dir / 'summary.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
     print(f'[bench] report: {out_dir}', flush=True)
     return 0 if summary and all(row['ok'] for row in summary) else 1

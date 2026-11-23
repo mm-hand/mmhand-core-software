@@ -32,7 +32,7 @@ bool rampParametersConfigured() {
 }
 bool applyRampParameterPayload(const uint8_t* payload, size_t length) {
     constexpr size_t bytes = RampParameterCount * 4;
-    if (!payload || length != 9 + bytes || payload[0] != 1) return false;
+    if (!payload || length != 9 + bytes || payload[0] != kRampParameterVersion) return false;
     RampParameters next;
     next.revision = u32(payload + 1);
     next.crc = u32(payload + 5 + bytes);
@@ -42,10 +42,6 @@ bool applyRampParameterPayload(const uint8_t* payload, size_t length) {
         memcpy(&next.values[i], &bits, 4);
         if (!isfinite(next.values[i]) || next.values[i] < kRampParameterMinimum[i] ||
             next.values[i] > kRampParameterMaximum[i]) return false;
-    }
-    // The Host hard watchdog is 1000 counts; never accept a freeze threshold above it.
-    for (uint8_t type = 0; type < 5; ++type) {
-        if (next.values[ReversalRampLoadLimitAa + type] > 1000.0f) return false;
     }
     next.configured = true;
     SharedSafetyGuard guard;

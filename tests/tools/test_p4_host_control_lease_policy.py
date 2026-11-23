@@ -29,6 +29,7 @@ def test_host_control_lease_policy_covers_every_servo_motion_state(tmp_path: Pat
 #include "config/SafetyConfig.h"
 #include "data/ActuatorTypes.h"
 #include "data/SystemTypes.h"
+#include "generated/UpperProtocol.generated.h"
 
 #include <cassert>
 #include <cstdint>
@@ -73,10 +74,11 @@ int main()
     // Firmware calibration has no admission API; it runs exclusively in the host.
     assert(p4::system::canAcceptRunFeedback(SYSTEM_STATE_READY));
     assert(!p4::system::canAcceptRunFeedback(SYSTEM_STATE_JOINT_BEYOND_WORKSPACE));
-    assert(p4::system::protocolContractMatches(2, 31, 58, 2, 31, 58));
-    assert(!p4::system::protocolContractMatches(1, 31, 58, 2, 31, 58));
-    assert(!p4::system::protocolContractMatches(2, 30, 58, 2, 31, 58));
-    assert(!p4::system::protocolContractMatches(2, 31, 59, 2, 31, 58));
+    assert(kHostProtocolVersion == 11);
+    assert(p4::system::protocolContractMatches(11, 31, 58, kHostProtocolVersion, 31, 58));
+    assert(!p4::system::protocolContractMatches(10, 31, 58, kHostProtocolVersion, 31, 58));
+    assert(!p4::system::protocolContractMatches(11, 30, 58, kHostProtocolVersion, 31, 58));
+    assert(!p4::system::protocolContractMatches(11, 31, 59, kHostProtocolVersion, 31, 58));
     return 0;
 }
 ''',

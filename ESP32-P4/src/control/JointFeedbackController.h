@@ -27,7 +27,7 @@ struct JointControlResult {
 class JointFeedbackController {
 public:
     JointControlResult compute(uint8_t joint, float target, const FeedbackEstimate& feedback,
-        uint32_t now, const ServoAngleData_t& servo, const ServoTelemetryData_t& telemetry,
+        uint32_t now, const ServoAngleData_t& servo,
         const JointCalibrationResult& calibration, uint32_t motorMask,
         const Parameters& parameters, const RampParameters& ramp);
     void reset(uint8_t joint);
@@ -35,30 +35,25 @@ public:
     void resetAll();
     float kpScaleOf(uint8_t joint) const;
     float effectiveKpOf(uint8_t joint, const Parameters& parameters) const;
-    float vbScaleOf(uint8_t joint) const;
-    float effectiveVbOf(uint8_t joint, const RampParameters& ramp) const;
     JointFeedbackController();
 private:
     void updateAdaptiveKp(uint8_t joint, float target, const FeedbackEstimate& fb,
                           uint32_t now, const Parameters& parameters);
-    void updateAdaptiveVb(uint8_t joint, bool skip, bool slow,
-                          const Parameters& parameters);
     enum Phase : uint8_t { Tracking, Pending, Takeup };
+    struct AdaptiveEvent {
+        uint32_t since = 0;
+        enum { Idle, Timing, Counted } phase = Idle;
+        bool qualifies(bool active, uint32_t now, uint32_t dwell);
+    };
     struct State {
         bool initialized = false, saturated = false;
         uint32_t revision = 0, candidateSince = 0, errorSince = 0;
         int8_t errorSign = 0;
         int8_t direction = 0, candidate = 0;
-        int8_t lastDirection = 0;
-        uint32_t overshootWindowUntil = 0;
         Phase phase = Tracking;
         float lastTarget = 0, candidateAnchor = 0, responseAnchor = 0;
         uint32_t takeupStartMs = 0;
-        float takeupMagnitude = 0;
-        bool takeupFrozen = false;
-        bool vbOvershootLatched = false;
         float integral[MAX_JOINT_ACTUATORS] = {};
-        float motorAnchor[MAX_JOINT_ACTUATORS] = {};
         // D-term history: filtered derivative of target minus measured angle.
         bool lastFastValid = false;
         uint32_t lastFastMs = 0;
@@ -66,17 +61,17 @@ private:
         float lastDerivativeTarget = 0;
         float derivativeFiltered = 0;
         float targetVelocity = 0;
-        uint32_t lastTargetMs = 0, kpChangeMs = 0;
-        bool kpChanged = false, kpDecreased = false;
+        uint32_t lastTargetMs = 0;
         struct {
-            uint32_t feedbackMs = 0, lagSince = 0, crossingMs[2] = {};
-            uint8_t crossings = 0;
-            int8_t side = 0;
-            bool lagging = false;
+            uint32_t feedbackMs = 0, windowStartMs = 0;
+            uint16_t overshoots = 0, lags = 0;
+            AdaptiveEvent overshoot, lag;
+            float travelAnchor = 0;
+            int8_t direction = 0;
+            bool started = false, armed = false;
         } adaptive;
         bool suspended = false, boundaryClamped = false;
     } states[ENCODER_TOTAL_NUM];
     float kpScale[ENCODER_TOTAL_NUM];
-    float vbScale[ENCODER_TOTAL_NUM];
 };
 }

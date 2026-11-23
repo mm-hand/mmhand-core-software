@@ -56,6 +56,7 @@ def test_hello_retry_is_two_hz_even_when_motion_heartbeat_is_disabled(monkeypatc
     comm._maybe_send_host_heartbeat()
     assert len(sent) == 1
     assert sent[0][2] == protocol.CMD_PROTOCOL_HELLO
+    assert sent[0][3] == 11
     monkeypatch.setattr(comm_layer.time, "time", lambda: 100.5)
     comm._maybe_send_host_heartbeat()
     assert len(sent) == 2

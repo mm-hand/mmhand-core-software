@@ -4,6 +4,7 @@
  */
 #pragma once
 #include <stddef.h>
+#include <stdint.h>
 namespace mmhand::control {
 enum Parameter : size_t {
     JointKpAa = 0,

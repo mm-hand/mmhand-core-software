@@ -17,7 +17,7 @@ import struct
 import zlib
 from pathlib import Path
 
-from .generated_control_parameters import BOUNDS, RAMP_BOUNDS
+from .generated_control_parameters import BOUNDS, MAIN_VERSION, RAMP_BOUNDS, RAMP_VERSION, SCHEMA_VERSION
 from desktop.paths import CONFIG_DIR, atomic_write_json
 
 
@@ -26,14 +26,11 @@ CURRENT_PATH = CONFIG_DIR / 'control_parameters.json'
 
 TYPES = ('aa', 'mcp', 'pip', 'dip', 'cmc')
 
-RAMP_TYPES = TYPES
-RAMP_VERSION = 1
-
 
 def validate(data: dict) -> dict:
     if not isinstance(data, dict) or set(data) != {'schema_version', 'revision', 'ramp_revision', *BOUNDS, 'reversal_ramp'}:
         raise ValueError('Control parameter groups do not match the current schema')
-    if data['schema_version'] != 7 or not isinstance(data['revision'], int) or data['revision'] < 1 \
+    if data['schema_version'] != SCHEMA_VERSION or not isinstance(data['revision'], int) or data['revision'] < 1 \
             or not isinstance(data['ramp_revision'], int) or data['ramp_revision'] < 1:
         raise ValueError('Control parameter schema or revision is invalid')
     for group, fields in BOUNDS.items():
@@ -51,7 +48,7 @@ def validate(data: dict) -> dict:
         value = ramp[name]
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not lower <= value <= upper:
             raise ValueError(f'reversal_ramp.{name}: expected {lower}–{upper}')
-    for name in RAMP_TYPES:
+    for name in TYPES:
         if ramp[f'b0_{name}'] > data['reversal'][f'takeup_max_{name}']:
             raise ValueError(f'reversal_ramp.b0_{name} must not exceed reversal.takeup_max_{name}')
         if data['reversal'][f'takeup_max_{name}'] > 0 and ramp[f'b0_{name}'] <= 0 and ramp[f'vb_{name}'] <= 0:
@@ -61,6 +58,18 @@ def validate(data: dict) -> dict:
     if data['ros2_input']['enter_deg'] >= data['ros2_input']['exit_deg']:
         raise ValueError('Stationary exit threshold must exceed enter threshold')
     return copy.deepcopy(data)
+
+
+def _migrate_v7(data: dict) -> dict:
+    ramp = data.get('reversal_ramp')
+    retired = {f'load_limit_{name}' for name in TYPES}
+    if not isinstance(ramp, dict) or set(ramp) != (RAMP_BOUNDS.keys() | retired):
+        raise ValueError('Legacy reversal_ramp fields do not match schema v7')
+    revision = data.get('ramp_revision')
+    if type(revision) is not int or not 1 <= revision < 0xFFFFFFFF:
+        raise ValueError('Legacy ramp revision is invalid')
+    return validate({**data, 'schema_version': SCHEMA_VERSION, 'ramp_revision': revision + 1,
+                     'reversal_ramp': {name: ramp[name] for name in RAMP_BOUNDS}})
 
 
 def configuration_crc(data: dict) -> int:
@@ -73,7 +82,7 @@ def configuration_values(data: dict) -> bytes:
 
 
 def configuration_payload(data: dict) -> bytes:
-    return struct.pack('>BI', 7, data['revision']) + configuration_values(data) + struct.pack('>I', configuration_crc(data))
+    return struct.pack('>BI', MAIN_VERSION, data['revision']) + configuration_values(data) + struct.pack('>I', configuration_crc(data))
 
 
 def configuration_frame(data: dict) -> bytes:
@@ -111,7 +120,12 @@ class ControlParameterStore:
         self.error = ''
         if self.path.exists():
             try:
-                self._data = validate(json.loads(self.path.read_text(encoding='utf-8')))
+                data = json.loads(self.path.read_text(encoding='utf-8'))
+                if isinstance(data, dict) and data.get('schema_version') == 7:
+                    self._data = _migrate_v7(data)
+                    self._write(self._data)
+                else:
+                    self._data = validate(data)
             except (OSError, ValueError, TypeError) as exc:
                 self.error = f'Current control parameters invalid: {exc}. Restore Defaults before enabling control.'
                 self._data = copy.deepcopy(self._default)

@@ -229,6 +229,7 @@ int main() {
 def test_loaded_single_and_dual_lut_bounds_follow_applied_parameters_and_rebuild_old_limits(tmp_path):
     dispatcher = (SRC / 'tasks/host_comm/HostCommandDispatcher.cpp').read_text(encoding='utf-8')
     lut = (SRC / 'system/calibration/TendonCalibrationLut.cpp').read_text(encoding='utf-8')
+    parameters = (SRC / 'control/ControlParameters.h').read_text(encoding='utf-8')
     source = r'''
 #include <cassert>
 #include <cmath>
@@ -258,6 +259,7 @@ struct Parameters { bool configured=true; float values[ParameterCount]={}; float
 Parameters readParameters() { return applied; }
 }
 '''
+    source += '\nnamespace mmhand::control {\n' + function(parameters, 'inline void lutMarginsForJoint(') + '\n}\n'
     for signature in ('bool calibrationHasUsableTendonLut(', 'bool tendonCalibrationMotorAbsRange(',
                       'bool tendonCalibrationMotorAbsRangeWithMargins('):
         source += '\n' + function(lut, signature)
@@ -272,8 +274,8 @@ int main() {
     SystemRuntimeContext r;
     refreshLoadedLutLimits(&r,7);
     assert(r.motor_abs_limit_valid_bitmap==7);
-    assert(r.motor_abs_limit_min[0]==-400 && r.motor_abs_limit_max[0]==1200);
-    assert(r.motor_abs_limit_min[1]==-700 && r.motor_abs_limit_max[1]==1000);
+    assert(r.motor_abs_limit_min[0]==-1100 && r.motor_abs_limit_max[0]==1400);
+    assert(r.motor_abs_limit_min[1]==-900 && r.motor_abs_limit_max[1]==1700);
     assert(r.motor_abs_limit_min[2]==-400 && r.motor_abs_limit_max[2]==1200);
     // An old snapshot's 900-count tight bound cannot survive reconstruction.
     r.motor_abs_limit_max[2]=1100; refreshLoadedLutLimits(&r,4);
@@ -281,8 +283,9 @@ int main() {
     applied.values[OutputLutReleaseMarginCounts]=350;
     applied.values[OutputLutTightMarginCounts]=750;
     refreshLoadedLutLimits(&r,7);
-    assert(r.motor_abs_limit_min[0]==-250 && r.motor_abs_limit_max[0]==950);
-    assert(r.motor_abs_limit_min[1]==-450 && r.motor_abs_limit_max[1]==850);
+    assert(r.motor_abs_limit_min[0]==-1100 && r.motor_abs_limit_max[0]==1400);
+    assert(r.motor_abs_limit_min[1]==-900 && r.motor_abs_limit_max[1]==1700);
+    assert(r.motor_abs_limit_min[2]==-250 && r.motor_abs_limit_max[2]==950);
     // A corrupt motor mapping must not partially publish a dual-joint limit.
     auto old=r.motor_abs_limit_max[0]; loaded[0].result.tendonLutMotor[1]=26;
     assert(!refreshLoadedJointAbsLimits(&r,0,loaded[0].result));

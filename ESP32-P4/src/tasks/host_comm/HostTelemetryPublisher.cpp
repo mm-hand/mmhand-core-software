@@ -715,7 +715,7 @@ bool sendServoTelemetryPacket(const ServoTelemetryData_t& telemetry)
 bool sendAdaptiveKpPacket(SystemRuntimeContext* sharedData)
 {
     if (!sharedData) return false;
-    uint8_t buffer[3 + 1 + ENCODER_TOTAL_NUM * 8 + 1];
+    uint8_t buffer[3 + 1 + ENCODER_TOTAL_NUM * 4 + 1];
     size_t idx = 0;
     buffer[idx++] = PROTOCOL_HEADER;
     buffer[idx++] = 0;
@@ -726,12 +726,6 @@ bool sendAdaptiveKpPacket(SystemRuntimeContext* sharedData)
     }
     for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; ++joint) {
         appendI16BigEndian(buffer, &idx, sharedData->adaptive_kp_effective_milli[joint]);
-    }
-    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; ++joint) {
-        appendI16BigEndian(buffer, &idx, sharedData->adaptive_vb_scale_milli[joint]);
-    }
-    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; ++joint) {
-        appendI16BigEndian(buffer, &idx, sharedData->adaptive_vb_effective[joint]);
     }
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = static_cast<uint8_t>(idx - 2U);

@@ -29,19 +29,12 @@ TITLES = {
 TYPES = (('AA', 'aa'), ('MCP', 'mcp'), ('PIP', 'pip'), ('DIP', 'dip'), ('CMC', 'cmc'))
 ADAPTIVE_LOGIC = (
     ('Kp max scale', '2.0×'),
-    ('Kp up step', '8% / 1 s'),
+    ('Kp adjustment window', '10 s'),
+    ('Kp up step', '8% with repeated lag and zero overshoot'),
     ('Kp lag evidence', '300 ms'),
-    ('Kp oscillation floor', '0.3×'),
-    ('Kp oscillation target speed', '≤5°/s'),
-    ('Kp oscillation window', '2000 ms'),
-    ('vB slow threshold', '150 ms'),
-    ('vB step', '8%'),
-    ('vB range', '0.5–2.0×'),
-    ('vB overshoot threshold', '2.0°'),
-    ('vB overshoot window', '800 ms'),
-    ('vB overshoot step', '0.90×'),
-    ('vB load events', 'safety only; no learning'),
-    ('vB applies to', 'AA / CMC'),
+    ('Kp down step', '10% with repeated overshoot'),
+    ('Kp min scale', '0.3×'),
+    ('Kp reduction evidence', 'Sustained lead in the confirmed direction after joint travel'),
     ('Learned scales', 'persist across STOP/Apply; reflash resets'),
 )
 
@@ -69,7 +62,7 @@ def build(hand, act):
             ui.tooltip('Apply the drafted parameter revision. The host writes it to the configuration and P4 applies the whole revision when idle.')
         defaults = ui.button('Restore Defaults', on_click=lambda: act(hand.request_restore_control_defaults))
         status = ui.label().classes('text-sm')
-    ui.label('P/I/D and fast reversal are per joint type; adaptive control covers Kp and vB (vB only AA/CMC). P4 applies an entire revision only when idle.').classes('text-sm')
+    ui.label('P/I/D and fast reversal are per joint type; adaptive control adjusts Kp per joint. P4 applies an entire revision only when idle.').classes('text-sm')
 
     def number(group, name, label=None):
         limits = RAMP_BOUNDS if group == 'reversal_ramp' else BOUNDS[group]
@@ -100,7 +93,6 @@ def build(hand, act):
                             number('reversal', f'exit_travel_deg_{key}', 'Exit travel deg')
                             number('reversal_ramp', f'b0_{key}', 'B0')
                             number('reversal_ramp', f'vb_{key}', 'Base vB')
-                            number('reversal_ramp', f'load_limit_{key}', 'Load limit')
             with ui.row().classes('w-full gap-3'):
                 number('reversal', 'confirm_ms', 'Confirm ms')
                 number('reversal_ramp', 'takeup_timeout_ms', 'Takeup timeout ms')
@@ -112,13 +104,12 @@ def build(hand, act):
                 adaptive_status[0] = ui.label('Adaptive: waiting for P4').classes('text-sm')
             with ui.row().classes('w-full gap-3'):
                 number('adaptive_kp', 'lag_limit_s', 'Lag limit s')
-                number('adaptive_kp', 'overshoot_deg', 'Kp oscillation deg')
+                number('adaptive_kp', 'overshoot_deg', 'Kp overshoot deg')
             adaptive_logic = common.table([('item', 'Adaptive logic'), ('value', 'Value')], key='item')
             common.set_rows(adaptive_logic, [{'item': name, 'value': value} for name, value in ADAPTIVE_LOGIC])
             adaptive_table[0] = common.table([
                 ('joint', 'Joint'), ('finger', 'Finger'), ('type', 'Type'),
                 ('base', 'Base Kp'), ('scale', 'Kp scale'), ('effective', 'Kp effective'),
-                ('vb_scale', 'vB scale'), ('vb_effective', 'vB effective'),
             ])
 
         for group in ('dual_tendon', 'feedback', 'collision', 'output', 'ros2_input'):
@@ -156,8 +147,6 @@ def build(hand, act):
         adaptive = snapshot.get('adaptive_kp') or {}
         scales = adaptive.get('scale') or []
         effective = adaptive.get('effective') or []
-        vb_scales = adaptive.get('vb_scale') or []
-        vb_effective = adaptive.get('vb_effective') or []
         rows = []
         for joint in range(21):
             joint_type = _joint_type(joint)
@@ -169,8 +158,6 @@ def build(hand, act):
                 'base': f'{base:.3f}',
                 'scale': f'×{scales[joint]:.3f}' if joint < len(scales) else '—',
                 'effective': f'{effective[joint]:.3f}' if joint < len(effective) else '—',
-                'vb_scale': f'×{vb_scales[joint]:.3f}' if joint < len(vb_scales) else '—',
-                'vb_effective': f'{vb_effective[joint]:.1f}' if joint < len(vb_effective) else '—',
             })
         common.set_rows(adaptive_table[0], rows)
         enabled = _adaptive_enabled(data['adaptive_kp']['enabled'])
@@ -180,11 +167,9 @@ def build(hand, act):
         if adaptive.get('valid'):
             scale_values = [value for value in scales if value]
             span = f'{min(scale_values):.3f}–{max(scale_values):.3f}' if scale_values else '—'
-            vb_values = [value for value in vb_scales if value]
-            vb_span = f'{min(vb_values):.3f}–{max(vb_values):.3f}' if vb_values else '—'
             adaptive_status[0].set_text(
                 f"Adaptive: {'ON' if adaptive.get('enabled') else 'OFF'} · "
-                f"updated {adaptive.get('age_ms', 0)} ms ago · Kp scale {span} · vB scale {vb_span}")
+                f"updated {adaptive.get('age_ms', 0)} ms ago · Kp scale {span}")
         else:
             adaptive_status[0].set_text('Adaptive: waiting for P4 1 Hz packet (showing configured base Kp)')
         save.set_enabled(not snapshot['busy'])

@@ -5,6 +5,10 @@ import json
 import math
 import struct
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import pytest
 
 from desktop.core.protocol import ENCODER_COUNT
 from tools.debug import adaptive_bench
@@ -13,9 +17,8 @@ from tools.debug import adaptive_bench
 def test_dry_run_reports_variants_and_flags(tmp_path, capsys):
     variants = tmp_path / 'variants.json'
     variants.write_text(json.dumps([{
-        'name': 'V-test', 'kp_max': 1.6, 'kp_step': 1.08, 'kp_up_ms': 1000,
-        'lag_ms': 300, 'vb_slow_ms': 150.0, 'vb_step': 1.08, 'vb_max': 2.0,
-        'vb_min': 0.5, 'vb_overshoot_step': 0.90,
+        'name': 'V-test', 'kp_max': 1.6, 'kp_step': 1.08,
+        'lag_ms': 300,
     }]), encoding='utf-8')
     csv_path = tmp_path / 'motion.csv'
     csv_path.write_text('host_time\n', encoding='utf-8')
@@ -24,21 +27,34 @@ def test_dry_run_reports_variants_and_flags(tmp_path, capsys):
     output = capsys.readouterr().out
     assert 'V-test' in output
     assert '-DMMHAND_ADAPTIVE_KP_MAX=1.6' in output
-    assert '-DMMHAND_VB_MAX=2.0' in output
     assert 'arduino-cli compile' in output
 
 
-def _write_payload(scale, effective, vb_scale, vb_effective):
+def test_run_replay_requires_device_confirmed_adaptive_kp(monkeypatch, tmp_path):
+    from desktop.core import hand_backend
+    from desktop.core.protocol import SYSTEM_STATE_READY
+
+    hand = Mock()
+    hand.get_state_snapshot.return_value = SimpleNamespace(system_state=SYSTEM_STATE_READY,
+        has_adaptive_kp_data=True, adaptive_kp_enabled=False)
+    monkeypatch.setattr(hand_backend, 'HandBackend', lambda: hand)
+    monkeypatch.setattr(adaptive_bench, '_wait_result', Mock())
+
+    with pytest.raises(RuntimeError, match='Enable Adaptive Control'):
+        adaptive_bench.run_replay('test-port', tmp_path / 'motion.csv')
+    hand.request_replay_start.assert_not_called()
+    hand.close_application.assert_called_once()
+
+
+def _write_payload(scale, effective):
     payload = bytes([1])
     payload += b''.join(struct.pack('>h', int(value * 1000)) for value in scale)
     payload += b''.join(struct.pack('>h', int(value * 1000)) for value in effective)
-    payload += b''.join(struct.pack('>h', int(value * 1000)) for value in vb_scale)
-    payload += b''.join(struct.pack('>h', int(value)) for value in vb_effective)
-    assert len(payload) == 1 + 8 * ENCODER_COUNT
+    assert len(payload) == 1 + 4 * ENCODER_COUNT
     return payload
 
 
-def test_analysis_reads_delay_and_adaptive_vb(tmp_path):
+def test_analysis_reads_delay_and_adaptive_kp(tmp_path):
     directory = tmp_path / 'recording'
     directory.mkdir()
     base = datetime(2026, 11, 19, 0, 0, 0)
@@ -59,8 +75,7 @@ def test_analysis_reads_delay_and_adaptive_vb(tmp_path):
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
-    payload = _write_payload([1.0] * ENCODER_COUNT, [0.5] * ENCODER_COUNT,
-                             [1.25] * ENCODER_COUNT, [75] * ENCODER_COUNT)
+    payload = _write_payload([1.25] * ENCODER_COUNT, [0.5] * ENCODER_COUNT)
     with (directory / '08_raw_frames.csv').open('w', newline='', encoding='utf-8') as handle:
         writer = csv.DictWriter(handle, fieldnames=['host_time', 'packet_type', 'payload_hex'])
         writer.writeheader()
@@ -70,8 +85,8 @@ def test_analysis_reads_delay_and_adaptive_vb(tmp_path):
     assert report['sine']['valid']
     assert 0.1 < report['sine']['phase_delay_s'] < 0.3
     assert report['reversal']['valid']
-    assert report['adaptive']['vb_scale'] == 1.25
-    assert report['adaptive']['vb_effective'] == 75
+    assert report['adaptive']['kp_scale'] == 1.25
+    assert report['adaptive']['kp_effective'] == 0.5
 
 
 def test_safety_and_acceptance_gates_are_separate():
@@ -91,4 +106,4 @@ def test_safety_and_acceptance_gates_are_separate():
     assert not adaptive_bench.acceptance_ok(unsafe)[0]
     loaded = {'sine': {'valid': True, 'phase_delay_s': 0.1, 'amplitude_ratio': 1.0},
               'reversal': {'median_s': 0.4}, 'max_load': 950}
-    assert adaptive_bench.safety_ok(loaded)[1] == ['motor load >=900']
+    assert adaptive_bench.safety_ok(loaded) == (True, [])

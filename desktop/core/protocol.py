@@ -793,10 +793,8 @@ def parse_direct_target_result_packet(
 
 
 def parse_adaptive_kp_packet(payload: bytes) -> Optional[dict]:
-    """Parse 21 adaptive Kp scales/effective gains; new firmware also appends vB."""
-    old_length = 1 + 4 * ENCODER_COUNT
-    new_length = 1 + 8 * ENCODER_COUNT
-    if len(payload) not in (old_length, new_length):
+    """Read Kp telemetry, including the Kp prefix of legacy extended packets."""
+    if len(payload) not in (1 + 4 * ENCODER_COUNT, 1 + 8 * ENCODER_COUNT):
         return None
     scale = [
         struct.unpack(">h", payload[1 + 2 * i:3 + 2 * i])[0] / 1000.0
@@ -807,20 +805,7 @@ def parse_adaptive_kp_packet(payload: bytes) -> Optional[dict]:
         struct.unpack(">h", payload[base + 2 * i:base + 2 * i + 2])[0] / 1000.0
         for i in range(ENCODER_COUNT)
     ]
-    result = {"enabled": bool(payload[0]), "scale": scale, "effective": effective,
-              "vb_scale": None, "vb_effective": None}
-    if len(payload) == new_length:
-        vb_base = 1 + 4 * ENCODER_COUNT
-        result["vb_scale"] = [
-            struct.unpack(">h", payload[vb_base + 2 * i:vb_base + 2 * i + 2])[0] / 1000.0
-            for i in range(ENCODER_COUNT)
-        ]
-        vb_effective_base = 1 + 6 * ENCODER_COUNT
-        result["vb_effective"] = [
-            struct.unpack(">h", payload[vb_effective_base + 2 * i:vb_effective_base + 2 * i + 2])[0]
-            for i in range(ENCODER_COUNT)
-        ]
-    return result
+    return {"enabled": bool(payload[0]), "scale": scale, "effective": effective}
 
 
 def parse_fault_status_packet(payload: bytes) -> Optional[Tuple[int, List[Optional[int]], List[int]]]:

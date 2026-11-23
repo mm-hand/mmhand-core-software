@@ -11,7 +11,7 @@
 #include "../config/DimensionsConfig.h"
 
 inline constexpr uint8_t PROTOCOL_HEADER = 0xFE;
-inline constexpr uint8_t kHostProtocolVersion = 10;
+inline constexpr uint8_t kHostProtocolVersion = 11;
 inline constexpr uint8_t PROTOCOL_TAIL = 0xFF;
 inline constexpr int16_t PROTOCOL_DISCONNECT_SENTINEL = 32767;
 inline constexpr size_t kP4TimestampBytes = 4;
@@ -57,7 +57,7 @@ inline constexpr uint8_t PACKET_TYPE_SERVO_REBASE_ZERO_RESULT = 0x19; ///< 硬�
 inline constexpr uint8_t PACKET_TYPE_DIRECT_TARGET_RESULT = 0x1A; ///< 通用直控目标完成总线同步写后的事务结果，与机械到位独立
 inline constexpr uint8_t PACKET_TYPE_CONTROL_PARAMETERS = 0x1C; ///< 参数应用/查询结果：block、状态、修订、CRC
 inline constexpr uint8_t PACKET_TYPE_CONTROL_COMPONENTS = 0x1D; ///< 同周期PI、换向和慢反馈分量及采样分频
-inline constexpr uint8_t PACKET_TYPE_ADAPTIVE_KP = 0x1F; ///< 21 路自适应 Kp/vB 倍率与实际值
+inline constexpr uint8_t PACKET_TYPE_ADAPTIVE_KP = 0x1F; ///< 21 路自适应 Kp 倍率与实际值
 inline constexpr uint8_t PACKET_TYPE_SERVO_ONLINE_STATUS = 0x20; ///< 27路上线会话、固件主次版本和配置检查结果
 
 // Desktop -> P4 命令及 ACK 状态。
@@ -85,7 +85,7 @@ inline constexpr uint8_t CMD_PROTOCOL_HELLO = 0xF3; ///< 双向版本及控制�
 inline constexpr uint8_t CMD_CONTROL_RELEASE = 0xF6; ///< 释放普通控制权，不锁存急停，不恢复旧目标
 inline constexpr uint8_t CMD_CONTROL_PARAMETERS_SET = 0xF8; ///< 原子设置61个控制与输入滤波参数，版本7、修订、浮点数组、CRC32
 inline constexpr uint8_t CMD_PARAMETERS_QUERY = 0xF9; ///< 按 block 读回参数修订/CRC（0=主参数，1=ramp）
-inline constexpr uint8_t CMD_CONTROL_RAMP_PARAMETERS_SET = 0xFB; ///< 原子设置16个渐进快速换向参数（B0/vB/负载阈值/超时），版本1、修订、浮点数组、CRC32
+inline constexpr uint8_t CMD_CONTROL_RAMP_PARAMETERS_SET = 0xFB; ///< 原子设置11个渐进快速换向参数（B0/vB/超时），版本2、修订、浮点数组、CRC32
 inline constexpr uint8_t CMD_TRUST_MULTITURN = 0xE1; ///< 按电机位图把当前原生ABS认作标定坐标系（不写电机）；上位机对账平移标定后使用，P4清除对应多圈未知位
 inline constexpr uint8_t PROTO_ACK_STATUS_OK = 0; ///< 命令已同步执行成功
 inline constexpr uint8_t PROTO_ACK_STATUS_UNSUPPORTED_MODE = 1; ///< 当前状态或 owner 不允许该命令
@@ -155,7 +155,7 @@ inline constexpr size_t generatedCommandPayloadLength(uint8_t command)
         case CMD_CONTROL_RELEASE: return 0;
         case CMD_CONTROL_PARAMETERS_SET: return 253;
         case CMD_PARAMETERS_QUERY: return 1;
-        case CMD_CONTROL_RAMP_PARAMETERS_SET: return 73;
+        case CMD_CONTROL_RAMP_PARAMETERS_SET: return 53;
         case CMD_TRUST_MULTITURN: return kTrustMultiTurnPayloadBytes;
         default: return SIZE_MAX;
     }

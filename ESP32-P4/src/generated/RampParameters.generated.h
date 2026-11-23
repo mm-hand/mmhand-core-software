@@ -4,6 +4,7 @@
  */
 #pragma once
 #include <stddef.h>
+#include <stdint.h>
 namespace mmhand::control {
 enum RampParameter : size_t {
     ReversalRampB0Aa = 0,
@@ -16,13 +17,8 @@ enum RampParameter : size_t {
     ReversalRampVbPip = 7,
     ReversalRampVbDip = 8,
     ReversalRampVbCmc = 9,
-    ReversalRampLoadLimitAa = 10,
-    ReversalRampLoadLimitMcp = 11,
-    ReversalRampLoadLimitPip = 12,
-    ReversalRampLoadLimitDip = 13,
-    ReversalRampLoadLimitCmc = 14,
-    ReversalRampTakeupTimeoutMs = 15,
-    RampParameterCount = 16
+    ReversalRampTakeupTimeoutMs = 10,
+    RampParameterCount = 11
 };
 inline constexpr float kRampParameterMinimum[] = {
     0.0f,
@@ -35,11 +31,6 @@ inline constexpr float kRampParameterMinimum[] = {
     0.0f,
     0.0f,
     0.0f,
-    100.0f,
-    100.0f,
-    100.0f,
-    100.0f,
-    100.0f,
     0.0f,
 };
 inline constexpr float kRampParameterMaximum[] = {
@@ -53,11 +44,7 @@ inline constexpr float kRampParameterMaximum[] = {
     5000.0f,
     5000.0f,
     5000.0f,
-    1000.0f,
-    1000.0f,
-    1000.0f,
-    1000.0f,
-    1000.0f,
     2000.0f,
 };
+inline constexpr uint8_t kRampParameterVersion = 2;
 } // namespace mmhand::control

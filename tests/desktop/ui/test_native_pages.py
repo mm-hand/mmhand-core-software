@@ -353,7 +353,6 @@ def test_adaptive_control_is_after_fast_reversal_with_enable_button(page):
     act = Mock(side_effect=lambda callback: callback())
     refresh = control_parameters.build(hand, act)
     snapshot = idle_snapshot(hand)
-    snapshot['adaptive_kp'].update(vb_scale=[1.0] * 21, vb_effective=[0.0] * 21)
     refresh(snapshot)
     expansions = [e.text for e in client.elements.values() if isinstance(e, ui.expansion)]
     assert expansions[expansions.index('Kd config') + 1] == 'Fast reversal'
@@ -365,12 +364,11 @@ def test_adaptive_control_is_after_fast_reversal_with_enable_button(page):
     assert labels.count('Exit travel deg') == 5
     assert labels.count('B0') == 5
     assert labels.count('Base vB') == 5
-    assert labels.count('Load limit') == 5
+    assert 'Load limit' not in labels
     assert labels.count('Confirm ms') == 1 and labels.count('Takeup timeout ms') == 1
-    assert labels.count('Lag limit s') == 1 and labels.count('Kp oscillation deg') == 1
+    assert labels.count('Lag limit s') == 1 and labels.count('Kp overshoot deg') == 1
     tables = [e for e in client.elements.values() if isinstance(e, ui.table)]
-    assert any(any(column.get('name') == 'vb_effective' for column in table.columns) for table in tables)
-    assert any(any(row.get('item') == 'vB slow threshold' for row in table.rows) for table in tables)
+    assert any(any(column.get('name') == 'effective' for column in table.columns) for table in tables)
     adaptive = button(client, 'Enable Adaptive Control')
     snapshot['adaptive_kp'].update(valid=False)
     refresh(snapshot)
@@ -394,31 +392,20 @@ def test_adaptive_logic_display_matches_firmware_defaults():
     for line in (
         '#define MMHAND_ADAPTIVE_KP_MAX 2.0f',
         '#define MMHAND_ADAPTIVE_KP_STEP 1.08f',
-        '#define MMHAND_ADAPTIVE_KP_UP_MS 1000',
+        '#ifndef MMHAND_ADAPTIVE_OVERSHOOT_EVENTS',
+        '#ifndef MMHAND_ADAPTIVE_LAG_EVENTS',
         '#define MMHAND_ADAPTIVE_LAG_MS 300',
-        '#define MMHAND_ADAPTIVE_OSC_TARGET_SPEED_DEG_S 5.0f',
-        '#define MMHAND_KP_OSCILLATION_WINDOW_MS 2000',
-        '#define MMHAND_VB_OVERSHOOT_DEG 2.0f',
-        '#define MMHAND_VB_SLOW_MS 150.0f',
-        '#define MMHAND_VB_STEP 1.08f',
-        '#define MMHAND_VB_MAX 2.0f',
-        '#define MMHAND_VB_MIN 0.5f',
+        '#ifndef MMHAND_ADAPTIVE_OVERSHOOT_ARM_DEG',
+        '#ifndef MMHAND_ADAPTIVE_OVERSHOOT_DWELL_MS',
     ):
         assert line in header
     logic = dict(control_parameters.ADAPTIVE_LOGIC)
     assert logic['Kp max scale'] == '2.0×'
-    assert logic['Kp up step'] == '8% / 1 s'
+    assert logic['Kp adjustment window'] == '10 s'
+    assert logic['Kp up step'] == '8% with repeated lag and zero overshoot'
     assert logic['Kp lag evidence'] == '300 ms'
-    assert logic['vB slow threshold'] == '150 ms'
-    assert logic['vB step'] == '8%'
-    assert logic['Kp oscillation target speed'] == '≤5°/s'
-    assert logic['Kp oscillation window'] == '2000 ms'
-    assert logic['vB overshoot threshold'] == '2.0°'
-    assert logic['vB overshoot window'] == '800 ms'
-    assert logic['vB range'] == '0.5–2.0×'
-    assert logic['vB overshoot step'] == '0.90×'
-    assert logic['vB load events'] == 'safety only; no learning'
-    assert logic['vB applies to'] == 'AA / CMC'
+    assert logic['Kp down step'] == '10% with repeated overshoot'
+    assert logic['Kp reduction evidence'].startswith('Sustained lead')
     assert logic['Learned scales'] == 'persist across STOP/Apply; reflash resets'
 
 

@@ -1,5 +1,5 @@
 {
-  "schema_version": 7,
+  "schema_version": 8,
   "revision": 1,
   "ramp_revision": 1,
   "joint_kp": {
@@ -66,11 +66,6 @@
     "vb_pip": 100,
     "vb_dip": 100,
     "vb_cmc": 50,
-    "load_limit_aa": 900,
-    "load_limit_mcp": 900,
-    "load_limit_pip": 900,
-    "load_limit_dip": 900,
-    "load_limit_cmc": 900,
     "takeup_timeout_ms": 600
   },
   "collision": {

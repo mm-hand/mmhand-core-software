@@ -1,5 +1,5 @@
 {
-  "schema_version": 7,
+  "schema_version": 8,
   "payloads": {
     "main": {
       "version": 7,
@@ -373,7 +373,7 @@
       ]
     },
     "ramp": {
-      "version": 1,
+      "version": 2,
       "fields": [
         {
           "group": "reversal_ramp",
@@ -434,36 +434,6 @@
           "name": "vb_cmc",
           "minimum": 0,
           "maximum": 5000
-        },
-        {
-          "group": "reversal_ramp",
-          "name": "load_limit_aa",
-          "minimum": 100,
-          "maximum": 1000
-        },
-        {
-          "group": "reversal_ramp",
-          "name": "load_limit_mcp",
-          "minimum": 100,
-          "maximum": 1000
-        },
-        {
-          "group": "reversal_ramp",
-          "name": "load_limit_pip",
-          "minimum": 100,
-          "maximum": 1000
-        },
-        {
-          "group": "reversal_ramp",
-          "name": "load_limit_dip",
-          "minimum": 100,
-          "maximum": 1000
-        },
-        {
-          "group": "reversal_ramp",
-          "name": "load_limit_cmc",
-          "minimum": 100,
-          "maximum": 1000
         },
         {
           "group": "reversal_ramp",

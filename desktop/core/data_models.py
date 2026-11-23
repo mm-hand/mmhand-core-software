@@ -357,8 +357,6 @@ class HandModel:
     adaptive_kp_enabled: bool = False
     adaptive_kp_scale: List[float] = field(default_factory=lambda: [1.0] * ENCODER_COUNT)
     adaptive_kp_effective: List[float] = field(default_factory=lambda: [0.0] * ENCODER_COUNT)
-    adaptive_vb_scale: List[float] = field(default_factory=list)
-    adaptive_vb_effective: List[float] = field(default_factory=list)
     adaptive_kp_last_rx_ts: float = 0.0
     # 最近一次协议 ACK，用于把“UI 请求”和“P4 实际处理”分别写入事件日志。
     proto_ack_sequence: int = 0
