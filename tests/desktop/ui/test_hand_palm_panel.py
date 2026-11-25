@@ -1,4 +1,5 @@
 """Plot > Hand: equal split, light-green target and the palm stereo panel."""
+import pytest
 from nicegui import ui
 
 from desktop.ui import browser_view
@@ -85,7 +86,9 @@ def test_palm_image_is_not_polled_while_the_hand_page_is_hidden(page):
     assert image.source == '/palm.jpg'
 
 
-def test_connection_bar_offers_the_palm_camera_beside_p4_and_s3(page):
+@pytest.mark.parametrize('device', [0, '/dev/video0'])
+def test_connection_bar_offers_the_palm_camera_beside_p4_and_s3(page, monkeypatch, device):
+    monkeypatch.setattr(browser_view, 'camera_devices', lambda: {device: 'Palm camera'})
     hand, client = page
     palm = FakePalm()
     browser_view.build_page(hand, palm)
@@ -100,7 +103,7 @@ def test_connection_bar_offers_the_palm_camera_beside_p4_and_s3(page):
     assert button.text == 'Connect' and not button.enabled
     assert select.enabled  # the picker is usable until a camera is connected
 
-    select.set_value(next(iter(select.options)))
+    select.set_value(device)
     refresh.callback()
     assert button.enabled
 

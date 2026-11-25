@@ -51,6 +51,7 @@ PACKET_TYPE_CONTROL_PARAMETERS = 0x1C  # 参数应用/查询结果：block、状
 PACKET_TYPE_CONTROL_COMPONENTS = 0x1D  # 同周期PI、换向和慢反馈分量及采样分频
 PACKET_TYPE_ADAPTIVE_KP = 0x1F  # 21 路自适应 Kp 倍率与实际值
 PACKET_TYPE_SERVO_ONLINE_STATUS = 0x20  # 27路上线会话、固件主次版本和配置检查结果
+PACKET_TYPE_TACTILE_ZERO_RESULT = 0x21  # 触觉力标零结果：事务号、写入目标位图及回读通过位图
 
 # Desktop -> P4 命令。
 CMD_SERVO_MAINTENANCE = 0xF4  # 舵机维护会话、探测及单步改号
@@ -79,6 +80,7 @@ CMD_CONTROL_PARAMETERS_SET = 0xF8  # 原子设置61个控制与输入滤波参�
 CMD_PARAMETERS_QUERY = 0xF9  # 按 block 读回参数修订/CRC（0=主参数，1=ramp）
 CMD_CONTROL_RAMP_PARAMETERS_SET = 0xFB  # 原子设置11个渐进快速换向参数（B0/vB/超时），版本2、修订、浮点数组、CRC32
 CMD_TRUST_MULTITURN = 0xE1  # 按电机位图把当前原生ABS认作标定坐标系（不写电机）；上位机对账平移标定后使用，P4清除对应多圈未知位
+CMD_TACTILE_FORCE_ZERO = 0xE2  # 经 S3 对在线触觉传感器执行力标零
 
 PROTO_ACK_STATUS_OK = 0  # 命令已同步执行成功
 PROTO_ACK_STATUS_UNSUPPORTED_MODE = 1  # 当前状态或 owner 不允许该命令
@@ -157,6 +159,7 @@ COMMAND_PAYLOAD_LENGTHS = {
     CMD_PARAMETERS_QUERY: 1,
     CMD_CONTROL_RAMP_PARAMETERS_SET: 53,
     CMD_TRUST_MULTITURN: 4,
+    CMD_TACTILE_FORCE_ZERO: 4,
 }
 
 COMMANDS_REQUIRING_HANDSHAKE = frozenset({
@@ -176,4 +179,5 @@ COMMANDS_REQUIRING_HANDSHAKE = frozenset({
     CMD_PARAMETERS_QUERY,
     CMD_CONTROL_RAMP_PARAMETERS_SET,
     CMD_TRUST_MULTITURN,
+    CMD_TACTILE_FORCE_ZERO,
 })

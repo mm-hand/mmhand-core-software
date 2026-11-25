@@ -43,6 +43,8 @@ public:
     /** 非阻塞读取一帧；无数据或驱动不可用时返回 false。 */
     bool tryReceive(CanFrame* outFrame);
 
+    bool trySend(const CanFrame& frame);
+
     /** 读取驱动健康状态。 */
     CanControllerStatus status() const;
 

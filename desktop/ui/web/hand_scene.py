@@ -13,6 +13,7 @@ import math
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
+import numpy as np
 from nicegui import app, ui
 
 from desktop.core.robot_model import manifest as robot_model_manifest
@@ -62,6 +63,19 @@ def _tree():
     return links, roots, by_parent, indices
 
 
+def rotation_from_force(force):
+    direction = np.asarray(force, float)
+    norm = float(np.linalg.norm(direction))
+    if norm <= 1e-9:
+        return None, 0.0
+    y = direction / norm
+    helper = np.array([1.0, 0.0, 0.0]) if abs(y[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    x = np.cross(helper, y)
+    x /= max(np.linalg.norm(x), 1e-9)
+    z = np.cross(x, y)
+    return np.column_stack([x, y, z]).tolist(), norm
+
+
 class HandScene:
     """One scene, any number of hand models that share the same URDF tree."""
 
@@ -69,22 +83,21 @@ class HandScene:
         self.scene = scene
         self.links, self.roots, self.by_parent, self.indices = _tree()
         self.models = {}
-        self.meshes = {}
 
     def add_model(self, name, color, opacity, origins=None, on_link=None):
-        motors, origin_groups = [], {}
+        motors, origin_groups, meshes = [], {}, {}
         with self.scene:
             with self.scene.group() as group:
                 for root in self.roots:
                     self._add_link(root, color, opacity, origins or {},
-                                   motors, origin_groups, on_link)
+                                   motors, origin_groups, meshes, on_link)
         self.models[name] = {'group': group, 'motors': motors,
-                             'origin_groups': origin_groups,
+                             'origin_groups': origin_groups, 'meshes': meshes,
                              'origins': dict(origins or {}),
                              'color': color, 'opacity': opacity}
 
     def _add_link(self, name, color, opacity, origins, motors, origin_groups,
-                  on_link):
+                  meshes, on_link):
         link = self.links[name]
         for visual in link.findall('visual'):
             mesh = visual.find('geometry/mesh')
@@ -97,7 +110,7 @@ class HandScene:
             item = self.scene.stl(MESH_ROUTE + '/' + Path(mesh.attrib['filename']).name) \
                 .move(*xyz).rotate(*rpy).scale(*scale) \
                 .material(color, opacity=opacity)
-            self.meshes.setdefault(name, []).append(item)
+            meshes.setdefault(name, []).append(item)
         for joint in self.by_parent.get(name, []):
             origin = joint.find('origin')
             xyz = _vec(origin.get('xyz') if origin is not None else None, '0 0 0')
@@ -118,13 +131,13 @@ class HandScene:
                     if on_link is not None:
                         on_link(child, rotation)
                     self._add_link(child, color, opacity, origins, motors,
-                                   origin_groups, on_link)
+                                   origin_groups, meshes, on_link)
 
     def set_link_color(self, name, link_names, color):
         """Recolor the meshes of specific URDF links on one model."""
         model = self.models[name]
         for link in link_names:
-            for item in self.meshes.get(link, ()):
+            for item in model['meshes'].get(link, ()):
                 item.material(color, opacity=model['opacity'])
 
     def set_origins(self, name, origins):

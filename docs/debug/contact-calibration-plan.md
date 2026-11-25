@@ -1,37 +1,20 @@
-# 接触标定 V7：滑动轨迹 + non-contact 样本 + 三色调试
-
-> 从“人工点十几个接触/悬停位姿”改为“指尖贴着另一指滑一段”。
-> Stop 时从 P4 原生反馈历史抽稀出接触样本，在接触位姿上退开生成 non-contact 样本，
-> 用二分类损失 + 相邻接触点连续性 + 先验拟合每关节 k/b（可选关节原点几何）。
+# 接触标定：指尖合力触发的滑动轨迹
 
 ## 1. 工作流
 
-1. 页面选择要拟合的量：`Encoder correction (k/b)` 默认勾选，`Joint axis translation & rotation` 默认不勾选。
-2. 摆好手，让某个指尖贴住另一根手指。
-3. `Start Recording Contact Trajectory` → 保持接触滑动 ≥1 cm → `Stop Current Recording`。
-4. 可以继续录下一段；录坏的点 `Delete Last Contact Trajectory`。
-5. 全部录完点 `Solve`，满意后点 `Save Contact Calibration`。
-6. `Clear Contact Calibration` 删除标定包的 contact 字段并清空会话，回退到 Joint Calibration 值。
+1. 进入 Contact Calibration。手部空载时点 `Tactile sensor force zeroing`。只需连接 P4 USB，S3 逐个标零在线触觉模组并回读合力。
+2. 用一个指尖触觉传感器贴住另一根手指，保持接触滑动约 1 cm，再松开。页面自动收录轨迹。可以用 `Delete Last Contact Trajectory` 删除上一条。
+3. 选好 `Encoder correction (k/b)` 和可选的 `Joint axis translation & rotation`，点 `Solve`，确认后点 `Save Contact Calibration`。
+4. `Clear Contact Calibration` 清空会话并删除标定包中的 contact 字段，回退到 Joint Calibration 值。
 
-3D 渲染：
-
-- **灰**：URDF + k0/b0（Joint Calibration 基值）+ 当前 counts，是“修之前”。
-- **蓝**：同一 counts，用 contact calibration 的 k/b（勾几何时再加 origins），是“修之后”。
-- **红**：只在录制时出现，灰手上当前判定接触的两个 link（移动指尖 + 目标段）。
+灰色手是当前基准位姿，浅蓝色手是拟合后的位姿。蓝色高亮指尖传感器和对侧接触段。箭头从各在线模组的固定中心显示三轴合力。
 
 ## 2. 采集
 
-- `TimestampedFeedbackHistory` 在 RX 线程逐包记录 `encoder_raw`（带 P4 时间戳，最高约 100 Hz）。
-- Start 时 `mark()`，同时快照 21 个 Manual Min/Max；Stop 时 `read(cursor)`。
-- 只保留 21 个关节 valid_mask 全有效、且不是 Start 前陈旧种子的帧。
-- 移动指尖 = 5 根手指里**指尖质心路径最长**的那根；没有第二个判定阈值。
-- 抽稀：以选中指尖的指尖质心为准，相对上一条保留帧移动 ≥ `STEP_M=2 mm` 才保留，末帧必留。
-- 每帧 `pair` = 该指尖 12 个候选表面（4 指 × 指尖/远节/近节）中最近的一个。
-- 少于 5 个接触样本：拒绝，提示 `slide longer`。
-
-在线调试：录制中每 0.5 s 用最近 40 条 counts 估一次移动指尖，`infer_pair` 得到当前 pair，
-把灰手两个 link 染红，状态栏显示 `Live: Index tip ↔ Thumb tip, gap 1.2 mm`。
-最终 pair 在 Stop 时用整段轨迹重算，在线结果只做 debug。
+- 用 P4 时间戳将原始合力摘要与最近的有效 21 路编码器帧配对，允许的时间差为 25 ms。
+- 指尖合力模长达到 5 个读数单位时触发，降到 3 时释放，两帧确认。多个指尖同时触发时选拇指。多个指尖触发且不含拇指时暂停采样。
+- 当前指尖掉线、P4 断开或离开页面时，丢弃未完成的轨迹。
+- 每帧对侧取其他四指中最近的表面。按指尖传感器质心移动 2 mm 抽稀，末帧保留。少于 5 个接触样本时提示延长滑动。
 
 ## 3. 事件格式
 
@@ -44,7 +27,7 @@
 | `c` | 21 个 signed counts；不是 raw |
 | `y` | 1 = 真接触；0 = 程序生成的 non-contact |
 | `pair` | f = 移动指尖（0 小指…4 拇指）；o = 目标手指；seg = 0 指尖 / 1 远节 / 2 近节 |
-| `traj` | 第几次 Stop；连续性只在同一 `traj` 内、列表相邻的 y=1 之间生效 |
+| `traj` | 自动收录的轨迹编号；连续性只在同一 `traj` 内、列表相邻的 y=1 之间生效 |
 
 ## 4. non-contact 样本
 
@@ -123,8 +106,7 @@ J = L_data + L_cont + L_prior
 
 ## 8. 限制
 
-- 自动指尖只适用于“移动指尖是路径最长的那根”；如果主要移动目标指，会选错。
-- 接触期间的操作员必须保持接触；中途离手的帧目前会被当成接触样本。
+- 触觉只确认哪个指尖在受力。对侧仍由几何距离推断，因此采集时应只让参与标定的两根手指接触。
 - 无符号最近点距离无法检测穿透；穿模需要在 3D 里人工发现。
 - 一次滑动主要约束移动指尖的关节；其他关节由先验保持，建议一页内录 2–3 个指对。
 - 仿真使用同一套 URDF/点云，验证的是可辨识性和实现正确性，不代表真机绝对精度。

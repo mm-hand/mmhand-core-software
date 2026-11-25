@@ -73,10 +73,22 @@ bool TwaiCanDriver::tryReceive(CanFrame* outFrame)
     if (twai_receive(&message, 0) != ESP_OK) {
         return false;
     }
-    outFrame->identifier = message.identifier;
+    outFrame->identifier = (message.extd || message.rtr) ? UINT32_MAX : message.identifier;
     outFrame->dataLength = message.data_length_code;
     memcpy(outFrame->data, message.data, sizeof(outFrame->data));
     return true;
+}
+
+bool TwaiCanDriver::trySend(const CanFrame& frame)
+{
+    if (!started_ || frame.identifier > 0x7ff || frame.dataLength > 8) {
+        return false;
+    }
+    twai_message_t message{};
+    message.identifier = frame.identifier;
+    message.data_length_code = frame.dataLength;
+    memcpy(message.data, frame.data, frame.dataLength);
+    return twai_transmit(&message, 0) == ESP_OK;
 }
 
 CanControllerStatus TwaiCanDriver::status() const

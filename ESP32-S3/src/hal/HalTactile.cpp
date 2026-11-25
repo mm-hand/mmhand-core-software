@@ -347,6 +347,31 @@ void HalTactile::noteResponseGap(uint32_t gapUs) {
     if (gapUs > _maxGapUs) _maxGapUs = gapUs;
 }
 
+uint16_t HalTactile::triggerForceZero(uint16_t moduleMask) {
+    if (!_spiReady) return 0;
+    // Vendor user configuration register 0x0003, single-byte trigger and CRC8.
+    alignas(4) const uint8_t frame[8] = {0x79, 0x03, 0x00, 0x01, 0x00, 0x01, 0xA7};
+    uint16_t sent = 0;
+    for (uint8_t module = 0; module < TACTILE_MODULE_NUM; ++module) {
+        const uint16_t bit = 1U << module;
+        if (!(moduleMask & bit)) continue;
+        const uint8_t group = module / TACTILE_SENSOR_PER_GROUP;
+        const uint8_t slot = module % TACTILE_SENSOR_PER_GROUP;
+        setAllSelectPinsHigh();
+        setSelectorPattern(makeSelectorPattern(group, kPhysicalSlotBits[slot]));
+        delayMicroseconds(kDelayCsHoldUs);
+        spi_transaction_t transaction{};
+        transaction.length = 7 * 8;
+        transaction.tx_buffer = frame;
+        if (spi_device_polling_transmit(_spi, &transaction) == ESP_OK) sent |= bit;
+        delayMicroseconds(kDelayCsHoldUs);
+        setAllSelectPinsHigh();
+        delayMicroseconds(kDelaySelectSettleUs);
+    }
+    if (sent) delayMicroseconds(1000);
+    return sent;
+}
+
 /** @brief 读取单模块3字节摘要寄存器，失败时清零输出。 */
 bool HalTactile::readSensorSummary(uint8_t groupIndex, uint8_t sensorIndex, uint8_t* globalOut, uint8_t* rawOut) {
     if (!globalOut || groupIndex >= TACTILE_GROUP_NUM || sensorIndex >= TACTILE_SENSOR_PER_GROUP) {

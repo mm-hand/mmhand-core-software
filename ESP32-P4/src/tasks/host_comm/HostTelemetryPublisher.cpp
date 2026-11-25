@@ -732,6 +732,19 @@ bool sendAdaptiveKpPacket(SystemRuntimeContext* sharedData)
     return FW_SERIAL_WRITE(buffer, idx) == idx;
 }
 
+bool sendTactileZeroResult(const TactileZeroResult& result)
+{
+    uint8_t buffer[12] = {PROTOCOL_HEADER, 10, PACKET_TYPE_TACTILE_ZERO_RESULT};
+    size_t idx = 3;
+    appendU32BigEndian(buffer, &idx, result.token);
+    buffer[idx++] = uint8_t(result.attempted >> 8);
+    buffer[idx++] = uint8_t(result.attempted);
+    buffer[idx++] = uint8_t(result.verified >> 8);
+    buffer[idx++] = uint8_t(result.verified);
+    buffer[idx++] = PROTOCOL_TAIL;
+    return FW_SERIAL_WRITE(buffer, idx) == idx;
+}
+
 /** 发送一帧触觉摘要；全量事件不得再次经过本函数。 */
 bool sendTactileSummaryPacket(const RemoteTactileData_t& tactile)
 {

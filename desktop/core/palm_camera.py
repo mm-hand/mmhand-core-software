@@ -80,7 +80,7 @@ class PalmCamera:
 
     def connect(self, device):
         """Open one UVC node and start the reader; raises without a frame."""
-        if not device:
+        if device is None or device == '':
             raise ValueError('choose a palm camera first')
         self.disconnect()
         capture = self._open(device)

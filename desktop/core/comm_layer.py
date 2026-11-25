@@ -70,6 +70,7 @@ from .protocol import (
     PACKET_TYPE_TASK_DIAG,
     PACKET_TYPE_TACTILE,
     PACKET_TYPE_TACTILE_FULL,
+    PACKET_TYPE_TACTILE_ZERO_RESULT,
     PROTOCOL_HEADER,
     PROTOCOL_TAIL,
     RX_POLL_SLEEP,
@@ -201,6 +202,7 @@ P4_PACKET_KINDS = {
     PACKET_TYPE_TASK_DIAG: "task_diagnostic",
     PACKET_TYPE_TACTILE: "tactile_summary",
     PACKET_TYPE_TACTILE_FULL: "tactile_full",
+    PACKET_TYPE_TACTILE_ZERO_RESULT: "tactile_zero_result",
     TACTILE_SERIAL_DIAG_PACKET_TYPE: "tactile_diagnostic",
     0x06: "protocol_ack",
 }
@@ -1434,6 +1436,24 @@ class LowerComputerComm(_SerialSessionBase):
                                    wanted=ramp_wanted, attribute='_control_ramp_parameter_result',
                                    label='P4 ramp parameter', cancelled=cancelled, timeout=timeout)
         return (*wanted[1:], *ramp_wanted[1:])
+
+    def zero_tactile_force(self, token, *, cancelled):
+        sent_at = time.monotonic()
+        frame = protocol_codec.build_tactile_force_zero(token)
+        if not self.send_command(('maintenance_frame', frame)):
+            raise ConnectionError('Could not send the tactile zeroing request to P4')
+        ack = self.wait_for_ack(protocol_codec.CMD_TACTILE_FORCE_ZERO, 0.5,
+                                received_after_monotonic=sent_at)
+        if ack is None:
+            raise TimeoutError('P4 did not acknowledge tactile zeroing')
+        if ack[2] != protocol_codec.PROTO_ACK_STATUS_QUEUED:
+            raise RuntimeError('P4 rejected tactile zeroing. Keep the hand idle.')
+        while time.monotonic() - sent_at < 1.0 and self.is_connected() and not cancelled():
+            result = self._state_reducer.tactile_zero_result
+            if result is not None and result[0] == token:
+                return result[1:]
+            time.sleep(0.01)
+        raise TimeoutError('No tactile zeroing result from S3')
 
     def maintenance_request(self, session, operation, bus=0, old_id=0, new_id=0, **kwargs):
         from .id_protocol import MaintenanceChannel

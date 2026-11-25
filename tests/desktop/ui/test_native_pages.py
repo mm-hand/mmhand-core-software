@@ -1,10 +1,13 @@
 """Native component and interaction regression; no serial devices or GUI runtime."""
 import asyncio
+import time
 from unittest.mock import Mock
 import pytest
 from nicegui import Client, core, ui
 from nicegui.events import GenericEventArguments
 from desktop.core.hand_backend import HandBackend
+from desktop.core.application_actions import OperationResult
+from desktop.core.communication.feedback_history import TimestampedFeedbackHistory
 from desktop.core.data_recording.topic_schema import CSV_TOPIC_FILENAMES, DEFAULT_TOPICS
 from desktop.ui.web import renumber_motors, joint_calibration, motor_calibration, feedback_control, direct_control
 from desktop.ui.web import replay, plots, diagnostics, control_parameters, hand as hand_view
@@ -1009,12 +1012,29 @@ def _contact_snapshot(hand):
     return snapshot
 
 
-def _fake_capture(hand):
-    hand.begin_contact_capture = Mock(return_value={
-        'ok': True, 'manual_min': [1000] * 21, 'manual_max': [5000] * 21})
-    hand.end_contact_capture = Mock(return_value={
-        'ok': True, 'frames': [(0, tuple([2000] * 21))],
-        'manual_min': [1000] * 21, 'manual_max': [5000] * 21})
+def _contact_stream(hand, refresh, snapshot):
+    history = TimestampedFeedbackHistory()
+    hand._controller.comm = Mock(feedback_history=history)
+    refresh(snapshot)
+    return history
+
+
+def _tactile_frames(history, timestamps, force, start):
+    for i, stamp in enumerate(timestamps):
+        at = start + i * 0.030
+        axes = [0] * 45
+        axes[29] = force
+        history.record('encoder_raw', stamp, (1000,) * 21, (1 << 21) - 1, at)
+        history.record('tactile_summary', stamp, axes, 1 << 9, at)
+
+
+def _capture_slide(hand, refresh, snapshot):
+    history = _contact_stream(hand, refresh, snapshot)
+    now = time.time()
+    _tactile_frames(history, (10, 40), 8, now - 0.120)
+    _tactile_frames(history, (70, 100), 0, now - 0.060)
+    run_ui_action(lambda: refresh(snapshot))
+    refresh(snapshot)
 
 
 async def _fake_cpu_bound(callback, *args, **kwargs):
@@ -1031,13 +1051,13 @@ async def _fake_cpu_bound(callback, *args, **kwargs):
         'noncontact_pass': 8, 'noncontact_total': 10}
 
 
-def click_async(button):
-    """Run a click whose handler is async; NiceGUI schedules it as a task."""
+def run_ui_action(action):
+    """Give NiceGUI background tasks a running loop."""
     async def runner():
         previous = core.loop
         core.loop = asyncio.get_running_loop()
         try:
-            click(button)
+            action()
             for _ in range(50):
                 await asyncio.sleep(0)
         finally:
@@ -1045,13 +1065,17 @@ def click_async(button):
     return asyncio.run(runner())
 
 
-def test_contact_page_has_recording_buttons_and_options(page):
+def click_async(button):
+    run_ui_action(lambda: click(button))
+
+
+def test_contact_page_has_zeroing_and_automatic_capture(page):
     hand, client = page
     contact_view.build(hand, Mock())
     buttons = [element.text for element in client.elements.values()
                if isinstance(element, ui.button)]
-    assert buttons[:6] == [
-        'Start Recording Contact Trajectory', 'Stop Current Recording',
+    assert buttons[:5] == [
+        'Tactile sensor force zeroing',
         'Delete Last Contact Trajectory', 'Solve',
         'Save Contact Calibration', 'Clear Contact Calibration']
     assert not any(isinstance(element, ui.select)
@@ -1063,8 +1087,8 @@ def test_contact_page_has_recording_buttons_and_options(page):
     assert checkboxes[0].value is True and checkboxes[1].value is False
     texts = ' '.join(element.text for element in client.elements.values()
                      if isinstance(element, ui.label) and isinstance(element.text, str))
-    assert 'Red: links in contact while recording' in texts
-    assert 'Ready. Record a contact slide' in texts
+    assert 'Blue: contact pair' in texts
+    assert 'lift to finish the trajectory' in texts
     assert 'No trajectory recorded.' in texts
     assert '\n' not in contact_view.INSTRUCTIONS
 
@@ -1078,33 +1102,25 @@ def test_contact_gap_text_is_human_readable():
 
 def test_contact_page_records_and_deletes_a_trajectory(page, monkeypatch):
     hand, client = page
-    contact_view.build(hand, Mock())
-    _contact_snapshot(hand)
-    _fake_capture(hand)
+    refresh = contact_view.build(hand, Mock())
+    snapshot = _contact_snapshot(hand)
     monkeypatch.setattr(contact_view.run, 'cpu_bound', _fake_cpu_bound)
-    click(button(client, 'Start Recording Contact Trajectory'))
-    assert hand.begin_contact_capture.call_count == 1
-    click_async(button(client, 'Stop Current Recording'))
-    labels = label_texts(client)
-    assert any(text.startswith('Trajectory 1: Index tip') for text in labels)
+    _capture_slide(hand, refresh, snapshot)
+    assert any(text.startswith('Trajectory 1 captured') for text in label_texts(client))
     assert any(text.startswith('Trajectories (contacts/non-contact): #1 Index 1/0')
-               for text in labels)
+               for text in label_texts(client))
     click(button(client, 'Delete Last Contact Trajectory'))
-    labels = label_texts(client)
-    assert any(text == 'No trajectory recorded.' for text in labels)
-    assert any('Deleted the last trajectory. 0 remain.' in text for text in labels)
+    assert 'No trajectory recorded.' in label_texts(client)
 
 
 def test_contact_page_solves_and_saves_with_fresh_solution(page, monkeypatch):
     hand, client = page
     refresh = contact_view.build(hand, Mock())
     snapshot = _contact_snapshot(hand)
-    _fake_capture(hand)
     monkeypatch.setattr(contact_view.run, 'cpu_bound', _fake_cpu_bound)
     save_mock = Mock()
     monkeypatch.setattr(contact_view, 'save_contact', save_mock)
-    click(button(client, 'Start Recording Contact Trajectory'))
-    click_async(button(client, 'Stop Current Recording'))
+    _capture_slide(hand, refresh, snapshot)
     click_async(button(client, 'Solve'))
     refresh(snapshot)
     assert any('Contact 10/12, non-contact 8/10' in text
@@ -1117,35 +1133,60 @@ def test_contact_page_solves_and_saves_with_fresh_solution(page, monkeypatch):
 
 def test_contact_page_solve_requires_at_least_one_correction(page, monkeypatch):
     hand, client = page
-    contact_view.build(hand, Mock())
-    _contact_snapshot(hand)
-    _fake_capture(hand)
-    calls = []
-
-    async def fake(callback, *args, **kwargs):
-        calls.append(callback.__name__)
-        return await _fake_cpu_bound(callback, *args, **kwargs)
-
-    monkeypatch.setattr(contact_view.run, 'cpu_bound', fake)
-    click(button(client, 'Start Recording Contact Trajectory'))
-    click_async(button(client, 'Stop Current Recording'))
-    checkboxes = [element for element in client.elements.values()
-                  if isinstance(element, ui.checkbox)]
-    checkboxes[0].set_value(False)
-    checkboxes[1].set_value(False)
+    refresh = contact_view.build(hand, Mock())
+    snapshot = _contact_snapshot(hand)
+    monkeypatch.setattr(contact_view.run, 'cpu_bound', _fake_cpu_bound)
+    _capture_slide(hand, refresh, snapshot)
+    for element in client.elements.values():
+        if isinstance(element, ui.checkbox):
+            element.set_value(False)
     click_async(button(client, 'Solve'))
-    assert 'solve' not in calls
-    assert any('Select at least one correction.' in text
-               for text in label_texts(client))
+    assert 'Select at least one correction.' in label_texts(client)
 
 
-def test_contact_page_start_rejects_stale_p4(page):
+def test_contact_page_zero_waits_for_matching_operation_result(page):
     hand, client = page
-    contact_view.build(hand, Mock())
-    hand.begin_contact_capture = Mock()
-    click(button(client, 'Start Recording Contact Trajectory'))
-    hand.begin_contact_capture.assert_not_called()
-    assert any('P4 online' in text for text in label_texts(client))
+    refresh = contact_view.build(hand, Mock())
+    request = hand.request_tactile_force_zero = Mock(
+        return_value=OperationResult(True, 'zero-1', 'Accepted'))
+    zero = button(client, 'Tactile sensor force zeroing')
+    click(zero)
+    request.assert_not_called()
+    snapshot = _contact_snapshot(hand)
+    refresh(snapshot)
+    click(zero)
+    click(zero)
+    request.assert_called_once_with()
+    assert not zero.enabled
+    snapshot['operations'] = [dict(operation_id='zero-1', status='SUCCESS',
+                                  message='Tactile zeroing: 3 verified, 0 failed, 12 offline.')]
+    refresh(snapshot)
+    assert zero.enabled
+    assert snapshot['operations'][0]['message'] in label_texts(client)
+
+
+def test_contact_page_arrows_and_blue_highlight_clear_on_exit(page, monkeypatch):
+    hand, client = page
+    refresh = contact_view.build(hand, Mock())
+    snapshot = _contact_snapshot(hand)
+    scene = next(element for element in client.elements.values() if isinstance(element, ui.scene))
+    [handler.handler for handler in scene._event_listeners.values() if handler.type == 'init'][-1]()
+    monkeypatch.setattr(contact_view, 'infer_pair', lambda *_: (3, 4, 0, 0.0))
+    history = _contact_stream(hand, refresh, snapshot)
+    now = time.time()
+    _tactile_frames(history, (10, 40), 8, now - 0.060)
+    refresh(snapshot)
+    assert sum(getattr(obj, 'color', None) == contact_view.BLUE for obj in scene.objects.values()) == 2
+    tips = [obj for obj in scene.objects.values() if isinstance(obj, ui.scene.cylinder)]
+    assert sum(obj.parent.visible_ for obj in tips) == 2  # shaft and head of one arrow
+    assert next(obj.parent.R for obj in tips if obj.parent.visible_)[2][1] == 1
+    refresh(None)
+    assert not any(getattr(obj, 'color', None) == contact_view.BLUE for obj in scene.objects.values())
+    refresh(snapshot)
+    _tactile_frames(history, (70, 100), 0, now - 0.030)
+    run_ui_action(lambda: refresh(snapshot))
+    assert not any(obj.parent.visible_ for obj in tips)
+    assert 'No trajectory recorded.' in label_texts(client)
 
 
 def test_contact_page_builds_gray_and_blue_models(page):

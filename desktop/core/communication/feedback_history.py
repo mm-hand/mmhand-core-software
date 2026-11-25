@@ -58,7 +58,7 @@ class TimestampedFeedbackHistory:
 
     def record(self, kind: str, p4_time_ms: int, values: Iterable[int],
                valid_mask: int, received_at: float) -> FeedbackFrame:
-        if kind not in ("encoder_raw", "servo_abs"):
+        if kind not in ("encoder_raw", "servo_abs", "tactile_summary"):
             raise ValueError(f"unsupported feedback kind: {kind}")
         timestamp = int(p4_time_ms)
         if not 0 <= timestamp <= 0xFFFFFFFF:

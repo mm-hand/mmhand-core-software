@@ -15,6 +15,7 @@ from desktop.core.calibration_snapshot import (
 )
 from desktop.core.contact_calibration import (
     CONTACT_LINKS,
+    ContactCapture,
     CONTACT_MARGIN_M,
     CONTACT_PAIRS,
     FINGER_JOINTS,
@@ -32,11 +33,11 @@ from desktop.core.contact_calibration import (
     signed_counts,
     solve,
     solve_contact,
-    tip_travel,
     trajectory_events,
 )
+from desktop.core.communication.feedback_history import TimestampedFeedbackHistory
 from desktop.core.kinematics import Kinematics
-from desktop.core.tactile_geometry import module_points
+from desktop.core.tactile_geometry import SENSOR_LINKS, module_points
 from desktop.paths import DEFAULT_URDF_PATH
 
 
@@ -80,16 +81,14 @@ def test_initial_mappings_use_manual_span():
     assert model_angles([0, 100], [2.0], [-10.0]).tolist() == [-10.0, 190.0]
 
 
-def test_contact_links_are_the_physical_finger_links():
-    assert CONTACT_LINKS[:3] == ('link_finger_tip_5', 'link_distal_phalanx_5',
-                                 'link_proximal_phalanx_5')
-    assert CONTACT_LINKS[12:] == ('link_finger_tip_1', 'link_distal_phalanx_1',
-                                  'link_proximal_phalanx_1')
-    assert not any(name.endswith('_sensor') for name in CONTACT_LINKS)
+def test_contact_links_are_the_sensor_links_in_hardware_order():
+    assert CONTACT_LINKS == tuple(SENSOR_LINKS.values())
+    assert CONTACT_LINKS[0] == 'link_finger_tip_5_skeleton_sensor'
+    assert CONTACT_LINKS[12] == 'link_finger_tip_1_skeleton_sensor'
 
 
 def _clouds():
-    return contact_module._clouds(DEFAULT_URDF_PATH)
+    return contact_module._clouds()
 
 
 def _pair_gap(frames, pair, clouds):
@@ -288,7 +287,7 @@ def test_solve_rejects_an_invalid_fingertip():
               initial_mappings(), iterations=0)
 
 
-def test_physical_link_points_are_the_sensor_points():
+def test_contact_clouds_are_in_sensor_local_coordinates():
     model = Kinematics(DEFAULT_URDF_PATH)
     mappings = initial_mappings()
     counts = np.linspace(200.0, 3800.0, 21)
@@ -402,9 +401,9 @@ def _synthetic_slide(seed=0, steps=30):
     return model, clouds, mappings, frames
 
 
-def test_trajectory_events_selects_the_moving_fingertip_and_decimates():
+def test_trajectory_events_keeps_the_tactile_fingertip_and_decimates():
     _model, _clouds_, _mappings, frames = _synthetic_slide()
-    events, info = trajectory_events(frames, _MANUAL_MIN, _MANUAL_MAX, 0)
+    events, info = trajectory_events(frames, _MANUAL_MIN, _MANUAL_MAX, 0, fingertip=3)
     assert info["fingertip"] == 3
     assert info["contacts"] == len(events) >= 5
     assert info["frames"] == len(frames)
@@ -414,7 +413,7 @@ def test_trajectory_events_selects_the_moving_fingertip_and_decimates():
 
 def test_non_contact_samples_have_a_clear_model_gap():
     model, clouds, mappings, frames = _synthetic_slide()
-    contacts, _info = trajectory_events(frames, _MANUAL_MIN, _MANUAL_MAX, 0)
+    contacts, _info = trajectory_events(frames, _MANUAL_MIN, _MANUAL_MAX, 0, fingertip=3)
     events, info = add_non_contact_samples(
         contacts, mappings, _MANUAL_MIN, _MANUAL_MAX)
     negatives = [event for event in events if event["y"] == 0]
@@ -428,7 +427,7 @@ def test_non_contact_samples_have_a_clear_model_gap():
 
 def test_build_trajectory_end_to_end_returns_finite_metrics():
     _model, _clouds_, mappings, frames = _synthetic_slide()
-    result = build_trajectory(frames, _MANUAL_MIN, _MANUAL_MAX, 2)
+    result = build_trajectory(frames, _MANUAL_MIN, _MANUAL_MAX, 2, fingertip=3)
     events, info = result["events"], result["info"]
     assert info["contacts"] >= 5
     assert info["noncontacts"] >= 1
@@ -449,19 +448,74 @@ def test_continuity_pairs_stay_inside_one_trajectory():
     assert pairs.tolist() == [[0, 1]]
 
 
-def test_tip_travel_selects_the_moving_finger():
-    counts = np.full((3, 21), 2000.0)
-    for offset, joint in enumerate(FINGER_JOINTS[3]):
-        counts[1, joint] += 120.0 + 40.0 * offset
-        counts[2, joint] += 240.0 + 80.0 * offset
-    travel = tip_travel(counts, initial_mappings())
-    assert int(np.argmax(travel)) == 3
+def _observe(capture, history, ms, forces, *, valid_mask=0x7FFF,
+             encoder_offset=0, encoder_mask=(1 << 21) - 1):
+    resultant = [0] * 45
+    for finger, force in forces.items():
+        resultant[finger * 9 : finger * 9 + 3] = force
+    now = 1.0 + ms / 1000
+    tactile = history.record('tactile_summary', ms, resultant, valid_mask, now)
+    encoder = history.record('encoder_raw', (ms + encoder_offset) & 0xFFFFFFFF,
+                             [ms] * 21, encoder_mask, now)
+    return capture.observe((tactile, encoder), now + 0.030)
+
+
+@pytest.mark.parametrize('active,selected', [
+    ({3: (3, 4, 0)}, 3),
+    ({3: (0, 0, 9), 4: (0, 0, 5)}, 4),
+    ({2: (0, 0, 8), 3: (0, 0, 8)}, None),
+])
+def test_tactile_contact_selection_and_release(active, selected):
+    capture, history = ContactCapture(), TimestampedFeedbackHistory()
+    assert not _observe(capture, history, 100, active)
+    assert capture.fingertip is None
+    assert not _observe(capture, history, 133, active)
+    assert capture.fingertip == selected
+    held = {tip: (0, 0, 4) for tip in active}
+    assert not _observe(capture, history, 166, held)
+    assert capture.fingertip == selected
+    assert not _observe(capture, history, 199, {})
+    released = _observe(capture, history, 232, {})
+    assert capture.fingertip is None
+    if selected is None:
+        assert released == []
+    else:
+        [(tip, rows)] = released
+        assert tip == selected
+        assert [row[0] for row in rows] == [100, 133, 166]
+
+
+@pytest.mark.parametrize('dropout', ['invalid module', 'stale summary'])
+def test_tactile_dropout_discards_incomplete_slide(dropout):
+    capture, history = ContactCapture(), TimestampedFeedbackHistory()
+    _observe(capture, history, 100, {3: (0, 0, 5)})
+    _observe(capture, history, 133, {3: (0, 0, 5)})
+    assert capture.fingertip == 3
+    if dropout == 'invalid module':
+        assert not _observe(capture, history, 166, {}, valid_mask=0x7FFF ^ (1 << 9))
+    else:
+        assert not capture.observe((), 1.300)
+    assert capture.fingertip is None
+    assert not _observe(capture, history, 333, {})
+    assert not _observe(capture, history, 366, {})
+
+
+def test_tactile_samples_use_the_closest_valid_encoder_within_25_ms():
+    capture, history = ContactCapture(), TimestampedFeedbackHistory()
+    earlier = history.record('encoder_raw', 84, [111] * 21, (1 << 21) - 1, 1.084)
+    capture.observe((earlier,), 1.084)
+    _observe(capture, history, 100, {0: (5, 0, 0)}, encoder_offset=4)
+    _observe(capture, history, 133, {0: (5, 0, 0)}, encoder_offset=26, encoder_mask=0)
+    _observe(capture, history, 166, {}, encoder_offset=26)
+    [(tip, rows)] = _observe(capture, history, 199, {})
+    assert tip == 0
+    assert rows == [(100, (100,) * 21)]
 
 
 def test_trajectory_rejects_a_recording_without_motion():
     frames = [(index * 10, tuple([2000] * 21)) for index in range(10)]
     with pytest.raises(ValueError, match="sliding motion is too short"):
-        trajectory_events(frames, _MANUAL_MIN, _MANUAL_MAX, 0)
+        trajectory_events(frames, _MANUAL_MIN, _MANUAL_MAX, 0, fingertip=3)
 
 
 def test_solve_contact_refreshes_correspondences_in_an_outer_loop():

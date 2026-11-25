@@ -404,7 +404,6 @@ class ApplicationActions(IdResetActions):
                 return
             self._application_closed = True
             self._p4_reconnect_identity = None
-            self._contact_capture = None
         self.stop_motion(emergency=True, source='application shutdown')
         self._application_stop.set()
         if self._discovery_thread:
@@ -638,6 +637,21 @@ class ApplicationActions(IdResetActions):
                 return True
             self._application_stop.wait(0.01)
         return False
+
+    def request_tactile_force_zero(self):
+        def zero(epoch):
+            attempted, verified = self.comm.zero_tactile_force(
+                (uuid4().int & 0xFFFFFFFF) or 1,
+                cancelled=lambda: epoch != self._application_epoch,
+            )
+            passed = verified.bit_count()
+            failed = (attempted & ~verified).bit_count()
+            skipped = 15 - attempted.bit_count()
+            return bool(passed and not failed), (
+                f'Tactile zeroing: {passed} verified, {failed} failed, {skipped} offline.'
+            )
+
+        return self.submit_operation('Tactile force zeroing', zero, scope='Tactile')
 
     def request_connect(self, port, *, tactile=False):
         if not str(port).strip():
@@ -1867,8 +1881,7 @@ class ApplicationActions(IdResetActions):
                         and state.servo_route_controllable_bitmap & bit
                         and not state.multi_turn_unknown_bitmap & bit):
                     self._displayed_motor_abs_zero_generations[motor] = zero_generations[motor]
-            busy = bool(self._application_busy or host_active or
-                        getattr(self, '_contact_capture', None))
+            busy = bool(self._application_busy or host_active)
             ros_reason = self._ros_reason if not self._ros_available else ('P4 is not ready' if not fresh or not self.is_started() else
                          'Device protection fault is active' if state.system_fault_bitmap else
                          'Calibration or another operation is running' if busy else 'Replay owns the input' if self._replay_motion_active else '')

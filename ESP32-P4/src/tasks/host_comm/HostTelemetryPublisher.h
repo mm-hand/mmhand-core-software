@@ -36,6 +36,7 @@ bool sendServoPositionPackets(const ServoAngleData_t& position);
 bool sendServoOnlineStatusPacket(const ServoTelemetryData_t& telemetry);
 bool sendServoTelemetryPacket(const ServoTelemetryData_t& telemetry);
 bool sendAdaptiveKpPacket(SystemRuntimeContext* sharedData);
+bool sendTactileZeroResult(const TactileZeroResult& result);
 bool sendTactileSummaryPacket(const RemoteTactileData_t& tactile);
 bool sendTactileFullPackets(const RemoteTactileData_t& tactile);
 /** 实际 ABS 设零的最终结果；原帧长度保留。 */

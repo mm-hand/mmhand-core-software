@@ -19,7 +19,7 @@ from desktop.core.contact_calibration import active_origins
 from desktop.core.tactile_geometry import SENSOR_LINKS, module_points
 from desktop.core.tactile_heatmap import colormap, grid_coords, render_png
 
-from .hand_scene import CAMERA, SCENE, HandScene, make_camera, register_meshes
+from .hand_scene import CAMERA, SCENE, HandScene, make_camera, register_meshes, rotation_from_force
 
 ARROW_RADIUS = 0.0012
 ARROW_MIN = 5.0
@@ -44,19 +44,6 @@ def _frame_dir() -> Path:
         except RuntimeError:
             pass
     return _FRAME_DIR
-
-
-def _rotation_from_force(force):
-    direction = np.asarray(force, float)
-    norm = float(np.linalg.norm(direction))
-    if norm <= 1e-9:
-        return None, 0.0
-    y = direction / norm
-    helper = np.array([1.0, 0.0, 0.0]) if abs(y[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
-    x = np.cross(helper, y)
-    x /= max(np.linalg.norm(x), 1e-9)
-    z = np.cross(x, y)
-    return np.column_stack([x, y, z]).tolist(), norm
 
 
 def build(hand, palm=None, active=None):
@@ -188,7 +175,7 @@ def build(hand, palm=None, active=None):
             cloud.visible(SHOW_POINTS)
             surface.visible(HEATMAP and full)
             force = module.get('force') if module.get('valid') else None
-            rotation, magnitude = (None, 0.0) if force is None else _rotation_from_force(force)
+            rotation, magnitude = (None, 0.0) if force is None else rotation_from_force(force)
             if full or rotation is None or magnitude < ARROW_MIN:
                 dot.visible(False)
             else:

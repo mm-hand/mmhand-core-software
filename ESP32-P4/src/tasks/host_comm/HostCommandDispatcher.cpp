@@ -265,6 +265,18 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
     {
         return;
     }
+    if (cmd == CMD_TACTILE_FORCE_ZERO) {
+        const uint32_t token = frameLen == 5 ? readU32BigEndian(frame + 1) : 0;
+        const bool idle = !sharedAtomicLoad(&sharedData->control_enabled) &&
+            sharedAtomicLoad(&sharedData->servo_target_owner) == SERVO_TARGET_OWNER_NONE;
+        const bool queued = token != 0 && idle && !sharedData->tactileZeroResults.pending() &&
+            sharedData->tactileZeroRequests.send(token);
+        const uint8_t status = token == 0 ? PROTO_ACK_STATUS_INVALID_DATA :
+            queued ? PROTO_ACK_STATUS_QUEUED : PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        sendProtoAckPacket(cmd, sharedData->system_state, status);
+        return;
+    }
+
     if (cmd == CMD_STATE_SYNC_REQUEST)
     {
         const uint32_t requestedMask = readU32BigEndian(frame + 1);

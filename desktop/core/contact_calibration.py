@@ -3,7 +3,7 @@
 职责：把“指尖贴着另一指滑动”的连续轨迹抽稀成接触样本，自动生成 non-contact 样本，
 二分类拟合每关节 k/b（可选 5 个原点修正），并把结果写进活动标定包（Motor Calibration 下发）。
 线程：采集由 UI 刷新线程调用；trajectory/add_non_contact/solve 为纯函数，可在 worker 进程运行。
-输入：P4 encoder_raw 帧、21 关节 Manual 端点、k/b 基值、URDF。
+输入：P4 合力摘要和 encoder_raw 帧、21 关节 Manual 端点、k/b 基值、URDF。
 输出：contact/non-contact 事件、k/b、关节原点修正、分类统计与标定包字段。
 状态所有权：调用方持有事件和结果；本模块只读资源文件。
 禁止依赖：禁止导入 UI、通信、协议或直接操作设备。
@@ -11,11 +11,11 @@
 
 from __future__ import annotations
 
+from collections import deque
+
 import math
 import struct
 from functools import lru_cache
-from pathlib import Path
-import xml.etree.ElementTree as ET
 
 import numpy as np
 
@@ -24,7 +24,7 @@ from desktop.paths import CALIB_ACTIVE_SNAPSHOT_PATH, DEFAULT_URDF_PATH
 from .angle_mapping import get_spec
 from .calibration_snapshot import CalibrationSnapshotStore
 from .kinematics import Kinematics, decompose_origin
-from .tactile_geometry import module_points
+from .tactile_geometry import SENSOR_LINKS, module_points
 
 # 活动标定包里的 contact 字段；不存在就是没做过 contact 标定。
 CONTACT_KEY = "contact_calibration"
@@ -66,12 +66,7 @@ FINGER_JOINTS = ((0, 1, 2, 3), (4, 5, 6, 7), (8, 9, 10, 11),
                  (12, 13, 14, 15), (16, 17, 18, 19, 20))
 JOINT_FINGER = tuple(
     finger for finger, joints in enumerate(FINGER_JOINTS) for _joint in joints)
-# 接触体是物理手指 link，不是挂在它上面的 tactile sensor link。
-CONTACT_LINK_NAMES = ('finger_tip', 'distal_phalanx', 'proximal_phalanx')
-CONTACT_LINKS = tuple(
-    f"link_{CONTACT_LINK_NAMES[segment]}_{5 - finger}"
-    for finger in range(5) for segment in range(3))
-# 候选接触对：指尖 finger 对另一指 other 的 tip/middle/base 段。
+CONTACT_LINKS = tuple(SENSOR_LINKS.values())
 CONTACT_PAIRS = tuple(
     (finger, other, segment)
     for finger in range(5) for other in range(5) if other != finger
@@ -81,6 +76,109 @@ _PARAM_COLUMNS = np.arange(21 * 7).reshape(21, 7)
 GEOMETRY_COLUMNS = _PARAM_COLUMNS[:, :5].reshape(-1)
 ENCODER_COLUMNS = _PARAM_COLUMNS[:, 5:].reshape(-1)
 _STEP_BY_COLUMN = np.array([1e-5, 1e-5, 1e-5, 1e-5, 1e-5, 1e-5, 1e-3])
+
+
+CONTACT_FORCE_ON = 5
+CONTACT_FORCE_OFF = 3
+CONTACT_MATCH_MS = 25
+CONTACT_GAP_MS = 150
+_ALL_ENCODERS = (1 << 21) - 1
+
+
+def _elapsed_ms(new, old):
+    return ((new - old + 0x80000000) & 0xFFFFFFFF) - 0x80000000
+
+
+class ContactCapture:
+    """Debounce raw fingertip resultants and close one slide on release."""
+
+    def __init__(self):
+        self.latest = None
+        self.fingertip = None
+        self._loaded = set()
+        self._candidate = None
+        self._first = None
+        self._confirmed = False
+        self._samples = []
+        self._encoders = deque(maxlen=32)
+        self._pending = deque()
+        self._last_summary_ms = None
+
+    def _discard_slide(self):
+        self.fingertip = self._candidate = self._first = None
+        self._confirmed = False
+        self._samples.clear()
+        self._loaded.clear()
+
+    def observe(self, frames, now):
+        completed = []
+        for frame in frames:
+            if frame.kind == 'encoder_raw' and frame.valid_mask == _ALL_ENCODERS:
+                self._encoders.append(frame)
+            elif frame.kind == 'tactile_summary':
+                if self.latest is not None and _elapsed_ms(
+                        frame.p4_time_ms, self.latest.p4_time_ms) <= 0:
+                    continue
+                self.latest = frame
+                self._pending.append(frame)
+            self._drain(frame.received_at, completed)
+        self._drain(now, completed)
+        if self.latest is not None and now - self.latest.received_at > CONTACT_GAP_MS / 1000:
+            self._discard_slide()
+            self.latest = None
+        return completed
+
+    def _drain(self, now, completed):
+        while self._pending:
+            frame = self._pending[0]
+            # A later encoder frame may be closer than the one already seen.
+            if (now - frame.received_at < CONTACT_MATCH_MS / 1000 and
+                    (not self._encoders or _elapsed_ms(
+                        self._encoders[-1].p4_time_ms, frame.p4_time_ms) < 0)):
+                break
+            self._pending.popleft()
+            self._observe_summary(frame, completed)
+
+    def _observe_summary(self, frame, completed):
+        timestamp = frame.p4_time_ms
+        previous = self._last_summary_ms
+        self._last_summary_ms = timestamp
+        if previous is not None and _elapsed_ms(timestamp, previous) > CONTACT_GAP_MS:
+            self._discard_slide()
+        valid_tips = {finger for finger in range(5) if frame.valid_mask & (1 << (finger * 3))}
+        if self.fingertip is not None and self.fingertip not in valid_tips:
+            self._discard_slide()
+        self._loaded = {
+            finger for finger in valid_tips
+            if (magnitude := math.hypot(*frame.values[finger * 9 : finger * 9 + 3]))
+            >= CONTACT_FORCE_ON or (finger in self._loaded and magnitude > CONTACT_FORCE_OFF)
+        }
+        candidate = (4 if 4 in self._loaded else next(iter(self._loaded))
+                     if len(self._loaded) == 1 else None)
+        nearest = min(
+            reversed(self._encoders),
+            key=lambda encoder: abs(_elapsed_ms(timestamp, encoder.p4_time_ms)),
+            default=None,
+        )
+        row = ((timestamp, nearest.values) if nearest is not None
+               and abs(_elapsed_ms(timestamp, nearest.p4_time_ms)) <= CONTACT_MATCH_MS else None)
+
+        if candidate != self._candidate:
+            self._candidate, self._first = candidate, row
+            self._confirmed = False
+            return
+        if not self._confirmed:
+            self._confirmed = True
+            if self.fingertip != candidate:
+                if self.fingertip is not None:
+                    completed.append((self.fingertip, self._samples))
+                self.fingertip, self._samples = candidate, []
+            if candidate is not None and self._first is not None:
+                self._samples.append(self._first)
+        if candidate is not None and row is not None:
+            if self._samples and _elapsed_ms(timestamp, self._samples[-1][0]) > CONTACT_GAP_MS:
+                self._samples.clear()
+            self._samples.append(row)
 
 
 def _f32(value):
@@ -146,32 +244,10 @@ def counts_from_snapshot(snapshot):
 
 
 @lru_cache(maxsize=1)
-def _sensor_offsets(urdf_path):
-    """物理 link → sensor link 的固定平移；测点用它换到物理 link 坐标系。"""
-    root = ET.parse(Path(urdf_path)).getroot()
-    offsets = {}
-    for joint in root.findall('joint'):
-        child = joint.find('child').attrib['link']
-        if not child.endswith('_skeleton_sensor'):
-            continue
-        parent = joint.find('parent').attrib['link']
-        if parent not in CONTACT_LINKS:
-            continue
-        origin = joint.find('origin')
-        xyz = (origin.get('xyz') if origin is not None else None) or '0 0 0'
-        offsets[CONTACT_LINKS.index(parent) % 3] = np.fromstring(xyz, sep=' ')
-    if set(offsets) != {0, 1, 2}:
-        raise ValueError('URDF is missing the tactile sensor mounting joints')
-    return offsets
-
-
-@lru_cache(maxsize=1)
-def _clouds(urdf_path):
-    """15 个物理 link 的表面点（齐次坐标）。"""
-    offsets = _sensor_offsets(urdf_path)
-    return tuple(np.column_stack([module_points(segment) + offsets[segment],
-                                  np.ones(len(module_points(segment)))])
-                 for segment in range(3))
+def _clouds():
+    """Fixed surface geometry in each sensor link frame."""
+    return tuple(np.column_stack((points, np.ones(len(points))))
+                 for points in map(module_points, range(3)))
 
 
 def _geometry_from_mappings(mappings):
@@ -288,33 +364,9 @@ def infer_pair(counts, mappings, fingertip, *, urdf_path=DEFAULT_URDF_PATH):
     transforms = _transforms(model, _geometry_from_mappings(mappings),
                              values[None, :])
     gaps, pairs, _point_a, _point_b = _scan_pairs(
-        transforms, _clouds(urdf_path), _fingertip_candidates(fingertip))
+        transforms, _clouds(), _fingertip_candidates(fingertip))
     return (int(pairs[0, 0]), int(pairs[0, 1]), int(pairs[0, 2]),
             float(gaps[0]) * 1000.0)
-
-
-def _tip_positions(clouds, frames):
-    """(E, 5, 3) 指尖点云质心在手掌系的位置。"""
-    centroid = clouds[0].mean(axis=0)
-    return np.stack(
-        [np.einsum("nij,j->ni", frames[:, finger * 3], centroid)[:, :3]
-         for finger in range(5)], axis=1)
-
-
-def tip_travel(counts, mappings, *, urdf_path=DEFAULT_URDF_PATH):
-    """5 根手指的指尖质心路径长度（米）；UI 在线判定和离线抽稀共用。"""
-    if len(mappings) != 21:
-        raise ValueError("need 21 k/b mappings")
-    values = np.asarray(counts, float)
-    if values.ndim != 2 or values.shape[1] != 21 or len(values) < 2:
-        raise ValueError("need at least two 21-count frames")
-    if not np.isfinite(values).all():
-        raise ValueError("invalid counts")
-    model = Kinematics(urdf_path)
-    frames = _transforms(model, _geometry_from_mappings(mappings), values)
-    positions = _tip_positions(_clouds(urdf_path), frames)
-    return [float(np.linalg.norm(np.diff(positions[:, finger], axis=0), axis=1).sum())
-            for finger in range(5)]
 
 
 def _checked_manual(manual_min, manual_max):
@@ -333,9 +385,9 @@ def _checked_manual(manual_min, manual_max):
 
 
 def trajectory_events(frames, manual_min, manual_max, traj_id=0, *,
-                      step_m=STEP_M, min_samples=MIN_SAMPLES,
+                      fingertip, step_m=STEP_M, min_samples=MIN_SAMPLES,
                       urdf_path=DEFAULT_URDF_PATH):
-    """P4 encoder_raw 帧 -> 抽稀后的接触事件；自动选移动指尖。
+    """Decimate positions from a slide captured by one tactile fingertip.
 
     frames: [(p4_time_ms, raw_0..raw_20)]，按接收顺序。
     每个事件 {"c": 21 counts, "y": 1, "pair": (f, o, seg), "traj": traj_id}。
@@ -362,16 +414,15 @@ def trajectory_events(frames, manual_min, manual_max, traj_id=0, *,
     mappings = initial_mappings([item[0] for item in manual],
                                 [item[1] for item in manual])
     model = Kinematics(urdf_path)
-    clouds = _clouds(urdf_path)
+    clouds = _clouds()
     all_frames = _transforms(model, _geometry_from_mappings(mappings), counts)
-    positions = _tip_positions(clouds, all_frames)
-    travel = [float(np.linalg.norm(np.diff(positions[:, finger], axis=0), axis=1).sum())
-              for finger in range(5)]
-    fingertip = int(np.argmax(travel))
+    if not 0 <= fingertip < 5:
+        raise ValueError("invalid tactile fingertip")
+    positions = all_frames[:, fingertip * 3] @ clouds[0].mean(axis=0)
     kept = [0]
-    last = positions[0, fingertip]
+    last = positions[0, :3]
     for index in range(1, len(counts)):
-        point = positions[index, fingertip]
+        point = positions[index, :3]
         if float(np.linalg.norm(point - last)) >= step_m:
             kept.append(index)
             last = point
@@ -391,7 +442,6 @@ def trajectory_events(frames, manual_min, manual_max, traj_id=0, *,
         "contacts": len(events),
         "frames": len(by_time),
         "valid_frames": len(counts),
-        "travel_mm": [round(value * 1000.0, 2) for value in travel],
     }
     return events, info
 
@@ -418,7 +468,7 @@ def add_non_contact_samples(events, mappings, manual_min, manual_max, *,
     if len(mappings) != 21:
         raise ValueError("need 21 k/b mappings")
     model = Kinematics(urdf_path)
-    clouds = _clouds(urdf_path)
+    clouds = _clouds()
     base = _geometry_from_mappings(mappings)
     limits = []
     for joint in range(21):
@@ -493,11 +543,11 @@ def add_non_contact_samples(events, mappings, manual_min, manual_max, *,
 
 
 def build_trajectory(frames, manual_min, manual_max, traj_id=0, *,
-                     step_m=STEP_M, gap_m=NONCONTACT_GAP_M,
+                     fingertip, step_m=STEP_M, gap_m=NONCONTACT_GAP_M,
                      urdf_path=DEFAULT_URDF_PATH):
-    """Stop 的 worker 入口：raw 帧 -> contact + non-contact 事件。"""
+    """Build contact and synthetic non-contact samples for a completed slide."""
     contacts, info = trajectory_events(
-        frames, manual_min, manual_max, traj_id, step_m=step_m,
+        frames, manual_min, manual_max, traj_id, fingertip=fingertip, step_m=step_m,
         urdf_path=urdf_path)
     mappings = initial_mappings(manual_min, manual_max)
     events, close_info = add_non_contact_samples(
@@ -707,7 +757,7 @@ def solve(events, mappings, *, urdf_path=DEFAULT_URDF_PATH,
         raise ValueError("record at least one contact first")
 
     model = Kinematics(urdf_path)
-    clouds = _clouds(urdf_path)
+    clouds = _clouds()
     prior_base = _geometry_from_mappings(mappings)
     start_base = prior_base if initial is None else _geometry_from_mappings(initial)
     continuity_pairs = _continuity_pairs(events)

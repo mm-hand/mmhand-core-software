@@ -222,6 +222,19 @@ def _build_command_frame(cmd: int, payload: bytes = b"") -> bytes:
     return bytes([PROTOCOL_HEADER, frame_len & 0xFF, cmd & 0xFF]) + payload + bytes([PROTOCOL_TAIL])
 
 
+def build_tactile_force_zero(token: int) -> bytes:
+    return _build_command_frame(CMD_TACTILE_FORCE_ZERO, struct.pack('>I', token))
+
+
+def parse_tactile_zero_result(payload: bytes):
+    if len(payload) != 8:
+        return None
+    token, attempted, verified = struct.unpack('>IHH', payload)
+    if token == 0 or attempted & ~0x7FFF or verified & ~attempted:
+        return None
+    return token, attempted, verified
+
+
 def split_p4_timestamp(pkt_type: int, payload: bytes) -> Tuple[bytes, Optional[int]]:
     """从当前上行包尾剥离 P4 毫秒时间戳。
 

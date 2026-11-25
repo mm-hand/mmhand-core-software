@@ -43,6 +43,8 @@ constexpr uint16_t CAN_TAC_SUMMARY_CRC_INPUT_BYTES =
     TACTILE_SUMMARY_BYTES + CAN_TAC_SUMMARY_VALID_MASK_BYTES;
 constexpr uint16_t CAN_TAC_SUMMARY_PACKET_BYTES =
     CAN_TAC_SUMMARY_CRC_INPUT_BYTES + CAN_TAC_SUMMARY_CRC_BYTES;
+constexpr uint16_t CAN_ID_TAC_ZERO_REQUEST = 0x247; // uint32 BE token
+constexpr uint16_t CAN_ID_TAC_ZERO_RESULT = 0x248;  // token, attempted, verified (all BE)
 constexpr uint16_t CAN_ID_TAC_RAW_DIAG = 0x3F0;
 
 // 触觉全量：不完整批次超时后整批丢弃，禁止将不同 seq 的数据拼成一帧快照。

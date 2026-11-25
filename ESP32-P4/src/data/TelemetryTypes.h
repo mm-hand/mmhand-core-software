@@ -8,6 +8,12 @@
 #include "../config/DimensionsConfig.h"
 #include <stdint.h>
 
+struct TactileZeroResult {
+    uint32_t token;
+    uint16_t attempted;
+    uint16_t verified;
+};
+
 struct RemoteTactileData_t {
     uint8_t values[TACTILE_SUMMARY_BYTES];   ///< 五指三模组三轴触觉汇总。
     uint8_t fullValues[TACTILE_FULL_BYTES];  ///< 全部 taxel 的三轴原始数据。

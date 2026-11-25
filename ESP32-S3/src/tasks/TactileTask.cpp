@@ -246,10 +246,21 @@ void Task_Tactile(void* pvParameters) {
     uint8_t canBursts = 0;
 #endif
 
+    uint32_t lastZeroToken = 0;
+    uint16_t zeroAttempted = 0;
+    uint16_t zeroVerified = 0;
     Serial.println("[Task_Tactile] Started!");
 
     for (;;) {
         // HAL先完成整轮采样，再取出一致快照供多种上报链路复用。
+        uint32_t zeroToken = 0;
+        if (xTaskNotifyWait(0, UINT32_MAX, &zeroToken, 0) != pdTRUE) zeroToken = 0;
+        const bool zeroRequested = zeroToken && zeroToken != lastZeroToken;
+        uint16_t zeroSent = 0;
+        if (zeroRequested) {
+            zeroAttempted = tactile.getDiagnostics().summaryOkMask;
+            zeroSent = tactile.triggerForceZero(zeroAttempted);
+        }
         tactile.update();
         const TactileData data = tactile.getData();
         const TactileReadDiag diag = tactile.getDiagnostics();
@@ -276,6 +287,24 @@ void Task_Tactile(void* pvParameters) {
 
         // [待确认是否保留] 即使P4通过CAN转发，S3仍会额外从Serial直接发送一份摘要。
         sendSerialTactileSummary(data, tactileSeq, diag.summaryOkMask);
+        if (zeroRequested) {
+            zeroVerified = 0;
+            const uint16_t readable = zeroSent & diag.summaryOkMask;
+            for (uint8_t finger = 0; finger < TACTILE_GROUP_NUM; ++finger) {
+                const TacGroup& group = data.groups[finger];
+                const uint8_t* forces[] = {group.sensor_A.global, group.sensor_B.global, group.sensor_C.global};
+                for (uint8_t slot = 0; slot < TACTILE_SENSOR_PER_GROUP; ++slot) {
+                    const uint16_t bit = 1U << (finger * TACTILE_SENSOR_PER_GROUP + slot);
+                    if (!(readable & bit)) continue;
+                    const int x = int8_t(forces[slot][0]);
+                    const int y = int8_t(forces[slot][1]);
+                    const int z = forces[slot][2];
+                    if (x * x + y * y + z * z <= 3 * 3) zeroVerified |= bit;
+                }
+            }
+            lastZeroToken = zeroToken;
+        }
+        if (zeroToken) twaiBus.sendTactileZeroResult(zeroToken, zeroAttempted, zeroVerified);
 
         static uint8_t fullDumpDecimator = 0;
         fullDumpDecimator++;

@@ -185,6 +185,12 @@
       "value": 32,
       "timestamp": true,
       "description": "27路上线会话、固件主次版本和配置检查结果"
+    },
+    {
+      "name": "PACKET_TYPE_TACTILE_ZERO_RESULT",
+      "value": 33,
+      "timestamp": false,
+      "description": "触觉力标零结果：事务号、写入目标位图及回读通过位图"
     }
   ],
   "commands": [
@@ -359,6 +365,13 @@
       "payload_bytes": 4,
       "requires_handshake": true,
       "description": "按电机位图把当前原生ABS认作标定坐标系（不写电机）；上位机对账平移标定后使用，P4清除对应多圈未知位"
+    },
+    {
+      "name": "CMD_TACTILE_FORCE_ZERO",
+      "value": 226,
+      "payload_bytes": 4,
+      "requires_handshake": true,
+      "description": "经 S3 对在线触觉传感器执行力标零"
     }
   ],
   "proto_ack_status": {

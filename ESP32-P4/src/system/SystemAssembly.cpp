@@ -62,6 +62,8 @@ bool assembleAndStartSystem() {
     sharedData.mappedAngleQueue.create(1);
     sharedData.controlTraceQueue.create(32);
     sharedData.tactileQueue.create(3);
+    sharedData.tactileZeroRequests.create(1);
+    sharedData.tactileZeroResults.create(1);
 
     const bool queuesCreated =
         sharedData.stateEventQueue.valid() &&
@@ -71,13 +73,15 @@ bool assembleAndStartSystem() {
         sharedData.servoTelemetryQueue.valid() &&
         sharedData.mappedAngleQueue.valid() &&
         sharedData.controlTraceQueue.valid() &&
-        sharedData.tactileQueue.valid();
+        sharedData.tactileQueue.valid() &&
+        sharedData.tactileZeroRequests.valid() &&
+        sharedData.tactileZeroResults.valid();
     const SafetyRuleId queueRule = p4::safety::runtimeResourceCreationRule(
         p4::safety::RuntimeResourceKind::Queue,
         queuesCreated);
     if (queueRule != SafetyRuleId::None) {
         FW_LOG_ERROR_PRINTLN("[SYSTEM] shared queue creation failed");
-        recordAssemblyFailure(queueRule, 8, 0);
+        recordAssemblyFailure(queueRule, 10, 0);
         return false;
     }
 

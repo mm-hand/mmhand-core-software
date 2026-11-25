@@ -16,6 +16,8 @@
 
 // 触觉摘要：45字节三维力+2字节模块有效位图+2字节CRC16，正好拆成7帧。
 #define CAN_ID_TAC_SUMMARY_BASE 0x240
+#define CAN_ID_TAC_ZERO_REQUEST 0x247
+#define CAN_ID_TAC_ZERO_RESULT 0x248
 #define CAN_ID_TAC_RAW_DIAG 0x3F0
 #define CAN_TAC_SUMMARY_FRAME_COUNT 7
 #define CAN_TAC_SUMMARY_PAYLOAD_PER_FRAME 7
@@ -45,6 +47,8 @@ public:
     uint8_t sendEncoderData(const EncoderData& encData);
     /** @brief 发送触觉摘要和15位模块有效位图，并返回该批次序号。 */
     uint8_t sendTactileSummary(const TactileData& tacData, uint16_t moduleValidMask);
+    uint32_t receiveTactileZeroRequest();
+    void sendTactileZeroResult(uint32_t token, uint16_t attempted, uint16_t verified);
     /** @brief 发送全量触觉调试数据；默认调用路径关闭。 */
     void sendTactileFullDump(const TactileData& tacData, uint8_t seq);
     /** @brief 仅对显著Z轴数据发送稀疏调试统计。 */

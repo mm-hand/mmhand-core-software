@@ -312,6 +312,11 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
             }
         }
 
+        TactileZeroResult zeroResult;
+        if (sharedData->tactileZeroResults.peek(&zeroResult) && sendTactileZeroResult(zeroResult)) {
+            sharedData->tactileZeroResults.receive(&zeroResult);
+        }
+
         RemoteTactileData_t tactileData;
         if (sharedData->tactileQueue.peek(&tactileData))
         {

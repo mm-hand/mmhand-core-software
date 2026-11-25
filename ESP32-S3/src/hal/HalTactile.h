@@ -66,6 +66,7 @@ public:
     void begin();
     /** @brief 扫描所有启用触觉模块，并原子替换共享快照。 */
     void update();
+    uint16_t triggerForceZero(uint16_t moduleMask);
     /** @brief 返回最近一次完整触觉快照。 */
     TactileData getData();
     /** @brief 返回最近一次采集诊断快照。 */

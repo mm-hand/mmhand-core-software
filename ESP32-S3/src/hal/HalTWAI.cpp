@@ -111,6 +111,26 @@ bool HalTWAI::sendFrame(uint32_t id, const uint8_t *data, uint8_t len) {
  * @brief 将21个uint16按大端序拆成6个数据帧，再发送CRC元数据帧。
  * @note 数据帧本身不带序号；P4依赖完整帧集合和末尾CRC拒绝跨批混帧。
  */
+uint32_t HalTWAI::receiveTactileZeroRequest() {
+    twai_message_t message{};
+    while (twai_receive(&message, 0) == ESP_OK) {
+        if (!message.extd && !message.rtr && message.identifier == CAN_ID_TAC_ZERO_REQUEST &&
+            message.data_length_code == 4) {
+            return (uint32_t(message.data[0]) << 24) | (uint32_t(message.data[1]) << 16) |
+                   (uint32_t(message.data[2]) << 8) | message.data[3];
+        }
+    }
+    return 0;
+}
+
+void HalTWAI::sendTactileZeroResult(uint32_t token, uint16_t attempted, uint16_t verified) {
+    const uint8_t data[] = {
+        uint8_t(token >> 24), uint8_t(token >> 16), uint8_t(token >> 8), uint8_t(token),
+        uint8_t(attempted >> 8), uint8_t(attempted), uint8_t(verified >> 8), uint8_t(verified)
+    };
+    sendFrame(CAN_ID_TAC_ZERO_RESULT, data, sizeof(data));
+}
+
 uint8_t HalTWAI::sendEncoderData(const EncoderData &encData) {
     uint8_t packet[CAN_ENC_PAYLOAD_BYTES] = {0};
     for (int i = 0; i < ENCODER_TOTAL_NUM; i++) {

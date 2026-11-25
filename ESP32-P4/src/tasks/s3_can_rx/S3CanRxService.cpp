@@ -48,6 +48,7 @@ static_assert(
     "Tactile full payload budget too small.");
 static_assert(CAN_ID_TAC_FULL_DUMP_LAST <= 0x7FF, "Tactile full CAN IDs must fit standard CAN.");
 
+constexpr uint32_t kTactileZeroTimeoutMs = 500;
 constexpr uint32_t CAN_RAW_TIMEOUT_MS = 500;
 constexpr uint32_t CAN_RESTART_INTERVAL_MS = 2000;
 constexpr uint32_t CAN_SNAPSHOT_TIMEOUT_MS = 500;
@@ -186,6 +187,8 @@ struct SensorIngressRuntimeContext {
     bool pendingFullValid;
     uint8_t pendingFullSeq;
     uint32_t pendingFullTimestamp;
+    uint32_t zeroToken;
+    uint32_t zeroStartedMs;
     uint32_t lastCompleteErrorBatchTime;
     uint32_t lastCanDiagPrintMs;
     uint32_t encFrameCount;
@@ -341,6 +344,23 @@ bool stepS3CanRxService(SystemRuntimeContext* sharedData, uint32_t nowMs)
     const uint8_t kAllEncoderFramesMask = (uint8_t)((1U << CAN_ENC_FRAME_COUNT) - 1U);
     const uint8_t kAllErrorFramesMask = (uint8_t)((1U << CAN_ERROR_DETAIL_FRAME_COUNT) - 1U);
     const uint8_t kAllTactileFramesMask = (uint8_t)((1U << CAN_TAC_SUMMARY_FRAME_COUNT) - 1U);
+
+    uint32_t requestedToken = 0;
+    if (!runtime.zeroToken && sharedData->tactileZeroRequests.peek(&requestedToken)) {
+        const CanFrame request{CAN_ID_TAC_ZERO_REQUEST, 4, {
+            uint8_t(requestedToken >> 24), uint8_t(requestedToken >> 16),
+            uint8_t(requestedToken >> 8), uint8_t(requestedToken)}};
+        if (!canDriver.trySend(request)) {
+            sharedData->tactileZeroRequests.receive(&requestedToken);
+        } else {
+            runtime.zeroToken = requestedToken;
+            runtime.zeroStartedMs = nowMs;
+        }
+    }
+    if (runtime.zeroToken && nowMs - runtime.zeroStartedMs >= kTactileZeroTimeoutMs) {
+        sharedData->tactileZeroRequests.receive(&requestedToken);
+        runtime.zeroToken = 0;
+    }
 
         while (canDriver.tryReceive(&rxMsg)) {
             lastCanId = rxMsg.identifier;
@@ -621,6 +641,17 @@ bool stepS3CanRxService(SystemRuntimeContext* sharedData, uint32_t nowMs)
                         pendingFullValid = false;
                     }
                     resetTactileReassembly(&tactileState);
+                }
+            } else if (rxMsg.identifier == CAN_ID_TAC_ZERO_RESULT && rxMsg.dataLength == 8) {
+                const uint32_t token = (uint32_t(rxMsg.data[0]) << 24) |
+                    (uint32_t(rxMsg.data[1]) << 16) | (uint32_t(rxMsg.data[2]) << 8) | rxMsg.data[3];
+                const uint16_t attempted = (uint16_t(rxMsg.data[4]) << 8) | rxMsg.data[5];
+                const uint16_t verified = (uint16_t(rxMsg.data[6]) << 8) | rxMsg.data[7];
+                if (runtime.zeroToken != 0 && token == runtime.zeroToken &&
+                    !(attempted & 0x8000U) && !(verified & ~attempted)) {
+                    sharedData->tactileZeroResults.overwrite(TactileZeroResult{token, attempted, verified});
+                    sharedData->tactileZeroRequests.receive(&requestedToken);
+                    runtime.zeroToken = 0;
                 }
             } else if (rxMsg.identifier == CAN_ID_TAC_RAW_DIAG) {
                 if (!p4::safety::communicationLengthValid(

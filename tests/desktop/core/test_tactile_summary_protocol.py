@@ -4,6 +4,7 @@ from _clock_helpers import stamp
 
 import struct
 import time
+from unittest.mock import Mock
 
 from desktop.core.comm_layer import (
     LowerComputerComm,
@@ -20,7 +21,12 @@ from desktop.core.data_models import (
 )
 from desktop.core.hand_backend import HandBackend
 from desktop.core.protocol import (
+    CMD_TACTILE_FORCE_ZERO,
     PACKET_TYPE_TACTILE,
+    PACKET_TYPE_TACTILE_ZERO_RESULT,
+    PROTO_ACK_STATUS_QUEUED,
+    build_tactile_force_zero,
+    parse_tactile_zero_result,
     TACTILE_SUMMARY_BYTES,
     parse_tactile_packet,
 )
@@ -107,6 +113,33 @@ def test_p4_relay_summary_sets_source_timestamp_and_exact_module_mask():
     assert model.tactile_module_valid_mask == 0x0005
     assert model.tactile_module_online[:3] == [True, False, True]
     assert model.tactile_last_rx_ts > 0.0
+
+
+def test_contact_history_records_unfiltered_resultants_and_current_validity():
+    comm = LowerComputerComm("")
+    cursor = comm.feedback_history.mark()
+    raw = bytearray(_summary_payload(1))
+    raw[3] = 30
+    comm._process_packets([(PACKET_TYPE_TACTILE, bytes(raw) + struct.pack(">I", 100))])
+    zero = bytes([8]) + bytes(TACTILE_SUMMARY_BYTES) + struct.pack(">HI", 0, 133)
+    comm._process_packets([(PACKET_TYPE_TACTILE, zero)])
+    first, last = comm.feedback_history.read(cursor)
+    assert (first.p4_time_ms, first.values[:3], first.valid_mask) == (100, (-1, 2, 30), 1)
+    assert (last.p4_time_ms, last.values[:3], last.valid_mask) == (133, (0, 0, 0), 0)
+
+
+def test_tactile_zero_request_round_trip_and_rejects_impossible_masks():
+    token = 0x12345678
+    assert build_tactile_force_zero(token).hex() == 'fe06e212345678ff'
+    assert parse_tactile_zero_result(struct.pack(">IHH", token, 1, 2)) is None
+    comm = LowerComputerComm("")
+    comm.is_connected = Mock(return_value=True)
+    comm.wait_for_ack = Mock(return_value=(CMD_TACTILE_FORCE_ZERO, 0, PROTO_ACK_STATUS_QUEUED))
+    def send(_):
+        comm._process_packets([(PACKET_TYPE_TACTILE_ZERO_RESULT, struct.pack(">IHH", token, 3, 1))])
+        return True
+    comm.send_command = send
+    assert comm.zero_tactile_force(token, cancelled=lambda: False) == (3, 1)
 
 
 def test_p4_relay_timeout_does_not_confuse_link_online_with_module_mask():

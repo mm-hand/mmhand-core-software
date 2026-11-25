@@ -1,4 +1,5 @@
 #include "CanTask.h"
+#include "TactileTask.h"
 #include "../config/Config.h"
 #include "../hal/HalTWAI.h"
 #include "../system/FirmwareLog.h"
@@ -79,6 +80,10 @@ void Task_CanBus(void *pvParameters) {
         wasBusOff = busOff;
 
         if (isBusOk) {
+            const uint32_t zeroToken = twaiBus.receiveTactileZeroRequest();
+            if (zeroToken && xTacTask) {
+                xTaskNotify(xTacTask, zeroToken, eSetValueWithoutOverwrite);
+            }
             if (xQueueEncoderData && xQueueReceive(xQueueEncoderData, &txData, 0) == pdTRUE) {
                 counts.batches++;
                 const uint8_t sentFrames = twaiBus.sendEncoderData(txData);

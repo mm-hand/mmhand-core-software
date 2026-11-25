@@ -1,21 +1,17 @@
-"""Contact calibration page: slide recording, non-contact samples and fit.
+"""Automatic tactile slide capture, fitting and preview.
 
-职责：录制指尖滑动轨迹，在线判定当前接触对并在 3D 中染红，按勾选项求解和保存标定包。
-线程：NiceGUI 页面事件循环；轨迹处理和 solve 在 cpu_bound worker 中运行。
-输入：后端快照、按钮/勾选框、P4 反馈历史。
-输出：轨迹会话、在线高亮、求解结果、标定包 contact_calibration 字段。
-状态所有权：页面持有本页会话与最新解；设备真值归后端。
-禁止依赖：禁止直接操作串口、协议帧或控制器内部。
+职责：消费 P4 反馈历史，渲染接触对，拟合并保存标定结果。
+禁止依赖：直接操作串口、协议帧或控制器内部。
 """
 from __future__ import annotations
 
 import time
 
-from nicegui import run, ui
+from nicegui import background_tasks, run, ui
 
 from desktop.core.contact_calibration import (
-    CONTACT_LINKS,
-    STEP_M,
+    CONTACT_GAP_MS,
+    ContactCapture,
     build_trajectory,
     clear_contact,
     counts_from_snapshot,
@@ -24,42 +20,30 @@ from desktop.core.contact_calibration import (
     model_angles,
     save_contact,
     solve_contact,
-    tip_travel,
 )
+from desktop.core.tactile_geometry import SENSOR_LINKS, module_points
 
 from .common import label
-from .hand_scene import SCENE, HandScene, make_camera, register_meshes
+from .hand_scene import SCENE, HandScene, make_camera, register_meshes, rotation_from_force
 
 INSTRUCTIONS = (
-    'Touch another finger with one fingertip, press Start, slide while keeping '
-    'contact, press Stop; repeat for other finger pairs, then Solve and Save.'
+    'With the hand unloaded, zero the tactile sensors. Touch another finger with '
+    'a fingertip sensor, slide while in contact, then lift to finish the trajectory.'
 )
-FINGER_LABELS = ((4, 'Thumb'), (3, 'Index'), (2, 'Middle'), (1, 'Ring'), (0, 'Pinky'))
-FINGER_NAMES = dict(FINGER_LABELS)
+FINGER_NAMES = ('Pinky', 'Ring', 'Middle', 'Index', 'Thumb')
 SEGMENT_NAMES = ('tip', 'distal', 'proximal')
 GRAY = '#808080'
-RED = '#ef4444'
+BLUE = '#2563eb'
+TIP_MASK = sum(1 << (finger * 3) for finger in range(5))
 
 
-def _preconditions(snapshot, *, ignore_busy=False):
+def _preconditions(snapshot):
     rows = snapshot.get('joints') or []
-    manual = sum(1 for row in rows if row.get('manual_valid'))
-    busy = bool(snapshot.get('busy')) and not ignore_busy
     return [
-        ("P4 online", snapshot.get('communication') == 'Online'),
-        ("IDLE", snapshot.get('control_mode') == 'IDLE' and not busy),
-        ("21/21 Manual", len(rows) == 21 and manual == 21),
+        ('P4 online', snapshot.get('communication') == 'Online'),
+        ('IDLE', snapshot.get('control_mode') == 'IDLE' and not snapshot.get('busy')),
+        ('21/21 Manual', len(rows) == 21 and all(row.get('manual_valid') for row in rows)),
     ]
-
-
-def _mappings_from(manual_min, manual_max):
-    return initial_mappings(manual_min, manual_max)
-
-
-def _mappings(snapshot):
-    rows = snapshot.get('joints') or []
-    return _mappings_from([row.get('manual_min') for row in rows],
-                          [row.get('manual_max') for row in rows])
 
 
 def _gap_text(result):
@@ -76,293 +60,286 @@ def _fit_text(result):
             f"{result['continuity_after_mm']:.1f} mm.")
 
 
-def _finger_name(index):
-    return FINGER_NAMES.get(int(index), '—')
-
-
-def build(hand, act):
-    session = []          # [{'events': [...], 'info': {...}}]
-    latest = [None]
-    solution = [None]
-    stale = [False]
-    recording = [False]
-    processing = [False]
-    solving = [False]
-    manual = [None]       # (manual_min, manual_max) from the first trajectory
-    live = []             # rolling counts for the online red highlight
-    highlighted = []
-    started_at = [0.0]
-    status_text = ['']
+def build(hand, _act):
+    session = []
+    pending = []
+    solution = manual = stream = latest_force = zero_id = None
+    stale = processing = solving = False
+    capture = ContactCapture()
+    markers, arrows = {}, {}
+    highlighted = ()
     register_meshes()
 
     with ui.row().classes('page-toolbar'):
-        start = ui.button('Start Recording Contact Trajectory', color='primary')
-        stop = ui.button('Stop Current Recording')
+        zero = ui.button('Tactile sensor force zeroing', color='primary')
+        zero.disable()
         delete = ui.button('Delete Last Contact Trajectory')
         solve_button = ui.button('Solve')
         save = ui.button('Save Contact Calibration')
         clear = ui.button('Clear Contact Calibration')
-    ui.label(INSTRUCTIONS).classes('text-sm whitespace-pre-wrap')
+    ui.label(INSTRUCTIONS).classes('text-sm')
     with ui.row().classes('items-center gap-4'):
         encoder = ui.checkbox('Encoder correction (k/b)', value=True)
         geometry = ui.checkbox('Joint axis translation & rotation', value=False)
-    ui.label('Gray: URDF + Joint Calibration · Blue: contact calibration · '
-             'Red: links in contact while recording').classes('text-xs text-slate-500')
+    ui.label('Gray: joint calibration | Light blue: fitted pose | Blue: contact pair').classes(
+        'text-xs text-slate-500')
+    live = label()
     status = label()
     summary = label().classes('text-xs text-slate-600')
     scene = ui.scene(grid=False, camera=make_camera(), background_color='#ffffff',
                      **SCENE).classes('w-full')
     view = HandScene(scene)
+    sensor_by_link = {link: key for key, link in SENSOR_LINKS.items()}
+
+    def add_sensor(link, parent):
+        key = sensor_by_link.get(link)
+        if key is None:
+            return
+        points = module_points(key[1])
+        x, y, _ = points.mean(axis=0)
+        # Start just above the housing so the link marker and arrow stay visible.
+        with parent:
+            with scene.group().move(x, y, points[:, 2].max() + 0.001):
+                if key[1] == 0:
+                    markers[link] = scene.sphere(0.0025).material(GRAY)
+                with scene.group() as arrow:
+                    scene.cylinder(0.001, 0.001, 0.7).move(0, 0.35, 0).material('#334155')
+                    scene.cylinder(0, 0.0024, 0.3).move(0, 0.85, 0).material('#334155')
+            arrows[key] = arrow
+            arrow.visible(False)
 
     def create_models():
-        view.add_model('gray', GRAY, 0.85)
-        view.add_model('blue', '#2563eb', 0.85)
-        view.show('blue', False)
+        view.add_model('gray', GRAY, 0.85, on_link=add_sensor)
+        view.add_model('fitted', '#93c5fd', 0.55)
+        view.show('fitted', False)
+
     scene.on('init', create_models)
 
-    def set_status(text):
-        if status_text[0] != text:
-            status_text[0] = text
-            status.set_text(text)
-
-    def reset_highlight():
-        if highlighted and 'gray' in view.models:
-            view.set_link_color('gray', list(highlighted), GRAY)
-        highlighted.clear()
+    def highlight(links=()):
+        nonlocal highlighted
+        if highlighted == links or 'gray' not in view.models:
+            return
+        for old, color in ((highlighted, GRAY), (links, BLUE)):
+            for link in old:
+                if link in markers:
+                    markers[link].material(color)
+                else:
+                    view.set_link_color('gray', (link,), color)
+        highlighted = links
 
     def update_summary():
-        if not session:
-            summary.set_text('No trajectory recorded.')
-            return
-        parts = []
-        for index, item in enumerate(session, start=1):
-            info = item['info']
-            parts.append(f"#{index} {_finger_name(info.get('fingertip'))} "
-                         f"{info.get('contacts', 0)}/{info.get('noncontacts', 0)}")
-        summary.set_text('Trajectories (contacts/non-contact): ' + ' · '.join(parts))
+        parts = [f"#{i} {FINGER_NAMES[info['fingertip']]} "
+                 f"{info['contacts']}/{info['noncontacts']}"
+                 for i, (_, info) in enumerate(session, 1)]
+        summary.set_text('Trajectories (contacts/non-contact): ' + ' | '.join(parts)
+                         if parts else 'No trajectory recorded.')
 
-    def snapshot_now():
-        return hand.application_snapshot(include_curves=False)
+    def reset_capture():
+        nonlocal capture, latest_force, stream
+        capture, latest_force, stream = ContactCapture(), None, None
+        highlight()
+        draw_forces(None)
 
-    def begin():
-        if recording[0] or processing[0] or solving[0]:
-            return
-        snapshot = snapshot_now()
-        checks = _preconditions(snapshot)
-        if not all(ok for _, ok in checks):
-            set_status(' ; '.join(name for name, ok in checks if not ok) + ' required')
-            return
-        result = hand.begin_contact_capture()
-        if not result.get('ok'):
-            set_status(result.get('message') or 'Could not start recording')
-            return
-        if manual[0] is None:
-            manual[0] = (list(result['manual_min']), list(result['manual_max']))
-        elif (manual[0][0] != list(result['manual_min'])
-              or manual[0][1] != list(result['manual_max'])):
-            hand.end_contact_capture()
-            set_status('Manual Min/Max changed; press Clear and record again.')
-            return
-        recording[0] = True
-        live.clear()
-        reset_highlight()
-        started_at[0] = time.monotonic()
-        set_status('Recording…')
-
-    async def finish():
-        if not recording[0]:
-            return
-        result = hand.end_contact_capture()
-        recording[0] = False
-        reset_highlight()
-        if not result.get('ok'):
-            set_status(result.get('message') or 'Recording failed')
-            return
-        processing[0] = True
-        set_status(f"Processing {len(result['frames'])} frames…")
+    async def finish_slides():
+        nonlocal processing, stale, manual
         try:
-            built = await run.cpu_bound(
-                build_trajectory, result['frames'],
-                result['manual_min'], result['manual_max'], len(session))
-        except Exception as exc:  # noqa: BLE001 - surface the trajectory reason
-            set_status(f'Trajectory rejected: {exc}')
-            return
+            while pending:
+                fingertip, frames, endpoints = pending.pop(0)
+                if manual is not None and endpoints != manual:
+                    status.set_text('Manual Min/Max changed. Clear and capture again.')
+                    continue
+                status.set_text(f'Processing {len(frames)} frames...')
+                try:
+                    built = await run.cpu_bound(build_trajectory, frames, *endpoints,
+                                                len(session), fingertip=fingertip)
+                except Exception as exc:  # noqa: BLE001 - show the rejection reason
+                    status.set_text(f'Trajectory rejected: {exc}')
+                    continue
+                if built:
+                    manual = endpoints
+                    session.append((built['events'], built['info']))
+                    stale = True
+                    update_summary()
+                    status.set_text(f'Trajectory {len(session)} captured. Press Solve to fit.')
         finally:
-            processing[0] = False
-        if not built:
-            set_status('Trajectory processing was cancelled.')
+            processing = False
+
+    def busy():
+        return capture.fingertip is not None or processing or solving or zero_id is not None
+
+    def zero_now():
+        nonlocal zero_id
+        if busy() or not zero.enabled:
             return
-        session.append({'events': built['events'], 'info': built['info']})
-        stale[0] = True
-        update_summary()
-        info = built['info']
-        set_status(f"Trajectory {len(session)}: "
-                   f"{_finger_name(info['fingertip'])} tip, "
-                   f"{info['contacts']} contacts + {info['noncontacts']} "
-                   f"non-contact samples. Press Solve to refit.")
+        result = hand.request_tactile_force_zero()
+        if result.accepted:
+            zero_id = result.operation_id
+            reset_capture()
+            status.set_text('Zeroing tactile sensors...')
+            zero.disable()
+        else:
+            status.set_text(result.message)
 
     def delete_last():
-        if recording[0] or processing[0] or solving[0] or not session:
+        nonlocal solution, stale, manual
+        if busy() or not session:
             return
         session.pop()
-        stale[0] = True
-        update_summary()
+        stale = bool(session)
         if not session:
-            solution[0] = None
-            stale[0] = False
-            if 'blue' in view.models:
-                view.show('blue', False)
-        set_status(f'Deleted the last trajectory. {len(session)} remain. '
-                   'Press Solve to refit.')
+            solution = manual = None
+        update_summary()
+        status.set_text(f'Deleted the last trajectory. {len(session)} remain.')
 
     async def solve_now():
-        if recording[0] or processing[0] or solving[0] or not session:
+        nonlocal solving, solution, stale
+        if busy() or not session:
             return
         if not encoder.value and not geometry.value:
-            set_status('Select at least one correction.')
+            status.set_text('Select at least one correction.')
             return
-        events = [event for item in session for event in item['events']]
-        mappings = _mappings_from(*manual[0])
-        solving[0] = True
-        set_status(f'Solving {len(events)} samples…')
+        events = [event for items, _ in session for event in items]
+        solving = True
+        status.set_text(f'Solving {len(events)} samples...')
         try:
-            result = await run.cpu_bound(
-                solve_contact, events, mappings,
-                optimize_kb=bool(encoder.value),
-                optimize_geometry=bool(geometry.value))
-        except Exception as exc:  # noqa: BLE001 - surface the solver reason
-            set_status(f'Solve failed: {exc}')
-            return
+            result = await run.cpu_bound(solve_contact, events, initial_mappings(*manual),
+                                         optimize_kb=bool(encoder.value),
+                                         optimize_geometry=bool(geometry.value))
+            if result:
+                solution, stale = result, False
+                status.set_text(_fit_text(result))
+        except Exception as exc:  # noqa: BLE001
+            status.set_text(f'Solve failed: {exc}')
         finally:
-            solving[0] = False
-        if not result:
-            set_status('Solve was cancelled.')
-            return
-        solution[0] = result
-        stale[0] = False
-        set_status(_fit_text(result))
+            solving = False
 
     def save_result():
-        if (solution[0] is None or stale[0] or recording[0]
-                or processing[0] or solving[0]):
-            set_status('Press Solve before saving.')
+        if solution is None or stale or busy():
             return
         try:
-            save_contact(hand.calibration_snapshot_path, solution[0])
+            save_contact(hand.calibration_snapshot_path, solution)
         except Exception as exc:  # noqa: BLE001
-            set_status(f'Save failed: {exc}')
+            status.set_text(f'Save failed: {exc}')
             return
-        set_status('Saved. Run Motor Calibration to apply the refined values.')
+        status.set_text('Saved. Run Motor Calibration to apply the refined values.')
 
     def clear_result():
-        if recording[0] or processing[0] or solving[0]:
+        nonlocal solution, stale, manual
+        if busy():
             return
         try:
             clear_contact(hand.calibration_snapshot_path)
         except Exception as exc:  # noqa: BLE001
-            set_status(f'Clear failed: {exc}')
+            status.set_text(f'Clear failed: {exc}')
             return
         session.clear()
-        solution[0] = None
-        stale[0] = False
-        manual[0] = None
-        live.clear()
-        reset_highlight()
+        solution = manual = None
+        stale = False
+        reset_capture()
         update_summary()
-        if 'blue' in view.models:
-            view.show('blue', False)
-        set_status('Cleared. Motor Calibration will use the joint-calibration values.')
+        status.set_text('Cleared. Motor Calibration will use the joint-calibration values.')
 
-    def options_changed():
-        if processing[0] or solving[0]:
-            return
-        solution[0] = None
-        stale[0] = False
-        if 'blue' in view.models:
-            view.show('blue', False)
-        set_status('Options changed. Press Solve.')
+    def options_changed(_):
+        nonlocal solution, stale
+        if not busy():
+            solution, stale = None, False
+            status.set_text('Options changed. Press Solve.')
+
+    def draw_forces(frame):
+        for (finger, segment), arrow in arrows.items():
+            index = finger * 3 + segment
+            if frame is not None and frame.valid_mask & (1 << index):
+                rotation, magnitude = rotation_from_force(frame.values[index * 3 : index * 3 + 3])
+                if rotation is not None:
+                    arrow.rotate_R(rotation).scale(1, min(0.02, 0.005 + 0.00012 * magnitude), 1)
+                    arrow.visible(True)
+                    continue
+            arrow.visible(False)
 
     def refresh(snapshot):
-        latest[0] = snapshot
-        checks = _preconditions(snapshot, ignore_busy=recording[0])
-        allowed = all(ok for _, ok in checks)
-        busy = recording[0] or processing[0] or solving[0]
-        start.set_enabled(allowed and not busy)
-        stop.set_enabled(recording[0])
-        delete.set_enabled(bool(session) and not busy)
-        solve_button.set_enabled(bool(session) and not busy)
-        save.set_enabled(solution[0] is not None and not stale[0] and not busy)
-        clear.set_enabled(not busy)
-        encoder.set_enabled(not busy)
-        geometry.set_enabled(not busy)
-        if recording[0]:
-            if not allowed:
-                hand.end_contact_capture()
-                recording[0] = False
-                reset_highlight()
-                set_status('Recording discarded: ' + ' ; '.join(
-                    name for name, ok in checks if not ok))
-            else:
-                values, reason = counts_from_snapshot(snapshot)
-                if values is None:
-                    set_status('Recording… ' + (reason or ''))
-                else:
-                    live.append(values)
-                    del live[:-40]
-                    if len(live) >= 2:
-                        mappings = _mappings(snapshot)
-                        travel = tip_travel(live, mappings)
-                        fingertip = int(max(range(5), key=lambda f: travel[f]))
-                        if travel[fingertip] >= STEP_M:
-                            f, other, segment, gap = infer_pair(
-                                values, mappings, fingertip)
-                            links = [CONTACT_LINKS[f * 3],
-                                     CONTACT_LINKS[other * 3 + segment]]
-                            if links != highlighted and 'gray' in view.models:
-                                reset_highlight()
-                                view.set_link_color('gray', links, RED)
-                                highlighted.extend(links)
-                            set_status(
-                                f"Recording… {time.monotonic() - started_at[0]:.1f} s · "
-                                f"Live: {_finger_name(f)} tip ↔ "
-                                f"{_finger_name(other)} {SEGMENT_NAMES[segment]}, "
-                                f"gap {gap:.1f} mm")
-                        else:
-                            set_status(f"Recording… "
-                                       f"{time.monotonic() - started_at[0]:.1f} s")
-                    else:
-                        set_status(f"Recording… "
-                                   f"{time.monotonic() - started_at[0]:.1f} s")
-        elif not processing[0] and not solving[0] and not allowed:
-            set_status(' ; '.join(f"{'✓' if ok else '✗'} {name}"
-                                  for name, ok in checks))
-        values, _reason = counts_from_snapshot(snapshot)
-        if values is not None and view.models:
-            mappings = _mappings(snapshot)
-            view.apply('gray', model_angles(
-                values, [item['k'] for item in mappings],
-                [item['b'] for item in mappings]))
-            view.show('gray', True)
-        if view.models and solution[0] is not None:
-            values, _reason = counts_from_snapshot(snapshot)
-            if values is not None:
-                result = solution[0]
-                view.set_origins('blue', result['origins'])
-                view.apply('blue', model_angles(values, result['k'], result['b']))
-                view.show('blue', True)
-        elif 'blue' in view.models:
-            view.show('blue', False)
-        update_summary()
+        nonlocal stream, capture, latest_force, processing, zero_id
+        if snapshot is None:
+            reset_capture()
+            return
+        if zero_id is not None:
+            for operation in snapshot.get('operations', ()):
+                if operation['operation_id'] == zero_id and operation['status'] in ('SUCCESS', 'FAILED'):
+                    status.set_text(operation['message'])
+                    zero_id = None
+                    reset_capture()
+                    break
 
-    start.on_click(begin)
-    stop.on_click(finish)
+        checks = _preconditions(snapshot)
+        online, idle, _ = (ok for _, ok in checks)
+        values, reason = counts_from_snapshot(snapshot)
+        endpoints = tuple(tuple(row[key] for row in snapshot.get('joints', ()))
+                          for key in ('manual_min', 'manual_max'))
+        allowed = all(ok for _, ok in checks) and zero_id is None and not solving
+        now = time.time()
+        previous_stream = stream
+        stream, frames = hand.read_contact_feedback(stream) if online else (None, ())
+        if stream is None or (previous_stream is not None and stream[0] is not previous_stream[0]):
+            capture, latest_force = ContactCapture(), None
+        for frame in frames:
+            if frame.kind == 'tactile_summary':
+                latest_force = frame
+        if latest_force is not None and now - latest_force.received_at > CONTACT_GAP_MS / 1000:
+            latest_force = None
+
+        if allowed:
+            slides = capture.observe(frames, now)
+            if slides:
+                pending.extend((tip, rows, endpoints) for tip, rows in slides)
+                if not processing:
+                    processing = True
+                    background_tasks.create(finish_slides())
+        elif capture.latest is not None:
+            capture = ContactCapture()
+
+        locked = busy()
+        zero.set_enabled(online and idle and not locked)
+        delete.set_enabled(bool(session) and not locked)
+        solve_button.set_enabled(bool(session) and not locked)
+        save.set_enabled(solution is not None and not stale and not locked)
+        clear.set_enabled(not locked)
+        encoder.set_enabled(not locked)
+        geometry.set_enabled(not locked)
+
+        links = ()
+        text = 'Slide a fingertip sensor along another finger.'
+        if not all(ok for _, ok in checks) and zero_id is None:
+            text = 'Required: ' + ', '.join(name for name, ok in checks if not ok)
+        elif (latest_force is None or not latest_force.valid_mask & TIP_MASK) and zero_id is None:
+            text = 'Waiting for fingertip force feedback.'
+        elif values is None:
+            text = reason or ''
+        if values is not None and view.models:
+            mappings = initial_mappings(*endpoints)
+            view.apply('gray', model_angles(values, [m['k'] for m in mappings],
+                                            [m['b'] for m in mappings]))
+            if capture.fingertip is not None:
+                f, other, segment, gap = infer_pair(values, mappings, capture.fingertip)
+                target = SENSOR_LINKS[other, segment]
+                if segment:
+                    target = target.removesuffix('_skeleton_sensor')
+                links = (SENSOR_LINKS[f, 0], target)
+                text = (f'{FINGER_NAMES[f]} tip / {FINGER_NAMES[other]} '
+                        f'{SEGMENT_NAMES[segment]} ({gap:.1f} mm)')
+            if solution is not None:
+                view.set_origins('fitted', solution['origins'])
+                view.apply('fitted', model_angles(values, solution['k'], solution['b']))
+        if 'fitted' in view.models:
+            view.show('fitted', solution is not None and values is not None)
+        highlight(links)
+        draw_forces(latest_force)
+        live.set_text(text if zero_id is None else '')
+
+    zero.on_click(zero_now)
     delete.on_click(delete_last)
     solve_button.on_click(solve_now)
     save.on_click(save_result)
     clear.on_click(clear_result)
-    encoder.on_value_change(lambda _: options_changed())
-    geometry.on_value_change(lambda _: options_changed())
-
+    encoder.on_value_change(options_changed)
+    geometry.on_value_change(options_changed)
     update_summary()
-    set_status('Ready. Record a contact slide, then Solve and Save.')
     return refresh

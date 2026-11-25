@@ -18,113 +18,113 @@ are not listed. f-string messages are templates.
 | 271 | Default parameters restored; P4 synchronization pending until idle | HOST_ACTION_FAILED ⚠ fallback |
 | 287 | Parameter synchronization cancelled by STOP | HOST_CANCELLED |
 | 291 | Parameters changed during synchronization; apply the new revision first | HOST_ACTION_FAILED ⚠ fallback |
-| 427 | Missing operation id | HOST_ACTION_FAILED ⚠ fallback |
-| 433 | Calibration alert acknowledged | HOST_ACTION_FAILED ⚠ fallback |
-| 434 | Operation has no calibration alert | HOST_ACTION_FAILED ⚠ fallback |
-| 435 | Unknown operation | HOST_ACTION_FAILED ⚠ fallback |
-| 448 | Cleared {…} error records | HOST_ACTION_FAILED ⚠ fallback |
-| 485 | Replay service is not running | HOST_ACTION_FAILED ⚠ fallback |
-| 570 | Application is shutting down | HOST_ACTION_FAILED ⚠ fallback |
-| 572 | An operation is still finishing. Use STOP to cancel. | HOST_OPERATION_BUSY |
-| 574 | P4 is disconnected or status data is stale. Check the connection. | HOST_CONNECTION_LOST |
-| 618 | The operation worker is closed | HOST_ACTION_FAILED ⚠ fallback |
-| 620 | {…} accepted | HOST_ACTION_FAILED ⚠ fallback |
-| 644 | Select a device. | HOST_SELECTION_EMPTY |
-| 670 | Connection cancelled | HOST_CANCELLED |
-| 672 | The P4 USB device is no longer uniquely available | HOST_ACTION_FAILED ⚠ fallback |
-| 677 | Connection cancelled | HOST_CANCELLED |
-| 680 | P4 USB identity changed during reconnect | HOST_ACTION_FAILED ⚠ fallback |
-| 683 | Connection cancelled | HOST_CANCELLED |
-| 720 | Connection failed on {…}: {…} | HOST_ACTION_FAILED ⚠ fallback |
-| 739 | Application is shutting down | HOST_ACTION_FAILED ⚠ fallback |
-| 757 | Joint selection is out of range | HOST_SELECTION_EMPTY |
-| 776 | Device is stopped (E-STOP latched); use the top-right Clear Faults button first | ACT-1005 |
-| 783 | {…} cancelled | HOST_CANCELLED |
-| 790 | Control handover was not queued | HOST_OPERATION_BUSY |
-| 794 | P4 did not acknowledge control handover | HOST_OPERATION_BUSY |
-| 803 | P4 did not release the old control owner | HOST_OPERATION_BUSY |
-| 843 | A maintenance or recovery operation owns the device | HOST_OPERATION_BUSY |
-| 854 | Select joints before enabling | HOST_SELECTION_EMPTY |
-| 871 | Enable coordinate recovery failed: {…} | HOST_ACTION_FAILED ⚠ fallback |
-| 873 | Scope setup failed. Check online devices, feedback and calibration. | HOST_ACTION_FAILED ⚠ fallback |
-| 876 | Enable cancelled | HOST_CANCELLED |
-| 897 | Enable preparation was not confirmed by P4 | HOST_ACTION_FAILED ⚠ fallback |
-| 900 | Enable preparation changed before it could be used | HOST_ACTION_FAILED ⚠ fallback |
-| 907 | P4 did not report READY after workspace recovery | HOST_ACTION_FAILED ⚠ fallback |
-| 910 | Enable cancelled | HOST_CANCELLED |
-| 913 | Enable blocked: P4 readiness or mapped feedback changed | HOST_ACTION_FAILED ⚠ fallback |
-| 918 | Enable blocked: J{…} current angle is invalid | HOST_ACTION_FAILED ⚠ fallback |
-| 937 | Enable cancelled | HOST_CANCELLED |
-| 941 | Workspace recovery was not queued | HOST_ACTION_FAILED ⚠ fallback |
-| 944 | Enable cancelled | HOST_CANCELLED |
-| 946 | P4 workspace recovery ACK timed out | HOST_ACTION_FAILED ⚠ fallback |
-| 948 | P4 rejected workspace recovery (ACK={…}) | HOST_ACTION_FAILED ⚠ fallback |
+| 426 | Missing operation id | HOST_ACTION_FAILED ⚠ fallback |
+| 432 | Calibration alert acknowledged | HOST_ACTION_FAILED ⚠ fallback |
+| 433 | Operation has no calibration alert | HOST_ACTION_FAILED ⚠ fallback |
+| 434 | Unknown operation | HOST_ACTION_FAILED ⚠ fallback |
+| 447 | Cleared {…} error records | HOST_ACTION_FAILED ⚠ fallback |
+| 484 | Replay service is not running | HOST_ACTION_FAILED ⚠ fallback |
+| 569 | Application is shutting down | HOST_ACTION_FAILED ⚠ fallback |
+| 571 | An operation is still finishing. Use STOP to cancel. | HOST_OPERATION_BUSY |
+| 573 | P4 is disconnected or status data is stale. Check the connection. | HOST_CONNECTION_LOST |
+| 617 | The operation worker is closed | HOST_ACTION_FAILED ⚠ fallback |
+| 619 | {…} accepted | HOST_ACTION_FAILED ⚠ fallback |
+| 658 | Select a device. | HOST_SELECTION_EMPTY |
+| 684 | Connection cancelled | HOST_CANCELLED |
+| 686 | The P4 USB device is no longer uniquely available | HOST_ACTION_FAILED ⚠ fallback |
+| 691 | Connection cancelled | HOST_CANCELLED |
+| 694 | P4 USB identity changed during reconnect | HOST_ACTION_FAILED ⚠ fallback |
+| 697 | Connection cancelled | HOST_CANCELLED |
+| 734 | Connection failed on {…}: {…} | HOST_ACTION_FAILED ⚠ fallback |
+| 753 | Application is shutting down | HOST_ACTION_FAILED ⚠ fallback |
+| 771 | Joint selection is out of range | HOST_SELECTION_EMPTY |
+| 790 | Device is stopped (E-STOP latched); use the top-right Clear Faults button first | ACT-1005 |
+| 797 | {…} cancelled | HOST_CANCELLED |
+| 804 | Control handover was not queued | HOST_OPERATION_BUSY |
+| 808 | P4 did not acknowledge control handover | HOST_OPERATION_BUSY |
+| 817 | P4 did not release the old control owner | HOST_OPERATION_BUSY |
+| 857 | A maintenance or recovery operation owns the device | HOST_OPERATION_BUSY |
+| 868 | Select joints before enabling | HOST_SELECTION_EMPTY |
+| 885 | Enable coordinate recovery failed: {…} | HOST_ACTION_FAILED ⚠ fallback |
+| 887 | Scope setup failed. Check online devices, feedback and calibration. | HOST_ACTION_FAILED ⚠ fallback |
+| 890 | Enable cancelled | HOST_CANCELLED |
+| 911 | Enable preparation was not confirmed by P4 | HOST_ACTION_FAILED ⚠ fallback |
+| 914 | Enable preparation changed before it could be used | HOST_ACTION_FAILED ⚠ fallback |
+| 921 | P4 did not report READY after workspace recovery | HOST_ACTION_FAILED ⚠ fallback |
+| 924 | Enable cancelled | HOST_CANCELLED |
+| 927 | Enable blocked: P4 readiness or mapped feedback changed | HOST_ACTION_FAILED ⚠ fallback |
+| 932 | Enable blocked: J{…} current angle is invalid | HOST_ACTION_FAILED ⚠ fallback |
+| 951 | Enable cancelled | HOST_CANCELLED |
+| 955 | Workspace recovery was not queued | HOST_ACTION_FAILED ⚠ fallback |
 | 958 | Enable cancelled | HOST_CANCELLED |
-| 959 | P4 workspace recovery result timed out | HOST_RESULT_UNKNOWN |
-| 962 | Enable cancelled or workspace recovery result changed | HOST_CANCELLED |
-| 980 | P4 workspace recovery failed (reason={…}){…} | HOST_ACTION_FAILED ⚠ fallback |
-| 1010 | Fault clear cancelled | HOST_CANCELLED |
-| 1015 | P4 did not acknowledge RESET. STOP remains pending; check the connection and Diagnostics. | HOST_ACTION_FAILED ⚠ fallback |
-| 1034 | RESET acknowledged, but a fresh stationary P4 status was not confirmed. Check Diagnostics. | HOST_ACTION_FAILED ⚠ fallback |
-| 1037 | Fault clear cancelled by a new STOP | HOST_CANCELLED |
-| 1048 | Targets must contain 21 finite angle values | HOST_SELECTION_EMPTY |
-| 1051 | Select a valid joint scope | HOST_SELECTION_EMPTY |
-| 1055 | Target cancelled | HOST_CANCELLED |
-| 1062 | Select valid joints | HOST_SELECTION_EMPTY |
-| 1072 | An operation is running. Wait for it to finish before authorizing ROS Input. | HOST_OPERATION_BUSY |
-| 1079 | Invalid Manual capture arguments | HOST_ACTION_FAILED ⚠ fallback |
-| 1108 | P4 connection changed; capture the endpoint again. | HOST_ACTION_FAILED ⚠ fallback |
-| 1125 | J{…} raw feedback is invalid or stale. Check the encoder before capturing. | HOST_ACTION_FAILED ⚠ fallback |
-| 1129 | Press STOP and wait until P4 is stationary before capturing Manual endpoints. | HOST_MANUAL_INVALID |
-| 1132 | Capture cancelled | HOST_CANCELLED |
-| 1162 | J{…} not saved: {…} | HOST_ACTION_FAILED ⚠ fallback |
-| 1164 | Manual save cancelled | HOST_CANCELLED |
-| 1180 | Select joints | HOST_SELECTION_EMPTY |
-| 1185 | Manual readback failed | HOST_ACTION_FAILED ⚠ fallback |
-| 1191 | Clear cancelled | HOST_CANCELLED |
-| 1207 | The current operation is still finishing | HOST_OPERATION_BUSY |
-| 1212 | Select joints and connect P4 with fresh status | HOST_SELECTION_EMPTY |
-| 1214 | Control parameters are not applied. Wait for parameter synchronization before calibrating. | HOST_PARAMETERS_PENDING |
-| 1217 | J{…} is missing Manual Min / Max | HOST_MANUAL_MISSING |
-| 1221 | J{…}: {…} | HOST_ACTION_FAILED ⚠ fallback |
-| 1259 | Selected-joint calibration accepted | HOST_ACTION_FAILED ⚠ fallback |
-| 1361 | Motor selection is out of range | HOST_SELECTION_EMPTY |
-| 1366 | Motor scope updated | HOST_ACTION_FAILED ⚠ fallback |
-| 1384 | P4 is still scanning the servo buses; wait for the scan to finish. | HOST_MOTORS_NOT_READY |
-| 1388 | Servo feedback is not available yet; wait for the next feedback frame. | HOST_MOTORS_NOT_READY |
-| 1394 | Motor position feedback is not fresh; wait for the next feedback frame. | HOST_MOTORS_NOT_READY |
-| 1400 | Select motors before enabling | HOST_SELECTION_EMPTY |
-| 1412 | Motor scope setup failed | HOST_MOTORS_NOT_READY |
-| 1415 | Select motors; enable was not submitted | HOST_SELECTION_EMPTY |
-| 1457 | Motors are online but their configuration check has not finished. Check the motor bus and retry. | HOST_MOTORS_NOT_READY |
-| 1461 | ABS zero requires the original connected P4 device | HOST_MOTORS_NOT_READY |
-| 1479 | ABS zero cancelled before stopping | HOST_CANCELLED |
-| 1490 | P4 stop/owner release was not confirmed; ABS zero was not sent | HOST_ACTION_FAILED ⚠ fallback |
-| 1492 | P4 device identity changed; ABS zero was not sent | HOST_ACTION_FAILED ⚠ fallback |
-| 1535 | ABS zero may have completed; new trusted feedback/JSON save is unconfirmed. No automatic retry. | HOST_RESULT_UNKNOWN |
-| 1537 | ABS zero partly completed (saved mask=0x{…}); {…} | HOST_RESULT_PARTIAL |
-| 1554 | Waiting for motor firmware and configuration checks | HOST_MOTORS_NOT_READY |
-| 1557 | No online, routable motors to initialize. Check the motor buses. | HOST_MOTORS_NOT_READY |
-| 1570 | Select motors | HOST_SELECTION_EMPTY |
-| 1580 | Select joints before releasing their tendons | HOST_SELECTION_EMPTY |
-| 1607 | Calibration file exceeds 10 MB | HOST_ACTION_FAILED ⚠ fallback |
-| 1619 | Calibration preview cancelled | HOST_CANCELLED |
-| 1630 | Import requires a validated file and fresh, idle P4 connection | HOST_ACTION_FAILED ⚠ fallback |
-| 1632 | Control parameters are not applied. Wait for parameter synchronization before loading calibration. | HOST_PARAMETERS_PENDING |
-| 1665 | Calibration import started | HOST_ACTION_FAILED ⚠ fallback |
-| 1672 | Motor scope setup failed | HOST_MOTORS_NOT_READY |
-| 1675 | Direct control cancelled | HOST_CANCELLED |
-| 1681 | Direct control cancelled | HOST_CANCELLED |
-| 1686 | Current ABS is stale or untrusted | HOST_MOTORS_NOT_READY |
-| 1698 | Motor target send failed | HOST_ACTION_FAILED ⚠ fallback |
-| 1706 | P4 rejected motor target (reason={…}, mask=0x{…}) | HOST_ACTION_FAILED ⚠ fallback |
-| 1708 | Motor execution confirmation timed out | HOST_ACTION_FAILED ⚠ fallback |
-| 1716 | Select joints explicitly before playing a motion | HOST_SELECTION_EMPTY |
-| 1720 | Playback cancelled | HOST_CANCELLED |
-| 1722 | Replay is not running | HOST_ACTION_FAILED ⚠ fallback |
-| 1729 | Playback startup cancelled | HOST_CANCELLED |
-| 1736 | Stop Save Data before changing the recording scope | HOST_ACTION_FAILED ⚠ fallback |
-| 1739 | Select at least one CSV table to save | HOST_SELECTION_EMPTY |
+| 960 | P4 workspace recovery ACK timed out | HOST_ACTION_FAILED ⚠ fallback |
+| 962 | P4 rejected workspace recovery (ACK={…}) | HOST_ACTION_FAILED ⚠ fallback |
+| 972 | Enable cancelled | HOST_CANCELLED |
+| 973 | P4 workspace recovery result timed out | HOST_RESULT_UNKNOWN |
+| 976 | Enable cancelled or workspace recovery result changed | HOST_CANCELLED |
+| 994 | P4 workspace recovery failed (reason={…}){…} | HOST_ACTION_FAILED ⚠ fallback |
+| 1024 | Fault clear cancelled | HOST_CANCELLED |
+| 1029 | P4 did not acknowledge RESET. STOP remains pending; check the connection and Diagnostics. | HOST_ACTION_FAILED ⚠ fallback |
+| 1048 | RESET acknowledged, but a fresh stationary P4 status was not confirmed. Check Diagnostics. | HOST_ACTION_FAILED ⚠ fallback |
+| 1051 | Fault clear cancelled by a new STOP | HOST_CANCELLED |
+| 1062 | Targets must contain 21 finite angle values | HOST_SELECTION_EMPTY |
+| 1065 | Select a valid joint scope | HOST_SELECTION_EMPTY |
+| 1069 | Target cancelled | HOST_CANCELLED |
+| 1076 | Select valid joints | HOST_SELECTION_EMPTY |
+| 1086 | An operation is running. Wait for it to finish before authorizing ROS Input. | HOST_OPERATION_BUSY |
+| 1093 | Invalid Manual capture arguments | HOST_ACTION_FAILED ⚠ fallback |
+| 1122 | P4 connection changed; capture the endpoint again. | HOST_ACTION_FAILED ⚠ fallback |
+| 1139 | J{…} raw feedback is invalid or stale. Check the encoder before capturing. | HOST_ACTION_FAILED ⚠ fallback |
+| 1143 | Press STOP and wait until P4 is stationary before capturing Manual endpoints. | HOST_MANUAL_INVALID |
+| 1146 | Capture cancelled | HOST_CANCELLED |
+| 1176 | J{…} not saved: {…} | HOST_ACTION_FAILED ⚠ fallback |
+| 1178 | Manual save cancelled | HOST_CANCELLED |
+| 1194 | Select joints | HOST_SELECTION_EMPTY |
+| 1199 | Manual readback failed | HOST_ACTION_FAILED ⚠ fallback |
+| 1205 | Clear cancelled | HOST_CANCELLED |
+| 1221 | The current operation is still finishing | HOST_OPERATION_BUSY |
+| 1226 | Select joints and connect P4 with fresh status | HOST_SELECTION_EMPTY |
+| 1228 | Control parameters are not applied. Wait for parameter synchronization before calibrating. | HOST_PARAMETERS_PENDING |
+| 1231 | J{…} is missing Manual Min / Max | HOST_MANUAL_MISSING |
+| 1235 | J{…}: {…} | HOST_ACTION_FAILED ⚠ fallback |
+| 1273 | Selected-joint calibration accepted | HOST_ACTION_FAILED ⚠ fallback |
+| 1375 | Motor selection is out of range | HOST_SELECTION_EMPTY |
+| 1380 | Motor scope updated | HOST_ACTION_FAILED ⚠ fallback |
+| 1398 | P4 is still scanning the servo buses; wait for the scan to finish. | HOST_MOTORS_NOT_READY |
+| 1402 | Servo feedback is not available yet; wait for the next feedback frame. | HOST_MOTORS_NOT_READY |
+| 1408 | Motor position feedback is not fresh; wait for the next feedback frame. | HOST_MOTORS_NOT_READY |
+| 1414 | Select motors before enabling | HOST_SELECTION_EMPTY |
+| 1426 | Motor scope setup failed | HOST_MOTORS_NOT_READY |
+| 1429 | Select motors; enable was not submitted | HOST_SELECTION_EMPTY |
+| 1471 | Motors are online but their configuration check has not finished. Check the motor bus and retry. | HOST_MOTORS_NOT_READY |
+| 1475 | ABS zero requires the original connected P4 device | HOST_MOTORS_NOT_READY |
+| 1493 | ABS zero cancelled before stopping | HOST_CANCELLED |
+| 1504 | P4 stop/owner release was not confirmed; ABS zero was not sent | HOST_ACTION_FAILED ⚠ fallback |
+| 1506 | P4 device identity changed; ABS zero was not sent | HOST_ACTION_FAILED ⚠ fallback |
+| 1549 | ABS zero may have completed; new trusted feedback/JSON save is unconfirmed. No automatic retry. | HOST_RESULT_UNKNOWN |
+| 1551 | ABS zero partly completed (saved mask=0x{…}); {…} | HOST_RESULT_PARTIAL |
+| 1568 | Waiting for motor firmware and configuration checks | HOST_MOTORS_NOT_READY |
+| 1571 | No online, routable motors to initialize. Check the motor buses. | HOST_MOTORS_NOT_READY |
+| 1584 | Select motors | HOST_SELECTION_EMPTY |
+| 1594 | Select joints before releasing their tendons | HOST_SELECTION_EMPTY |
+| 1621 | Calibration file exceeds 10 MB | HOST_ACTION_FAILED ⚠ fallback |
+| 1633 | Calibration preview cancelled | HOST_CANCELLED |
+| 1644 | Import requires a validated file and fresh, idle P4 connection | HOST_ACTION_FAILED ⚠ fallback |
+| 1646 | Control parameters are not applied. Wait for parameter synchronization before loading calibration. | HOST_PARAMETERS_PENDING |
+| 1679 | Calibration import started | HOST_ACTION_FAILED ⚠ fallback |
+| 1686 | Motor scope setup failed | HOST_MOTORS_NOT_READY |
+| 1689 | Direct control cancelled | HOST_CANCELLED |
+| 1695 | Direct control cancelled | HOST_CANCELLED |
+| 1700 | Current ABS is stale or untrusted | HOST_MOTORS_NOT_READY |
+| 1712 | Motor target send failed | HOST_ACTION_FAILED ⚠ fallback |
+| 1720 | P4 rejected motor target (reason={…}, mask=0x{…}) | HOST_ACTION_FAILED ⚠ fallback |
+| 1722 | Motor execution confirmation timed out | HOST_ACTION_FAILED ⚠ fallback |
+| 1730 | Select joints explicitly before playing a motion | HOST_SELECTION_EMPTY |
+| 1734 | Playback cancelled | HOST_CANCELLED |
+| 1736 | Replay is not running | HOST_ACTION_FAILED ⚠ fallback |
+| 1743 | Playback startup cancelled | HOST_CANCELLED |
+| 1750 | Stop Save Data before changing the recording scope | HOST_ACTION_FAILED ⚠ fallback |
+| 1753 | Select at least one CSV table to save | HOST_SELECTION_EMPTY |
 
 ## desktop/core/core_logic.py
 
@@ -174,13 +174,13 @@ are not listed. f-string messages are templates.
 
 | Line | Message | Issue |
 | --- | --- | --- |
-| 619 | ROS2 enable blocked: host calibration is active | HOST_OPERATION_BUSY |
-| 621 | ROS2 enable blocked: device transaction is active | HOST_OPERATION_BUSY |
-| 624 | ROS2 enable blocked: P4 serial is not connected | HOST_OPERATION_BUSY |
-| 628 | ROS2 enable blocked: protocol/model handshake unconfirmed | HOST_RESULT_UNKNOWN |
-| 631 | ROS2 enable blocked: active joint scope is empty | HOST_SELECTION_EMPTY |
-| 668 | ROS2 enable blocked: host calibration is active | HOST_OPERATION_BUSY |
-| 670 | ordinary controller is not enabled; press ENABLE first | HOST_ACTION_FAILED ⚠ fallback |
+| 569 | ROS2 enable blocked: host calibration is active | HOST_OPERATION_BUSY |
+| 571 | ROS2 enable blocked: device transaction is active | HOST_OPERATION_BUSY |
+| 574 | ROS2 enable blocked: P4 serial is not connected | HOST_OPERATION_BUSY |
+| 578 | ROS2 enable blocked: protocol/model handshake unconfirmed | HOST_RESULT_UNKNOWN |
+| 581 | ROS2 enable blocked: active joint scope is empty | HOST_SELECTION_EMPTY |
+| 618 | ROS2 enable blocked: host calibration is active | HOST_OPERATION_BUSY |
+| 620 | ordinary controller is not enabled; press ENABLE first | HOST_ACTION_FAILED ⚠ fallback |
 
 ## desktop/core/host_calibration/finish.py
 

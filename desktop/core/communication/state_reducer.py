@@ -63,6 +63,7 @@ from ..protocol import (
     parse_motor_abs_limit_packet,
     parse_product_fingerprint_packet,
     parse_proto_ack,
+    parse_tactile_zero_result,
     parse_safety_event_packet,
     parse_sensor_packet,
     parse_servo_logical_range_packet,
@@ -133,6 +134,7 @@ class StateReducer:
         "adaptive_kp": lambda self, owner, model, payload, time_ms, rx_at: self._apply_adaptive_kp(owner, model, payload, time_ms, rx_at),
         "control_trace": lambda self, owner, model, payload, time_ms, rx_at: self._apply_control_trace(owner, model, payload, time_ms, rx_at),
         "task_diagnostic": lambda self, owner, model, payload, time_ms, rx_at: self._apply_task_diagnostic(owner, model, payload, time_ms, rx_at),
+        "tactile_zero_result": lambda self, owner, model, payload, time_ms, rx_at: self._apply_tactile_zero_result(payload),
         "tactile_summary": lambda self, owner, model, payload, time_ms, rx_at: self._apply_tactile_summary(owner, model, payload, time_ms, rx_at),
         "tactile_full": lambda self, owner, model, payload, time_ms, rx_at: self._apply_tactile_full(owner, model, payload, time_ms, rx_at),
         "protocol_ack": lambda self, owner, model, payload, time_ms, rx_at: self._apply_protocol_ack(owner, model, payload, time_ms, rx_at),
@@ -155,6 +157,7 @@ class StateReducer:
         # 高频原始反馈按协议包逐帧留存，不能从批次末尾的 HandModel 反推历史。
         # UI 快照仍保持 latest-value；需要时间对齐的业务显式读取此独立历史。
         self.feedback_history = TimestampedFeedbackHistory()
+        self.tactile_zero_result = None
         # 只有 SYSTEM_STATUS 的包尾时间是当前设备时钟；raw/ABS 保留采集
         # 时间，历史诊断也可回放旧 timestamp，不能拿它们判断设备重启。
         self._feedback_status_clock_ms: Optional[int] = None
@@ -183,6 +186,7 @@ class StateReducer:
         self._last_model = None
         self._last_publish_monotonic = 0.0
         self.feedback_history.reset()
+        self.tactile_zero_result = None
         self._feedback_status_clock_ms = None
         self._task_runtime_window_sequence = None
         self._task_runtime_window_packets.clear()
@@ -874,6 +878,12 @@ class StateReducer:
                     emitted = True
         return emitted
 
+    def _apply_tactile_zero_result(self, payload):
+        result = parse_tactile_zero_result(payload)
+        if result is not None:
+            self.tactile_zero_result = result
+        return False  # The waiting operation consumes the result directly.
+
     def _apply_tactile_summary(self, owner, model, payload, packet_p4_time_ms, _host_received_at):
         """Apply one tactile_summary packet within the RX batch boundary."""
         emitted = False
@@ -881,6 +891,12 @@ class StateReducer:
         if parsed is not None:
             _seq, groups, module_valid_mask = parsed
             now = time.time()
+            if packet_p4_time_ms is not None:
+                self.feedback_history.record(
+                    "tactile_summary", packet_p4_time_ms,
+                    (axis for finger in groups for module in finger for axis in module),
+                    module_valid_mask, now,
+                )
             stable_groups = owner._stabilize_tactile_groups(groups)
             owner._last_tactile_summary_groups = stable_groups
             owner._last_tactile_summary_seq = int(_seq)

@@ -75,9 +75,10 @@ def device_selector_state(choices, selected, connection):
     options = dict(choices)
     active = connection['connected'] or connection['pending']
     port = connection['port'] if active else None
-    if port and port not in options:
-        options[port] = port
-    value = port or (selected if selected in options else None)
+    if port is not None and port != '':
+        options.setdefault(port, port)
+        return options, port
+    value = selected if selected in options else None
     return options, value
 
 
@@ -527,6 +528,8 @@ def build_page(hand, palm=None):
         snapshot = hand.application_snapshot(include_curves=False)
         mode = snapshot.get('control_mode')
         leaf = current_leaf()
+        if leaf != 'Contact Calibration (optional)':
+            refreshers['Contact Calibration (optional)'](None)
         if mode == 'FEEDBACK' and leaf != 'Feedback Control':
             ui.notify('Feedback control is active; changing pages does not stop motion. Press STOP to stop.', type='warning')
         elif mode == 'DIRECT' and leaf != 'Direct Control':
@@ -574,6 +577,8 @@ def build_page(hand, palm=None):
 
     def refresh_body():
         snapshot = hand.application_snapshot(include_curves=False)
+        if current_leaf() == 'Contact Calibration (optional)':
+            refreshers['Contact Calibration (optional)'](snapshot)
         refresh_firmware_alerts(snapshot)
         refresh_calibration_alerts(snapshot)
         refresh_operation_failures(snapshot)
@@ -602,7 +607,7 @@ def build_page(hand, palm=None):
         set_text('palm-button', palm_button,
                  'Disconnect' if palm_state['connected'] else 'Connect')
         set_enabled('palm-button', palm_button,
-                    not palm_pending[0] and (palm_state['connected'] or bool(palm_select.value)))
+                    not palm_pending[0] and (palm_state['connected'] or palm_select.value is not None))
         if palm_state['error'] and palm_state['error'] != palm_error[0]:
             palm_error[0] = palm_state['error']
             ui.notify(f"palm camera: {palm_state['error']}", type='negative', timeout=10000)
@@ -671,6 +676,8 @@ def build_page(hand, palm=None):
 
     def refresh_heavy_body():
         leaf = current_leaf()
+        if leaf == 'Contact Calibration (optional)':
+            return
         if leaf in policy.PLOT_LEAVES:
             # Cache one curve-bearing snapshot for the slower chart timer.
             plot_cache['leaf'] = leaf
